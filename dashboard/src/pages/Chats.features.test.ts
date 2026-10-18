@@ -1,5 +1,6 @@
-// Render tests for what the chat page offers beyond its data flow, which Chats.test.ts covers: the quick
-// filters, the new-chat panel, and the chat row actions with their dialogs, each with its wire effect. The page is wrapped in the providers
+// Render tests for what the chat page offers beyond its data flow, which Chats.test.ts covers: the session
+// switcher, the contact panel, the message search behind its toggle, the quick filters, the new-chat panel, and
+// the chat row actions with their dialogs, each with its wire effect. The page is wrapped in the providers
 // App.tsx uses and the backend is stubbed at the fetch layer; runs under the bare `node --test` runner.
 import '../test-helpers/register-hooks.ts';
 import { test, before, afterEach } from 'node:test';
@@ -17,6 +18,16 @@ const SESSION: Session = {
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
 };
+
+// A second account the gateway lists but that is not connected: the switcher shows it, and does not open it.
+const OFFLINE_SESSION: Session = {
+  ...SESSION,
+  id: 'session-2',
+  name: 'Marie Haas',
+  phone: '491741565212',
+  status: 'disconnected',
+};
+let listOffline = false;
 
 // A second connected account, served when a test turns `listSecond` on. Its routes answer with the first
 // session's fixtures, so both list the same chats: the shared chat id a late result must not cross over.
@@ -119,7 +130,9 @@ function installFetchStub(): void {
       gates.get(name)?.then(response) ?? Promise.resolve(response());
 
     if (method === 'GET' && path === '/api/sessions') {
-      return Promise.resolve(jsonResponse([SESSION, ...(listSecond ? [SECOND_SESSION] : [])]));
+      return Promise.resolve(
+        jsonResponse([SESSION, ...(listSecond ? [SECOND_SESSION] : []), ...(listOffline ? [OFFLINE_SESSION] : [])]),
+      );
     }
     if (method === 'GET' && path.startsWith(`${base}/chats?`)) {
       return Promise.resolve(
@@ -237,6 +250,7 @@ afterEach(async () => {
     client.clear();
   }
   fetchCalls.length = 0;
+  listOffline = false;
   listSecond = false;
   listExtra = false;
   listDuplicateContact = false;
@@ -264,11 +278,34 @@ function renderPage({ reactStrictMode = false } = {}): ReturnType<RTL['render']>
   );
 }
 
-test('a read-only key is offered no new chat', async () => {
-  const { screen } = rtl;
+test('the contact panel opens from the room header and Escape closes it before the room', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  fireEvent.click(within(container.querySelector('.room-header') as HTMLElement).getByText('Alice'));
+  const panel = await waitFor(() => container.querySelector('.contact-info-panel') as HTMLElement);
+  assert.ok(within(panel).getByText(CHAT.id), 'the panel shows the raw chat id');
+
+  fireEvent.keyDown(document, { key: 'Escape' });
+  await waitFor(() => assert.equal(container.querySelector('.contact-info-panel'), null, 'the panel stayed open'));
+  assert.ok(container.querySelector('.room-header'), 'Escape closed the room along with the panel');
+});
+
+test('the message search sits behind its toggle, and a read-only key is offered neither it nor a new chat', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  assert.ok(!screen.queryByLabelText('Search messages…'), 'the search was open before its toggle was pressed');
+  fireEvent.click(screen.getByRole('button', { name: 'Search messages' }));
+  assert.ok(screen.getByLabelText('Search messages…'), 'the toggle did not open the search');
+  rtl.cleanup();
+
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
   renderPage();
   await screen.findByText('Alice');
+  assert.ok(!screen.queryByRole('button', { name: 'Search messages' }), 'a viewer key was offered message search');
   assert.ok(!screen.queryByRole('button', { name: 'New chat' }), 'a viewer key was offered a new chat');
 });
 
@@ -345,6 +382,48 @@ for (const reactStrictMode of [false, true]) {
     );
   });
 }
+
+test('the session switcher lists every session with its state, and only a connected one can be picked', async () => {
+  const { screen, fireEvent } = rtl;
+  listOffline = true;
+  renderPage();
+  await screen.findByText('Alice');
+
+  const trigger = screen.getByRole('button', { name: /Main/ });
+  fireEvent.click(trigger);
+  const options = screen.getAllByRole('option');
+  assert.deepEqual(
+    options.map(option => [
+      option.textContent?.includes('Main'),
+      option.getAttribute('aria-selected'),
+      option.matches(':disabled'),
+    ]),
+    [
+      [true, 'true', false],
+      [false, 'false', true],
+    ],
+  );
+  assert.ok(
+    screen.getByRole('img', { name: 'Disconnected' }),
+    'the offline session does not say why it cannot be opened',
+  );
+
+  fireEvent.change(screen.getByLabelText('Search sessions...'), { target: { value: 'marie' } });
+  assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
+});
+
+test('Escape closes the session switcher, not the open chat', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  fireEvent.click(screen.getByRole('button', { name: /Main/ }));
+  assert.ok(screen.getByRole('listbox'));
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.ok(!screen.queryByRole('listbox'), 'Escape left the switcher open');
+  assert.ok(container.querySelector('.room-header'), 'Escape closed the chat behind the switcher');
+});
 
 test('a group row offers its actions, and marking it unread badges the row', async () => {
   const { screen, fireEvent, waitFor } = rtl;
@@ -458,8 +537,12 @@ test('a member who is no admin sees the group read-only, and a viewer key gets n
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
   renderPage();
   await screen.findByText('Team');
-  // Every 1:1 action writes, so a viewer's 1:1 row carries no menu at all.
-  assert.ok(!screen.queryByRole('button', { name: 'Actions for Alice' }), 'a viewer was offered 1:1 actions');
+  // A viewer may look at a 1:1 contact, and nothing else.
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  assert.ok(screen.getByRole('button', { name: 'Contact info' }));
+  assert.ok(!screen.queryByRole('button', { name: 'Block contact' }), 'a viewer was offered blocking');
+  assert.ok(!screen.queryByRole('button', { name: 'Pin chat' }), 'a viewer was offered pinning');
+  fireEvent.keyDown(document, { key: 'Escape' });
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Team' }));
   assert.ok(!screen.queryByRole('button', { name: 'Mark as unread' }), 'a viewer was offered mark-as-unread');
   assert.ok(!screen.queryByRole('button', { name: 'Leave group' }), 'a viewer was offered leaving the group');
@@ -616,11 +699,12 @@ test('saving a contact sends its name to the address book and renames the row', 
 // ── Review regressions: late results stay with their session, declined writes change nothing, and the
 // address book decides what is saved and what can be. ──
 
-/** Switch to another session through the page's session selector. */
-function switchSession(container: HTMLElement, id: string): void {
-  rtl.fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
-    target: { value: id },
-  });
+/** Switch to another session through the session switcher. */
+function switchSession(container: HTMLElement, name: string): void {
+  const { fireEvent, within } = rtl;
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const list = container.querySelector('[role="listbox"]') as HTMLElement;
+  fireEvent.click(within(list).getByRole('option', { name: new RegExp(name) }));
 }
 
 const settle = async () => {
@@ -648,9 +732,9 @@ test('a number lookup that answers after the panel closed and the session change
   );
 
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-  switchSession(container, SECOND_SESSION.id);
+  switchSession(container, SECOND_SESSION.name);
   await waitFor(() =>
-    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+    assert.equal(container.querySelector('.session-switcher-btn .session-name')?.textContent, SECOND_SESSION.name),
   );
   release();
   await settle();
@@ -676,9 +760,9 @@ test('a group created after the session changed is not opened on the new session
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
   fireEvent.click(screen.getByRole('button', { name: 'Back' }));
   await waitFor(() => assert.equal(container.querySelector('.new-chat-panel'), null, 'the panel stayed open'));
-  switchSession(container, SECOND_SESSION.id);
+  switchSession(container, SECOND_SESSION.name);
   await waitFor(() =>
-    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+    assert.equal(container.querySelector('.session-switcher-btn .session-name')?.textContent, SECOND_SESSION.name),
   );
   release();
   await settle();
@@ -697,9 +781,9 @@ test("a pin that answers after a switch does not pin the other session's chat wi
   await waitFor(() => assert.ok(fetchCalls.some(c => c.path === `/api/sessions/${SESSION.id}/chats/pin`)));
 
   // Both sessions list Alice under the same chat id.
-  switchSession(container, SECOND_SESSION.id);
+  switchSession(container, SECOND_SESSION.name);
   await waitFor(() =>
-    assert.equal((container.querySelector('select.session-selector') as HTMLSelectElement).value, SECOND_SESSION.id),
+    assert.equal(container.querySelector('.session-switcher-btn .session-name')?.textContent, SECOND_SESSION.name),
   );
   await screen.findByText('Alice');
   release();

@@ -6,11 +6,11 @@ import { applyIncomingToChatList, promoteChatWithSnippet } from '../utils/chatLi
 import {
   applyChatListFilter,
   contactKey,
+  phoneContactId,
+  savedContactKeySet,
   filterChats,
   filterChannels,
   groupStatusesByContact,
-  phoneContactId,
-  savedContactKeySet,
   type ChatListFilter,
 } from '../utils/chatFilters';
 import {
@@ -22,6 +22,7 @@ import {
   MessageSquare,
   CircleEllipsis,
   Copy,
+  PanelRight,
   X,
 } from 'lucide-react';
 import { useProfilePicture } from '../hooks/useProfilePicture';
@@ -57,7 +58,6 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
-import { PageHeader } from '../components/PageHeader';
 import { GlobalSearch } from '../components/GlobalSearch';
 import {
   useChatMessages,
@@ -73,18 +73,18 @@ import { createTrailingCoalescer } from '../utils/trailingCoalescer';
 import { createReloadCoalescer, type ReloadCoalescer } from '../utils/reloadCoalescer';
 import MessageBody from '../components/chats/MessageBody';
 import MediaLightbox, { type LightboxItem } from '../components/chats/MediaLightbox';
-import KindIcon from '../components/chats/KindIcon';
+import ChatAvatar from '../components/chats/ChatAvatar';
 import ChatSidebar from '../components/chats/ChatSidebar';
-import ChatThread from '../components/chats/ChatThread';
-import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
-import StatusMedia from '../components/chats/StatusMedia';
-import StatusComposeModal from '../components/chats/StatusComposeModal';
 import NewChatPanel from '../components/chats/NewChatPanel';
 import GroupInfoDialog from '../components/chats/GroupInfoDialog';
 import { MuteChatDialog, SaveContactDialog, type MuteDuration } from '../components/chats/ChatDialogs';
 import type { ChatRowActions } from '../components/chats/chatActionItems';
 import { ChatActions } from '../components/chats/ChatRowMenu';
 import { Modal } from '../components/Modal';
+import ChatThread from '../components/chats/ChatThread';
+import ChatComposer, { type StagedAttachment } from '../components/chats/ChatComposer';
+import StatusMedia from '../components/chats/StatusMedia';
+import StatusComposeModal from '../components/chats/StatusComposeModal';
 import './Chats.css';
 
 // Quiet window for coalescing mark-as-read RPCs (see markReadCoalescer below).
@@ -175,13 +175,15 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
 };
 
 export function Chats() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   useDocumentTitle(t('nav.chats'));
   const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToast();
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Every listed session, ready or not: the switcher shows the others with their state.
+  const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
 
@@ -191,10 +193,11 @@ export function Chats() {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [chatFilter, setChatFilter] = useState<ChatListFilter>('all');
 
-  // The new-chat panel replaces the sidebar lists while open; the room's overflow menu drops from its header.
+  // The new-chat panel replaces the sidebar lists while open; the contact panel sits beside the room,
+  // and the room's overflow menu drops from its header.
   const [showNewChat, setShowNewChat] = useState<boolean>(false);
+  const [showContactInfo, setShowContactInfo] = useState<boolean>(false);
   const [roomMenuOpen, setRoomMenuOpen] = useState<boolean>(false);
-  const roomMenuRef = useRef<HTMLDivElement | null>(null);
   // The group whose info dialog is open, from its row's menu or from the open room's.
   const [groupDialogChat, setGroupDialogChat] = useState<Chat | null>(null);
   // A destructive row action awaiting confirmation, and whether it is in flight.
@@ -202,12 +205,13 @@ export function Chats() {
     kind: 'leave' | 'clear' | 'delete' | 'block';
     chat: Chat;
   } | null>(null);
-  const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
   // The archive view of the Chats tab, and the chats whose mute or contact dialog is open.
   const [showArchived, setShowArchived] = useState<boolean>(false);
   const [muteDialogChat, setMuteDialogChat] = useState<Chat | null>(null);
   const [contactDialogChat, setContactDialogChat] = useState<Chat | null>(null);
   const [dialogBusy, setDialogBusy] = useState<boolean>(false);
+  const [confirmBusy, setConfirmBusy] = useState<boolean>(false);
+  const roomMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Selected chat & message history
   const [activeChat, setActiveChat] = useState<Chat | null>(null);
@@ -351,6 +355,7 @@ export function Chats() {
   );
   const activePhoneText =
     activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
+  const activeChatTitle = activeChat ? activeChat.name || activeChat.id.split('@')[0] : '';
 
   // The list loaders below reach the translator and the error toast through a ref, not as
   // dependencies: both change identity on a language switch, which re-ran the session load (it
@@ -373,6 +378,7 @@ export function Chats() {
         const list = await sessionApi.list();
         const readySessions = list.filter(s => s.status === 'ready');
         setSessions(readySessions);
+        setListedSessions(list);
         if (readySessions.length > 0) {
           setSelectedSessionId(readySessions[0].id);
         }
@@ -507,8 +513,8 @@ export function Chats() {
       setPreviewUrl(null);
       setReplyingTo(null);
       lastRoomIdRef.current = null;
-      // The new-chat panel lists the address book of the session being left, and an open dialog acts
-      // through it.
+      // The new-chat panel lists the address book of the session being left, and an open group dialog
+      // edits a group through it.
       setShowNewChat(false);
       setGroupDialogChat(null);
       setConfirmAction(null);
@@ -1019,7 +1025,9 @@ export function Chats() {
       if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId)) {
         let ready: Session[];
         try {
-          ready = (await sessionApi.list()).filter(s => s.status === 'ready');
+          const listed = await sessionApi.list();
+          setListedSessions(listed);
+          ready = listed.filter(s => s.status === 'ready');
         } catch (err) {
           showLoadError('chats.errors.loadSessions', err);
           return;
@@ -1109,28 +1117,43 @@ export function Chats() {
     pendingHitRef.current = null;
   }, [activeChat, loadingMessages, messages, messagesContainerRef, hitSeq]);
 
-  // Helper formats
+  // Helper formats. The list time follows WhatsApp's ladder, so the list scans the way operators
+  // expect: the clock for today, "Yesterday", the weekday within the last week, else a short date.
+  // In the dashboard's language rather than the browser's.
   const formatChatTime = useCallback(
     (timestamp?: number) => {
       if (!timestamp) return '';
       const date = new Date(timestamp * 1000);
       const today = new Date();
       if (date.toDateString() === today.toDateString()) {
-        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
       }
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
       if (date.toDateString() === yesterday.toDateString()) {
         return t('chats.yesterday');
       }
-      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+      const weekAgo = new Date(today);
+      weekAgo.setHours(0, 0, 0, 0);
+      weekAgo.setDate(weekAgo.getDate() - 6);
+      if (date >= weekAgo) {
+        return date.toLocaleDateString(i18n.language, { weekday: 'long' });
+      }
+      return date.toLocaleDateString(i18n.language, {
+        weekday: 'short',
+        day: '2-digit',
+        month: 'short',
+        ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
+      });
     },
-    [t],
+    [t, i18n.language],
   );
 
   // One search box drives all three tabs; each matches on its own fields. Plain consts (not useMemo)
   // because chats/channelsQuery.data/statusesQuery.data are already stable, query-cached references,
   // so re-filtering on every render is cheap. See utils/chatFilters for the two status orderings.
+  // The quick filter narrows the Chats tab further. Archived chats are their own view, as in WhatsApp,
+  // except while searching, which finds a chat wherever it is; pinned chats lead the main list.
   // Whether a 1:1 chat's contact is saved comes from the address book (`isMyContact`), not from its
   // display name: Baileys names an unsaved contact by its bare push name too. Undefined until it loads.
   const contactsQuery = useQuery({
@@ -1315,6 +1338,11 @@ export function Chats() {
 
   const rowActions: ChatRowActions = {
     onGroupInfo: setGroupDialogChat,
+    onContactInfo: chat => {
+      setActiveTab('chats');
+      setActiveChat(chat);
+      setShowContactInfo(true);
+    },
     onSaveContact: canWrite ? setContactDialogChat : undefined,
     canSaveContact: chat => addressbookIdOf(chat) !== null,
     isSavedContact: chat => savedContactKeys?.has(contactKey(chat.id)) ?? false,
@@ -1448,6 +1476,7 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
+      else if (activeChat && showContactInfo) setShowContactInfo(false);
       else if (activeChat) setActiveChat(null);
       else if (showNewChat) setShowNewChat(false);
       else return;
@@ -1455,7 +1484,7 @@ export function Chats() {
     };
     document.addEventListener('keydown', closeOpenViewOnEscape);
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
-  }, [activeStatusContactId, activeChannel, activeChat, showNewChat]);
+  }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
 
   // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
   // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
@@ -1476,15 +1505,6 @@ export function Chats() {
 
   return (
     <div className="chats-page">
-      <PageHeader
-        title={t('nav.chats')}
-        subtitle={t('chats.subtitle')}
-        actions={
-          sessions.length > 0 &&
-          canWrite && <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} />
-        }
-      />
-
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
           silently showing stale chats. */}
       {connectionFailed && (
@@ -1513,10 +1533,15 @@ export function Chats() {
           </p>
         </div>
       ) : (
-        <div className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''}`}>
+        <div
+          className={`chats-layout ${activeChat || activeChannel || activeStatusGroup ? 'has-active-chat' : ''} ${
+            activeChat && showContactInfo ? 'has-contact-info' : ''
+          }`}
+        >
           {/* LEFT SIDEBAR: session & chat rooms */}
           <ChatSidebar
             sessions={sessions}
+            pickerSessions={listedSessions}
             selectedSessionId={selectedSessionId}
             onSelectSession={setSelectedSessionId}
             activeTab={activeTab}
@@ -1524,6 +1549,10 @@ export function Chats() {
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
             onComposeStatus={() => setComposeOpen(true)}
+            formatChatTime={formatChatTime}
+            messageSearch={
+              canWrite ? <GlobalSearch currentSessionId={selectedSessionId} onHit={handleSearchHit} /> : null
+            }
             onNewChat={canWrite ? () => setShowNewChat(true) : undefined}
             newChatPanel={
               canWrite && showNewChat ? (
@@ -1534,17 +1563,16 @@ export function Chats() {
                 />
               ) : null
             }
-            formatChatTime={formatChatTime}
             chatsTab={{
               loading: loadingChats,
               chats: filteredChats,
-              activeChatId: activeChat?.id,
-              pictures: listPics.data,
-              onSelectChat: setActiveChat,
               filter: chatFilter,
               onFilterChange: setChatFilter,
               rowActions,
               archive: { count: archivedCount, showing: showArchived, onToggle: () => setShowArchived(v => !v) },
+              activeChatId: activeChat?.id,
+              pictures: listPics.data,
+              onSelectChat: setActiveChat,
             }}
             channelsTab={{
               engineLoading: engineType === null,
@@ -1572,40 +1600,41 @@ export function Chats() {
                   <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
                     <ArrowLeft size={20} />
                   </button>
-                  <div className="room-avatar">
-                    {activePp.data ? (
-                      <img
-                        src={activePp.data}
-                        alt=""
-                        // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
-                        onError={() => activePp.refetch()}
-                      />
-                    ) : (
-                      <KindIcon kind={activeChat.kind} />
-                    )}
-                  </div>
-                  <div className="room-contact-info">
-                    <h3>{activeChat.name || activeChat.id.split('@')[0]}</h3>
-                    {/* Personal chats show the prettified phone number — local formatting for
-                        @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
-                        must never be formatted as one). Groups fall back to a semantic label;
-                        the raw JID follows below for the technical case. */}
-                    <span className="room-contact-phone">
-                      {activePhoneText ??
-                        (activeChat.isGroup ? t('chats.groupSubtitle') : t('chats.privateContactSubtitle'))}
+                  {/* The contact itself opens the info panel, as in WhatsApp. */}
+                  <button
+                    type="button"
+                    className="room-contact"
+                    onClick={() => setShowContactInfo(open => !open)}
+                    title={t('chats.contactInfo')}
+                    aria-expanded={showContactInfo}
+                  >
+                    <ChatAvatar
+                      chatId={activeChat.id}
+                      pictureUrl={activePp.data}
+                      kind={activeChat.kind}
+                      size="sm"
+                      // Signed CDN URLs rotate every few hours; refetch the slice on a stale load.
+                      onImageError={() => activePp.refetch()}
+                    />
+                    <span className="room-contact-info">
+                      <span className="room-contact-name">{activeChatTitle}</span>
+                      {/* Personal chats show the prettified phone number — local formatting for
+                          @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
+                          must never be formatted as one). Only under a saved name: an unnamed chat's
+                          title already is the number. The raw JID is in the contact panel. */}
+                      {activePhoneText && activeChat.name && (
+                        <span className="room-contact-phone">
+                          <bdi dir="ltr">{activePhoneText}</bdi>
+                        </span>
+                      )}
                     </span>
-                    {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:
-                        webhooks, message rows, lid resolution). Monospace + muted so it doesn't compete
-                        with the human-facing name/number. */}
-                    <span className="room-contact-jid" title={activeChat.id}>
-                      {activeChat.id}
-                    </span>
-                  </div>
+                  </button>
+
                   <div className="room-header-actions">
                     <div className="room-menu" ref={roomMenuRef}>
                       <button
                         type="button"
-                        className={`icon-btn room-menu-trigger ${roomMenuOpen ? 'active' : ''}`}
+                        className={`icon-btn ${roomMenuOpen ? 'active' : ''}`}
                         onClick={() => setRoomMenuOpen(open => !open)}
                         title={t('chats.moreActions')}
                         aria-label={t('chats.moreActions')}
@@ -1631,6 +1660,16 @@ export function Chats() {
                         </div>
                       )}
                     </div>
+                    <button
+                      type="button"
+                      className={`icon-btn ${showContactInfo ? 'active' : ''}`}
+                      onClick={() => setShowContactInfo(open => !open)}
+                      title={t('chats.contactInfo')}
+                      aria-label={t('chats.contactInfo')}
+                      aria-pressed={showContactInfo}
+                    >
+                      <PanelRight size={22} />
+                    </button>
                   </div>
                 </header>
 
@@ -1775,6 +1814,68 @@ export function Chats() {
               </div>
             )}
           </main>
+
+          {/* Contact panel beside the room, toggled from its header. */}
+          {activeChat && showContactInfo && (
+            <aside className="contact-info-panel" aria-label={t('chats.contactInfo')}>
+              <header className="contact-info-header">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  onClick={() => setShowContactInfo(false)}
+                  aria-label={t('common.close')}
+                  title={t('common.close')}
+                >
+                  <X size={20} />
+                </button>
+                <span>{t('chats.contactInfo')}</span>
+              </header>
+              <div className="contact-info-body">
+                <ChatAvatar
+                  chatId={activeChat.id}
+                  pictureUrl={activePp.data}
+                  kind={activeChat.kind}
+                  size="lg"
+                  onImageError={() => activePp.refetch()}
+                />
+                <h3>{activeChatTitle}</h3>
+                <p className="contact-info-sub">
+                  {activePhoneText ? (
+                    <bdi dir="ltr">{activePhoneText}</bdi>
+                  ) : activeChat.isGroup ? (
+                    t('chats.groupSubtitle')
+                  ) : (
+                    t('chats.privateContactSubtitle')
+                  )}
+                </p>
+                <dl className="contact-info-list">
+                  {activePhoneText && (
+                    <>
+                      <dt>{t('chats.phone')}</dt>
+                      <dd>
+                        <bdi dir="ltr">{activePhoneText}</bdi>
+                      </dd>
+                    </>
+                  )}
+                  {/* Raw JID preserved for the technical case (the gateway speaks JIDs everywhere:
+                      webhooks, message rows, lid resolution). */}
+                  <dt>{t('chats.chatId')}</dt>
+                  <dd className="mono">
+                    <span title={activeChat.id}>{activeChat.id}</span>
+                    <button
+                      type="button"
+                      className="icon-btn small"
+                      onClick={() => void handleCopyChatId()}
+                      title={t('chats.copyChatId')}
+                      aria-label={t('chats.copyChatId')}
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </dd>
+                </dl>
+              </div>
+            </aside>
+          )}
         </div>
       )}
 
