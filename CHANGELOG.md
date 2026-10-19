@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse media exports and file counts when local directories cannot be fully enumerated.
 - Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885).
 - Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).
+- Index Baileys clear, delete, archive and unread changes by the same chat jid as their message key, and send an own group message's key without its participant, so the phone applies a clear or delete instead of ignoring it (#1891).
+- Key Baileys chat writes and read receipts to the gateway's stored newest message of a chat with no message since the session started, and archive or mark unread a chat with no known message at all; clear and delete still decline then (#1891).
 
 ## [0.25.0] - 2026-10-15
 

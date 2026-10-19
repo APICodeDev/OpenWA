@@ -51,13 +51,19 @@ import { SessionOwnershipService } from './session-ownership.service';
 import { paginate, ListOptions, resolveListWindow } from '../../common/utils/paginate';
 import { isTransientDbError, isUniqueViolation } from '../../common/utils/db-errors';
 import { resolveFeatureFlags } from '../../config/feature-flags';
-import { IWhatsAppEngine, ChatSummary, ChatState } from '../../engine/interfaces/whatsapp-engine.interface';
+import {
+  IWhatsAppEngine,
+  ChatSummary,
+  ChatState,
+  type StoredChatMessageLookup,
+} from '../../engine/interfaces/whatsapp-engine.interface';
 import { createLogger } from '../../common/services/logger.service';
 import { ShutdownService } from '../../common/services/shutdown.service';
 import { HookManager } from '../../core/hooks';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
-import { Message } from '../message/entities/message.entity';
+import { parseWaId } from '../../engine/identity/wa-id';
+import { Message, MessageDirection } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
@@ -1119,41 +1125,88 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.sendSeen(chatId, messageIds);
+    return engine.sendSeen(chatId, messageIds, this.storedLastMessage(id, chatId, { receivedOnly: true }));
   }
 
   async markUnread(id: string, chatId: string): Promise<boolean> {
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.markUnread(chatId);
+    return engine.markUnread(chatId, this.storedLastMessage(id, chatId));
+  }
+
+  /**
+   * The newest message the gateway stored for a chat, for an engine that keys chat writes to one and
+   * holds none for the chat itself (Baileys after a restart, #1891). The lookup runs only when the
+   * engine calls it, and covers every id form of the chat (the GET messages filter's rules).
+   *
+   * A received group message counts only with its sender, which the key needs; `receivedOnly` asks
+   * for the newest received message, the one a read receipt acknowledges.
+   */
+  private storedLastMessage(
+    sessionId: string,
+    chatId: string,
+    { receivedOnly = false }: { receivedOnly?: boolean } = {},
+  ): StoredChatMessageLookup {
+    return async () => {
+      const expanded = await resolveJidCandidates(chatId, {
+        resolveLid: lid => this.lidMappingStore.findPhoneForLid(lid),
+        lidsForPhone: phone => this.lidMappingStore.findLidsForPhone(phone),
+      });
+      const base = {
+        sessionId,
+        chatId: In([...new Set([chatId, ...expanded])]),
+        waMessageId: Not(IsNull()),
+        timestamp: Not(IsNull()),
+      };
+      const received = { ...base, direction: MessageDirection.INCOMING };
+      const where: FindOptionsWhere<Message>[] =
+        parseWaId(chatId).kind === 'group'
+          ? [
+              { ...received, author: Not(IsNull()) },
+              ...(receivedOnly ? [] : [{ ...base, direction: MessageDirection.OUTGOING }]),
+            ]
+          : [receivedOnly ? received : base];
+      const row = await this.messageRepository.findOne({
+        where,
+        order: { timestamp: 'DESC', createdAt: 'DESC' },
+        select: { id: true, waMessageId: true, direction: true, author: true, timestamp: true },
+      });
+      if (!row) return null;
+      return {
+        id: row.waMessageId,
+        fromMe: row.direction === MessageDirection.OUTGOING,
+        ...(row.author ? { author: row.author } : {}),
+        timestamp: row.timestamp,
+      };
+    };
   }
 
   /**
    * Delete every message in a chat, keeping the chat itself. Resolves false when the engine could
-   * not act — an unknown chat, or on Baileys a chat with no known history to key the change to.
-   * On success the gateway's stored copies of the chat's messages are removed too.
+   * not act — an unknown chat, or on Baileys a chat with no message in memory or stored to key the
+   * change to. On success the gateway's stored copies of the chat's messages are removed too.
    */
   async clearChatMessages(id: string, chatId: string): Promise<boolean> {
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
     const cutoff = new Date();
-    const ok = await engine.clearChatMessages(chatId);
+    const ok = await engine.clearChatMessages(chatId, this.storedLastMessage(id, chatId));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
   }
 
   /**
-   * Archive or unarchive a chat. Resolves false when the engine could not act — on Baileys a chat
-   * with no known history has no last message to key the app-state modification to. That is a
-   * defined outcome, not an error, so it is reported as `success: false` rather than a 500.
+   * Archive or unarchive a chat. Resolves false when the engine could not act. Baileys keys the
+   * change to the chat's newest message in memory, else the newest stored one, else sends it
+   * without one, which WhatsApp applies too.
    */
   async archiveChat(id: string, chatId: string, archive: boolean): Promise<boolean> {
     await this.findOne(id); // Verify session exists
     const engine = this.requireEngine(id);
 
-    return engine.archiveChat(chatId, archive);
+    return engine.archiveChat(chatId, archive, this.storedLastMessage(id, chatId));
   }
 
   /**
@@ -1185,7 +1238,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     const engine = this.requireEngine(id);
 
     const cutoff = new Date();
-    const ok = await engine.deleteChat(chatId);
+    const ok = await engine.deleteChat(chatId, this.storedLastMessage(id, chatId));
     if (ok) await this.purgeStoredChat(id, chatId, cutoff);
     return ok;
   }
