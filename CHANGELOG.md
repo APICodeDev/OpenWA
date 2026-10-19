@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation.
 - Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys (#1748).
+- Add `match=contains` to `GET /api/search`: case- and accent-insensitive substring search on a trigram index (an FTS5 trigram table on SQLite, `pg_trgm` and `unaccent` on PostgreSQL). It ranks the 1,000 most recently stored matches by match quality in two bounded phases, so `total` is at most 1,000 in this mode; `match=word` stays the default. The SDKs accept `match`.
+- Add the `MessageSearch` MCP tool, which runs the global message search behind `GET /api/search` for agents, with `match=contains` by default.
 
 ### Changed
 
