@@ -39,8 +39,9 @@ export class SearchQueryDto {
     default: 'word',
     description:
       '`word` (default) matches whole words. `contains` matches any part of a word, ignoring case and ' +
-      `accents (\`voic\` finds "Invoice", \`cafe\` finds "Café"); it needs at least one term of ` +
-      `${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters, and on PostgreSQL the pg_trgm and unaccent extensions. ` +
+      `accents (\`voic\` finds "Invoice", \`cafe\` finds "Café"); it is opt-in on the built-in provider ` +
+      '(SEARCH_CONTAINS_ENABLED=true, else 501) and needs at least one term of ' +
+      `${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters (on PostgreSQL, ${SEARCH_CONTAINS_MIN_TERM_LENGTH} letters or digits in a row). ` +
       `It ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality, so \`total\` is at most ` +
       `${SEARCH_CONTAINS_WINDOW}.`,
   })

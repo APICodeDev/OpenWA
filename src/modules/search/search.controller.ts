@@ -26,14 +26,15 @@ export class SearchController {
     status: 400,
     description:
       'Empty or whitespace-only "q", or one over 1000 characters or 32 words; an unknown "match"; or a ' +
-      '"match=contains" query whose terms are all shorter than 3 characters',
+      '"match=contains" query with no term of 3 or more characters (on PostgreSQL, 3 letters or digits in a row)',
   })
   @ApiResponse({ status: 403, description: 'Chat scope denied or chat-restricted search uses a plugin provider' })
   @ApiResponse({
     status: 501,
     description:
       'No search provider configured, or the built-in provider lacks the index the requested match mode needs ' +
-      '(for "match=contains" on PostgreSQL: the pg_trgm and unaccent extensions)',
+      '(for "match=contains": SEARCH_CONTAINS_ENABLED=true and a finished index build, and on PostgreSQL the ' +
+      'pg_trgm and unaccent extensions)',
   })
   @ApiResponse({
     status: 502,
@@ -58,7 +59,7 @@ export class SearchController {
     enum: SEARCH_MATCH_MODES,
     description:
       'word (default): whole words. contains: any part of a word, ignoring case and accents; ranks the ' +
-      `${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality`,
+      `${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality; needs SEARCH_CONTAINS_ENABLED=true`,
   })
   @ApiQuery({ name: 'sessionId', required: false, description: 'Restrict to a single session' })
   @ApiQuery({

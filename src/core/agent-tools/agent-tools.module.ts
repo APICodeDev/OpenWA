@@ -1,4 +1,5 @@
 import { Global, Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ToolRegistryService } from './tool-registry.service';
 import { SessionModule } from '../../modules/session/session.module';
 import { MessageModule } from '../../modules/message/message.module';
@@ -33,6 +34,7 @@ import { allAgentTools } from './tools';
         AutomationRulesService,
         // Optional: SEARCH_ENABLED=false leaves SearchModule (global, so no import here) out of the app.
         { token: SearchService, optional: true },
+        ConfigService,
       ],
       useFactory: (
         session: SessionService,
@@ -42,10 +44,21 @@ import { allAgentTools } from './tools';
         webhook: WebhookService,
         labels: LabelService,
         automation: AutomationRulesService,
-        search?: SearchService,
+        search: SearchService | undefined,
+        config: ConfigService,
       ) =>
         new ToolRegistryService(
-          allAgentTools({ session, message, contact, group, webhook, labels, automation, search }),
+          allAgentTools({
+            session,
+            message,
+            contact,
+            group,
+            webhook,
+            labels,
+            automation,
+            search,
+            searchContainsEnabled: config.get<boolean>('search.containsEnabled') === true,
+          }),
         ),
     },
   ],

@@ -1454,7 +1454,8 @@ class _SearchQueryRequired(TypedDict):
 
 
 # `match` is "word" (the server default: whole words) or "contains" (any part
-# of a word, ignoring case and accents; needs a term of 3+ characters).
+# of a word, ignoring case and accents; needs a term of 3+ characters, and a
+# server with SEARCH_CONTAINS_ENABLED=true, else 501).
 _SearchQueryOptional = TypedDict(
     "_SearchQueryOptional",
     {

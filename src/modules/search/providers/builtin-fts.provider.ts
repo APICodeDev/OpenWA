@@ -1,7 +1,17 @@
-import { BadRequestException, Injectable, NotImplementedException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotImplementedException,
+  OnApplicationBootstrap,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { HttpAdapterHost } from '@nestjs/core';
+import { setImmediate } from 'node:timers/promises';
 import { createLogger } from '../../../common/services/logger.service';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, QueryRunner } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHit } from '../search.types';
@@ -20,17 +30,47 @@ const MAX_SNIPPET_WORDS = 24;
 interface Fts5Index {
   table: string;
   tokenize?: string;
+  /**
+   * Backfill in batches that yield to the event loop, after the triggers exist, instead of in one
+   * statement before them (see backfillSqliteIndexInBatches).
+   */
+  batched?: boolean;
 }
 
 /** The match=word index (migration 1782400000000-AddMessagesFts). */
 const WORD_INDEX: Fts5Index = { table: 'messages_fts' };
 
 /**
- * The match=contains index (migration 1792400000000-AddMessagesTrigramSearch). The trigram tokenizer
- * indexes every three-character window of the body, so any substring of three or more characters is a
- * lookup instead of a scan; remove_diacritics makes it accent-insensitive like unicode61.
+ * The match=contains index, built only with SEARCH_CONTAINS_ENABLED=true (see buildContainsIndex). The
+ * trigram tokenizer indexes every three-character window of the body, so any substring of three or more
+ * characters is a lookup instead of a scan; remove_diacritics makes it accent-insensitive like unicode61.
  */
-const TRIGRAM_INDEX: Fts5Index = { table: 'messages_trgm', tokenize: 'trigram remove_diacritics 1' };
+const TRIGRAM_INDEX: Fts5Index = { table: 'messages_trgm', tokenize: 'trigram remove_diacritics 1', batched: true };
+
+/** Rowids per backfill batch: about 10 ms of event loop each, at the 9.4 µs a row measured on 1M messages. */
+const TRIGRAM_BACKFILL_BATCH = 1000;
+
+/**
+ * The session-level advisory lock one replica holds while it builds the Postgres trigram index, in the
+ * two-int4 form of POSTGRES_BOOT_MIGRATION_LOCK_KEYS: 0x4f5741 = "OWA", 0x7472676d = "trgm".
+ */
+export const TRIGRAM_BUILD_LOCK_KEYS: readonly [number, number] = [0x4f5741, 0x7472676d];
+
+/** Why match=contains answers 501, one message per cause, each naming what to change. */
+const CONTAINS_UNAVAILABLE = {
+  disabled: 'Contains search is disabled: set SEARCH_CONTAINS_ENABLED=true and restart to build its index.',
+  building:
+    'Contains search is not ready: its index is still being built (SEARCH_CONTAINS_ENABLED=true). Retry shortly.',
+  failed:
+    'Contains search is unavailable: building its index failed (SEARCH_CONTAINS_ENABLED=true); see the server log.',
+  postgresExtensions:
+    'Contains search is unavailable: install the pg_trgm and unaccent extensions (CREATE EXTENSION pg_trgm; CREATE EXTENSION unaccent;) and restart.',
+  sqliteTrigram:
+    'Contains search is unavailable: this SQLite build has no FTS5 trigram tokenizer (SQLite 3.45+ is required).',
+} as const;
+
+/** Three letters or digits in a row: pg_trgm takes trigrams from nothing else. */
+const POSTGRES_TRIGRAM_SOURCE = new RegExp(`[\\p{L}\\p{N}]{${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`, 'u');
 
 /**
  * The contains candidate SELECT list. It carries no snippet or score column: searchContains computes
@@ -40,15 +80,14 @@ const CONTAINS_COLUMNS = `m."id", m."waMessageId" AS wa_message_id, m."sessionId
 
 /**
  * What the Postgres catalog holds for contains search: the schema of each extension it needs (null when
- * not installed), and whether the `openwa_unaccent` wrapper, the trigram index and the recency index
- * exist.
+ * not installed), whether the `openwa_unaccent` wrapper exists, and the trigram index: null when absent,
+ * false while a CONCURRENTLY build runs or after one died, true once usable.
  */
 interface TrigramStateRow {
   trgm: string | null;
   unaccent: string | null;
   fn: boolean;
-  idx: boolean;
-  recent: boolean;
+  idx: boolean | null;
 }
 
 /** Descending string order for the `id` tiebreak, as `ORDER BY "id" DESC` sorts a UUID column. */
@@ -88,9 +127,25 @@ function likePattern(term: string): string {
   return `%${term.replace(/[\\%_]/g, '\\$&')}%`;
 }
 
+/**
+ * likePattern in Postgres SQL, around the folded term: unaccent maps fullwidth `％` and `＿` to `%` and
+ * `_`, so escaping before it would let them through as wildcards.
+ */
+function postgresLikePattern(placeholder: string): string {
+  return String.raw`'%' || replace(replace(replace(openwa_unaccent(${placeholder}), '\', '\\'), '%', '\%'), '_', '\_') || '%'`;
+}
+
 /** Shorter than a trigram once folded, so no trigram index can look it up. */
 function isShortTerm(term: string): boolean {
   return [...foldSearchText(term)].length < SEARCH_CONTAINS_MIN_TERM_LENGTH;
+}
+
+/**
+ * Whether pg_trgm can look `term` up. It takes trigrams from runs of letters and digits only, so `:-)` or
+ * `😂😂😂` give it nothing and the search would scan the table; SQLite's trigram tokenizer indexes them.
+ */
+function postgresCanIndex(term: string): boolean {
+  return POSTGRES_TRIGRAM_SOURCE.test(foldSearchText(term));
 }
 
 /** Shape returned by the dialect-specific SELECT in buildSqlite / buildPostgres. */
@@ -121,20 +176,34 @@ type PlaceholderFn = () => string;
  *
  * Two match modes, each on its own index: `word` (the default) matches whole words through the word
  * index above and ranks them in SQL; `contains` matches any substring of three or more characters,
- * case- and accent-insensitively, through the trigram index of migration
- * 1792400000000-AddMessagesTrigramSearch (an FTS5 trigram table on SQLite, a pg_trgm GIN index on
- * Postgres), and ranks a bounded window of candidates in the application (see searchContains).
+ * case- and accent-insensitively, through a trigram index (an FTS5 trigram table on SQLite, a pg_trgm
+ * GIN index on Postgres) that only SEARCH_CONTAINS_ENABLED=true builds (see buildContainsIndex), and
+ * ranks a bounded window of candidates in the application (see searchContains).
  */
 @Injectable()
-export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
+export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnApplicationBootstrap {
   readonly id = 'builtin-fts';
   readonly label = 'Built-in database full-text search';
   private readonly logger = createLogger('BuiltInFtsProvider');
 
+  /** SEARCH_CONTAINS_ENABLED: the trigram index is opt-in, since it costs about three times the message text. */
+  private readonly containsEnabled: boolean;
+
+  /** Why match=contains answers 501 right now (a CONTAINS_UNAVAILABLE message), or null once its index is ready. */
+  private containsUnavailable: string | null;
+
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
   // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
   // never the default/`main` one. The bare `DataSource` type alone is ambiguous with two connections.
-  constructor(@InjectDataSource('data') private readonly dataSource: DataSource) {}
+  constructor(
+    @InjectDataSource('data') private readonly dataSource: DataSource,
+    // Optional so the provider still builds in a unit test without them; contains search is then off.
+    @Optional() config?: ConfigService,
+    @Optional() private readonly adapterHost?: HttpAdapterHost,
+  ) {
+    this.containsEnabled = config?.get<boolean>('search.containsEnabled') === true;
+    this.containsUnavailable = this.containsEnabled ? CONTAINS_UNAVAILABLE.building : CONTAINS_UNAVAILABLE.disabled;
+  }
 
   /**
    * Self-heals the FTS schema at bootstrap so search works under an opted-in DATABASE_SYNCHRONIZE=true
@@ -158,16 +227,17 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
       // Never fail boot over index creation: the route 501s cleanly via probeFts()/ensureFts() instead.
       this.logger.error(`Failed to ensure FTS schema: ${e instanceof Error ? e.message : String(e)}`);
     }
-    try {
-      this.trigramAvailable = await this.ensureTrigramSchema();
-      if (this.trigramAvailable) {
-        this.logger.log('Trigram index ready');
-      } else {
-        this.logger.warn('Trigram index unavailable; match=contains searches will return 501');
-      }
-    } catch (e) {
-      this.logger.error(`Failed to ensure trigram schema: ${e instanceof Error ? e.message : String(e)}`);
-    }
+  }
+
+  /**
+   * Starts the contains index build once the HTTP listener is up, and does not wait for it: on a large
+   * table it runs long enough that a boot held for it would miss its health probe, and the Helm startup
+   * probe would restart the pod in a loop (docs/14).
+   */
+  onApplicationBootstrap(): void {
+    if (!this.containsEnabled || !this.adapterHost) return;
+    if (this.adapterHost.listening) void this.buildContainsIndex();
+    else this.adapterHost.listen$.subscribe(() => void this.buildContainsIndex());
   }
 
   /**
@@ -284,7 +354,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
    * tokenizer, so both get the same repair guarantees. Idempotent: on a healthy index every step is a
    * no-op or a trigger replaced by an identical one.
    */
-  private async ensureSqliteIndex({ table, tokenize }: Fts5Index): Promise<void> {
+  private async ensureSqliteIndex({ table, tokenize, batched }: Fts5Index): Promise<void> {
     const docsize = `${table}_docsize`;
     await this.dataSource.query(
       `CREATE VIRTUAL TABLE IF NOT EXISTS "${table}" USING fts5(body, content='messages', content_rowid='rowid'${tokenize ? `, tokenize='${tokenize}'` : ''})`,
@@ -317,19 +387,28 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
       this.logger.warn(`${table} holds rows the messages table no longer has; re-indexing every message`);
       await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
     }
-    const gapRow: unknown[] = await this.dataSource.query(
-      `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
+    // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches).
+    if (!batched) {
+      const gapRow: unknown[] = await this.dataSource.query(
+        `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")) AS missing`,
-    );
-    if (Number((gapRow as Array<{ missing: number }>)[0]?.missing)) {
-      // `body IS NOT NULL` mirrors the migration's own backfill exactly: a repair that indexed a NULL
-      // body as an empty document would leave the index disagreeing with the schema it repairs.
-      await this.dataSource.query(
-        `INSERT INTO "${table}"("rowid", "body")
+      );
+      if (Number((gapRow as Array<{ missing: number }>)[0]?.missing)) {
+        // `body IS NOT NULL` mirrors the migration's own backfill exactly: a repair that indexed a NULL
+        // body as an empty document would leave the index disagreeing with the schema it repairs.
+        await this.dataSource.query(
+          `INSERT INTO "${table}"("rowid", "body")
            SELECT m."rowid", m."body" FROM "messages" m WHERE m."body" IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")`,
-      );
+        );
+      }
     }
+    // While a batched backfill runs, an edited or deleted row may not be indexed yet, and an FTS5
+    // 'delete' of a document an external-content index never held corrupts it: delete only what docsize
+    // lists.
+    const deleteOld = batched
+      ? `INSERT INTO "${table}"("${table}", "rowid", "body") SELECT 'delete', old."rowid", old."body" WHERE EXISTS (SELECT 1 FROM "${docsize}" WHERE "rowid" = old."rowid");`
+      : `INSERT INTO "${table}"("${table}", "rowid", "body") VALUES ('delete', old."rowid", old."body");`;
     // The three sync triggers are CREATE-OR-REPLACE by name via DROP + CREATE; idempotent on re-run.
     await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_ai`);
     await this.dataSource.query(`CREATE TRIGGER ${table}_ai AFTER INSERT ON "messages" BEGIN
@@ -337,115 +416,164 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
     END`);
     await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_ad`);
     await this.dataSource.query(`CREATE TRIGGER ${table}_ad AFTER DELETE ON "messages" BEGIN
-      INSERT INTO "${table}"("${table}", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+      ${deleteOld}
     END`);
     await this.dataSource.query(`DROP TRIGGER IF EXISTS ${table}_au`);
     // WHEN clause skips re-indexing on body-unchanged updates (acks/reactions/status) — mirrors the
     // migration. NULL-safe via `IS NOT` so NULL↔non-NULL body transitions still fire.
     await this.dataSource.query(
       `CREATE TRIGGER ${table}_au AFTER UPDATE ON "messages" WHEN OLD.body IS NOT NEW.body BEGIN
-      INSERT INTO "${table}"("${table}", "rowid", "body") VALUES ('delete', old."rowid", old."body");
+      ${deleteOld}
       INSERT INTO "${table}"("rowid", "body") VALUES (new."rowid", new."body");
     END`,
     );
+    if (batched) await this.backfillSqliteIndexInBatches(table);
   }
 
   /**
-   * Brings up the match=contains index at boot, the way ensureFtsSchema does for the word index, and
-   * mirrors migration 1792400000000-AddMessagesTrigramSearch. Returns false, leaving no schema behind,
-   * when the database cannot hold the index: then only match=contains answers 501, while match=word
-   * keeps working.
+   * Indexes the rows the index lacks, TRIGRAM_BACKFILL_BATCH rowids at a time, yielding to the event loop
+   * between batches so requests and sessions keep being served through a build of seconds per million
+   * messages. The triggers already index every row stored meanwhile.
    */
-  private async ensureTrigramSchema(): Promise<boolean> {
-    if (this.dataSource.options.type === 'postgres') return this.ensurePostgresTrigramSchema();
-    if (!(await this.sqliteHasFts5())) return false;
+  private async backfillSqliteIndexInBatches(table: string): Promise<void> {
+    const [{ last }] = await this.dataSource.query<Array<{ last: number | null }>>(
+      `SELECT max("rowid") AS last FROM "messages"`,
+    );
+    for (let from = 0; from < (last ?? 0); from += TRIGRAM_BACKFILL_BATCH) {
+      await this.dataSource.query(
+        `INSERT INTO "${table}"("rowid", "body")
+           SELECT m."rowid", m."body" FROM "messages" m
+           WHERE m."rowid" > ? AND m."rowid" <= ? AND m."body" IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM "${table}_docsize" d WHERE d."rowid" = m."rowid")`,
+        [from, from + TRIGRAM_BACKFILL_BATCH],
+      );
+      await setImmediate();
+    }
+  }
+
+  /**
+   * Builds the match=contains index when SEARCH_CONTAINS_ENABLED is on, and is a no-op otherwise. Never
+   * throws: a failure leaves contains search answering 501 with the reason, and match=word untouched.
+   * Public so a spec can await the build onApplicationBootstrap leaves running.
+   */
+  async buildContainsIndex(): Promise<void> {
+    if (!this.containsEnabled) return;
+    const start = Date.now();
+    try {
+      this.containsUnavailable =
+        this.dataSource.options.type === 'postgres'
+          ? await this.buildPostgresTrigramIndex()
+          : await this.buildSqliteTrigramIndex();
+    } catch (e) {
+      this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
+      this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
+      return;
+    }
+    if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
+    else this.logger.log(`Trigram index ready in ${Date.now() - start} ms`);
+  }
+
+  /** Returns why this SQLite library cannot hold the index, or null once the index is complete. */
+  private async buildSqliteTrigramIndex(): Promise<string | null> {
+    if (!(await this.sqliteHasFts5())) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     const rows: Array<{ version: string }> = await this.dataSource.query(`SELECT sqlite_version() AS version`);
-    if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return false;
+    if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     await this.ensureSqliteIndex(TRIGRAM_INDEX);
-    return true;
+    return null;
   }
 
   /**
-   * Creates the wrapper function, the trigram index and the recency index when they are missing but
-   * both extensions are installed. It never runs CREATE EXTENSION: that needs a privilege managed
-   * Postgres often withholds, and the migration has already tried it inside a savepoint. An operator
-   * who installs the extensions later gets the indexes on the next boot. Like the word index, the
-   * builds are not CONCURRENTLY, so a large table is best upgraded in a maintenance window.
+   * Runs createPostgresTrigramSchema on a connection of its own: CREATE INDEX CONCURRENTLY cannot run
+   * inside a transaction, which rules out a migration, and outlasts the runtime pool's statement_timeout,
+   * which is lifted here. The advisory lock lets one replica build while the others answer 501 until the
+   * index is valid. Returns why the index cannot be used yet, or null once it is valid.
    */
-  private async ensurePostgresTrigramSchema(): Promise<boolean> {
-    const [state] = await this.postgresTrigramState();
-    if (!state?.trgm || !state.unaccent) return false;
-    if (!state.fn) {
-      await this.dataSource.query(postgresUnaccentFunctionDdl(state.unaccent));
-    }
-    if (!state.idx) {
-      await this.dataSource.query(
-        `CREATE INDEX IF NOT EXISTS "idx_messages_body_trgm" ON "messages" USING GIN (openwa_unaccent("body") ${quoteIdent(state.trgm)}.gin_trgm_ops)`,
+  private async buildPostgresTrigramIndex(): Promise<string | null> {
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    try {
+      const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
+        `SELECT pg_try_advisory_lock($1, $2) AS locked`,
+        [...TRIGRAM_BUILD_LOCK_KEYS],
       );
+      if (!locked) return CONTAINS_UNAVAILABLE.building;
+      try {
+        await runner.query('SET statement_timeout = 0');
+        return await this.createPostgresTrigramSchema(runner);
+      } finally {
+        // The connection returns to the pool: the next borrower must find its timeout and no lock.
+        await runner.query('RESET statement_timeout');
+        await runner.query('SELECT pg_advisory_unlock($1, $2)', [...TRIGRAM_BUILD_LOCK_KEYS]);
+      }
+    } finally {
+      await runner.release();
     }
-    if (!state.recent) {
-      await this.dataSource.query(
-        `CREATE INDEX IF NOT EXISTS "idx_messages_created_at_id" ON "messages" ("createdAt", "id")`,
-      );
-    }
-    return true;
   }
 
   /**
-   * One catalog read of everything contains search needs on Postgres. The function and the indexes
-   * are looked up through the session search_path, the same resolution the runtime queries use (see
-   * the to_regclass note in probeFts).
+   * Creates what is missing of the extensions, the wrapper function and the GIN trigram index, the index
+   * with CREATE INDEX CONCURRENTLY so writes go on during the build. Holding the build lock proves an
+   * INVALID index is what a killed build left behind rather than one in progress, so it is rebuilt.
    */
-  private postgresTrigramState(): Promise<TrigramStateRow[]> {
-    const indexExists = (name: string) =>
-      `EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = to_regclass('messages') AND c.relname = '${name}')`;
-    return this.dataSource.query<TrigramStateRow[]>(
+  private async createPostgresTrigramSchema(runner: QueryRunner): Promise<string | null> {
+    try {
+      // IF NOT EXISTS returns before any privilege check, so a role that may not create the extensions
+      // still gets past once an operator has.
+      await runner.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
+      await runner.query('CREATE EXTENSION IF NOT EXISTS unaccent');
+    } catch (e) {
+      this.logger.warn(
+        `Cannot create the pg_trgm and unaccent extensions: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return CONTAINS_UNAVAILABLE.postgresExtensions;
+    }
+    const [{ trgm, unaccent, fn, idx }] = await this.postgresTrigramState(runner);
+    if (!trgm || !unaccent) return CONTAINS_UNAVAILABLE.postgresExtensions;
+    if (!fn) await runner.query(postgresUnaccentFunctionDdl(unaccent));
+    if (idx === false) await runner.query(`DROP INDEX CONCURRENTLY IF EXISTS "idx_messages_body_trgm"`);
+    if (idx !== true) {
+      await runner.query(
+        `CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_messages_body_trgm" ON "messages" USING GIN (openwa_unaccent("body") ${quoteIdent(trgm)}.gin_trgm_ops)`,
+      );
+    }
+    return null;
+  }
+
+  /**
+   * One catalog read of everything contains search needs on Postgres. The function and the index are
+   * looked up through the session search_path, the same resolution the runtime queries use (see the
+   * to_regclass note in probeFts).
+   */
+  private postgresTrigramState(runner?: QueryRunner): Promise<TrigramStateRow[]> {
+    return (runner ?? this.dataSource).manager.query<TrigramStateRow[]>(
       `SELECT (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'pg_trgm') AS trgm,
               (SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = 'unaccent') AS unaccent,
               to_regprocedure('openwa_unaccent(text)') IS NOT NULL AS fn,
-              ${indexExists('idx_messages_body_trgm')} AS idx,
-              ${indexExists('idx_messages_created_at_id')} AS recent`,
+              (SELECT i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = to_regclass('messages') AND c.relname = 'idx_messages_body_trgm') AS idx`,
     );
   }
-
-  /** Whether the match=contains index is usable; cached like ftsAvailable after the first probe. */
-  private trigramAvailable: boolean | null = null;
 
   /**
-   * Probes the contains index once per instance, with the same fail-closed posture as probeFts: a
-   * Postgres probe error reports unavailable without caching, so a later call re-probes.
+   * Marks contains search ready once the catalog holds a valid index, which another replica may have
+   * built while this one waited on the lock. Fails closed like probeFts: an error leaves it unavailable.
    */
-  private async probeTrigram(): Promise<boolean> {
-    if (this.trigramAvailable !== null) return this.trigramAvailable;
-    if (this.dataSource.options.type === 'postgres') {
-      let state: TrigramStateRow | undefined;
-      try {
-        [state] = await this.postgresTrigramState();
-      } catch (e) {
-        this.logger.warn(
-          `Trigram probe failed; treating contains search as unavailable: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        return false;
-      }
-      // The recency index only speeds up the candidate query; contains search is correct without it.
-      this.trigramAvailable = Boolean(state?.trgm && state.fn && state.idx);
-    } else {
-      const rows: unknown[] = await this.dataSource.query(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='${TRIGRAM_INDEX.table}'`,
+  private async probePostgresTrigram(): Promise<void> {
+    try {
+      const [{ trgm, unaccent, fn, idx }] = await this.postgresTrigramState();
+      if (trgm && unaccent && fn && idx) this.containsUnavailable = null;
+    } catch (e) {
+      this.logger.warn(
+        `Trigram probe failed; treating contains search as unavailable: ${e instanceof Error ? e.message : String(e)}`,
       );
-      this.trigramAvailable = Array.isArray(rows) && rows.length === 1;
     }
-    return this.trigramAvailable;
   }
 
-  /** Guards a match=contains search: a missing trigram index is a 501 that names the fix. */
-  private async ensureTrigram(): Promise<void> {
-    if (await this.probeTrigram()) return;
-    throw new NotImplementedException(
-      this.dataSource.options.type === 'postgres'
-        ? 'Contains search is unavailable: install the pg_trgm and unaccent extensions (CREATE EXTENSION pg_trgm; CREATE EXTENSION unaccent;) and restart.'
-        : 'Contains search is unavailable: this SQLite build has no FTS5 trigram tokenizer (SQLite 3.45+ is required).',
-    );
+  /** Guards a match=contains search: disabled, still building or unbuildable is a 501 that says which. */
+  private async ensureContains(): Promise<void> {
+    if (this.containsUnavailable && this.containsEnabled && this.dataSource.options.type === 'postgres') {
+      await this.probePostgresTrigram();
+    }
+    if (this.containsUnavailable) throw new NotImplementedException(this.containsUnavailable);
   }
 
   async search(query: SearchQuery): Promise<SearchResults> {
@@ -502,16 +630,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
    * is never withheld.
    */
   private async searchContains(query: SearchQuery): Promise<SearchResults> {
-    const terms = BuiltInFtsProvider.containsTermsOf(query.q);
-    await this.ensureTrigram();
+    await this.ensureContains();
+    const isPostgres = this.dataSource.options.type === 'postgres';
+    const terms = BuiltInFtsProvider.containsTermsOf(query.q, isPostgres);
     const start = Date.now();
     const limit = Math.max(1, Math.min(query.limit ?? 50, SEARCH_LIMIT_MAX));
     const offset = Math.max(0, query.offset ?? 0);
 
-    const { sql, params } =
-      this.dataSource.options.type === 'postgres'
-        ? this.buildPostgresCandidates(query, terms)
-        : this.buildSqliteCandidates(query, terms);
+    const { sql, params } = isPostgres
+      ? this.buildPostgresCandidates(query, terms)
+      : this.buildSqliteCandidates(query, terms);
     const rows = await this.dataSource.query<FtsResultRow[]>(sql, params);
 
     const ranked = rows
@@ -589,15 +717,18 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
   /**
    * The whitespace-separated terms of a contains query, repeats folded away (`Invoice invoice` is one
    * term). Every term must appear in the body, as with match=word. A trigram index cannot answer a term
-   * shorter than three characters (FTS5 returns nothing for it, pg_trgm scans every row), so such terms
-   * only narrow the rows a longer term already found, and a query made of short terms alone is a 400
-   * rather than a full-table scan.
+   * it takes no trigram from (FTS5 returns nothing for it, pg_trgm scans every row), so such terms only
+   * narrow the rows another term already found, and a query made of them alone is a 400 rather than a
+   * full-table scan. SQLite takes trigrams from any three characters, pg_trgm only from three letters or
+   * digits in a row (see postgresCanIndex).
    */
-  private static containsTermsOf(q: string): string[] {
+  private static containsTermsOf(q: string, isPostgres: boolean): string[] {
     const terms = containsTerms(q);
-    if (!terms.some(term => !isShortTerm(term))) {
+    const canIndex = isPostgres ? postgresCanIndex : (term: string) => !isShortTerm(term);
+    if (!terms.some(canIndex)) {
+      const unit = isPostgres ? 'letters or digits in a row' : 'characters';
       throw new BadRequestException(
-        `A contains search needs at least one term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters.`,
+        `A contains search needs at least one term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more ${unit}.`,
       );
     }
     return terms;
@@ -676,17 +807,19 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit {
   // --- Postgres pg_trgm candidates (match=contains) --------------------------
   // SQL appearance order: one ILIKE per term -> filters -> LIMIT. Each ILIKE compares
   // openwa_unaccent(body), the exact expression the GIN trigram index holds; ILIKE folds case and
-  // openwa_unaccent folds accents, matching the SQLite trigram tokenizer, and each term has its `%`,
-  // `_` and `\` escaped so it matches literally. The most recently stored first, as on SQLite:
-  // idx_messages_created_at_id lets the planner walk them backward and stop at the window when a term
-  // is common, while for a rare one it reads the few matches from the GIN index and sorts them.
+  // openwa_unaccent folds accents, and each term has its `%`, `_` and `\` escaped after that fold so it
+  // matches literally (postgresLikePattern). unaccent also transliterates letters remove_diacritics
+  // leaves alone (Ł, ß, Ø, œ), so Postgres finds some matches SQLite does not (docs/26). The most
+  // recently stored first, as on SQLite: IDX_messages_createdAt lets the planner walk them backward and
+  // stop at the window when a term is common, while for a rare one it reads the few matches from the
+  // GIN index and sorts them.
   private buildPostgresCandidates(q: SearchQuery, terms: string[]) {
     const ph = this.pgPlaceholder();
     const params: unknown[] = [];
     const where = terms.map(term => {
       const placeholder = ph();
-      params.push(likePattern(term));
-      return `openwa_unaccent(m."body") ILIKE openwa_unaccent(${placeholder})`;
+      params.push(term);
+      return `openwa_unaccent(m."body") ILIKE ${postgresLikePattern(placeholder)}`;
     });
     this.applyFilters(where, params, q, 'm.', ph);
     const sql = `SELECT ${CONTAINS_COLUMNS} FROM messages m WHERE ${where.join(' AND ')} ORDER BY m."createdAt" DESC, m."id" DESC LIMIT ${ph()}`;

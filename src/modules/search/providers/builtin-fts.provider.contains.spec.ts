@@ -1,10 +1,10 @@
 import 'reflect-metadata';
 import { BadRequestException, NotImplementedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
-import { AddMessagesTrigramSearch1792400000000 } from '../../../database/migrations/1792400000000-AddMessagesTrigramSearch';
 import { SEARCH_CONTAINS_WINDOW } from '../search.constants';
 import {
   BuiltInFtsProvider,
@@ -13,9 +13,10 @@ import {
 } from './builtin-fts.provider';
 
 /**
- * SQLite runtime coverage for match=contains: the FTS5 trigram index the 1792400000000 migration
- * builds, queried through BuiltInFtsProvider. Companion to builtin-fts.provider.spec.ts (match=word);
- * the Postgres branch runs in 1792400000000-AddMessagesTrigramSearch.pg.spec.ts.
+ * SQLite runtime coverage for match=contains: the FTS5 trigram index buildContainsIndex builds when
+ * SEARCH_CONTAINS_ENABLED is on, queried through BuiltInFtsProvider. Companion to
+ * builtin-fts.provider.spec.ts (match=word); the Postgres branch runs in
+ * builtin-fts.provider.contains.pg.spec.ts.
  */
 const row = (sessionId: string, chatId: string, body: string, direction: MessageDirection, timestamp: number) => ({
   sessionId,
@@ -28,7 +29,9 @@ const row = (sessionId: string, chatId: string, body: string, direction: Message
   timestamp,
 });
 
-async function boot(options: { trigramMigration: boolean }): Promise<DataSource> {
+const containsOn = new ConfigService({ search: { containsEnabled: true } });
+
+async function boot(): Promise<DataSource> {
   const ds = new DataSource({
     type: 'better-sqlite3',
     database: ':memory:',
@@ -37,7 +40,6 @@ async function boot(options: { trigramMigration: boolean }): Promise<DataSource>
   });
   await ds.initialize();
   await new AddMessagesFts1782400000000().up(ds.createQueryRunner());
-  if (options.trigramMigration) await new AddMessagesTrigramSearch1792400000000().up(ds.createQueryRunner());
   await ds
     .getRepository(Message)
     .insert([
@@ -54,8 +56,9 @@ describe('BuiltInFtsProvider match=contains (sqlite)', () => {
   let provider: BuiltInFtsProvider;
 
   beforeEach(async () => {
-    ds = await boot({ trigramMigration: true });
-    provider = new BuiltInFtsProvider(ds);
+    ds = await boot();
+    provider = new BuiltInFtsProvider(ds, containsOn);
+    await provider.buildContainsIndex();
   });
   afterEach(async () => {
     await ds.destroy();
@@ -174,30 +177,85 @@ describe('BuiltInFtsProvider match=contains (sqlite)', () => {
   });
 });
 
-describe('BuiltInFtsProvider match=contains without the trigram index (sqlite)', () => {
+describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
   let ds: DataSource;
 
   beforeEach(async () => {
-    ds = await boot({ trigramMigration: false });
+    ds = await boot();
   });
   afterEach(async () => {
     await ds.destroy();
   });
 
-  it('answers 501 for match=contains while match=word keeps working', async () => {
-    const provider = new BuiltInFtsProvider(ds);
+  const trigramTables = async () =>
+    (await ds.query<unknown[]>(`SELECT name FROM sqlite_master WHERE name = 'messages_trgm'`)).length;
 
-    await expect(provider.search({ q: 'voic', match: 'contains' })).rejects.toBeInstanceOf(NotImplementedException);
+  // The `rank = 1` form checks the index against the content table; valid here because no fixture body
+  // is NULL (see builtin-fts.provider.backfill.spec.ts).
+  const integrityCheck = () => ds.query(`INSERT INTO messages_trgm(messages_trgm, rank) VALUES ('integrity-check', 1)`);
+
+  const insertBulk = async (count: number, body: (i: number) => string) => {
+    const rows = Array.from({ length: count }, (_, i) => row('s1', 'c8', body(i), MessageDirection.INCOMING, 100 + i));
+    for (let i = 0; i < rows.length; i += 200) await ds.getRepository(Message).insert(rows.slice(i, i + 200));
+  };
+
+  it('answers 501 naming SEARCH_CONTAINS_ENABLED while the setting is off, builds nothing, and leaves match=word alone', async () => {
+    const provider = new BuiltInFtsProvider(ds);
+    await provider.buildContainsIndex();
+
+    const attempt = provider.search({ q: 'voic', match: 'contains' });
+    await expect(attempt).rejects.toBeInstanceOf(NotImplementedException);
+    await expect(attempt).rejects.toThrow(/SEARCH_CONTAINS_ENABLED=true/);
+    expect(await trigramTables()).toBe(0);
     expect((await provider.search({ q: 'invoice' })).total).toBe(2);
   });
 
-  it('builds and backfills the index at boot, as under DATABASE_SYNCHRONIZE=true', async () => {
-    const provider = new BuiltInFtsProvider(ds);
-    await provider.onModuleInit();
+  it('answers 501 until the build has run', async () => {
+    const provider = new BuiltInFtsProvider(ds, containsOn);
 
+    await expect(provider.search({ q: 'voic', match: 'contains' })).rejects.toThrow(/still being built/);
+    await provider.buildContainsIndex();
     expect((await provider.search({ q: 'voic', match: 'contains' })).total).toBe(2);
-    await ds.getRepository(Message).insert(row('s1', 'c9', 'Invoice reminder', MessageDirection.INCOMING, 50));
+  });
+
+  it('builds over existing rows twice into a sound index the triggers then keep current', async () => {
+    await insertBulk(2500, i => `Bulk receipt ${i}`);
+    const provider = new BuiltInFtsProvider(ds, containsOn);
+
+    await provider.buildContainsIndex();
+    await provider.buildContainsIndex();
+
+    await expect(integrityCheck()).resolves.toBeDefined();
+    expect((await provider.search({ q: 'receipt', match: 'contains' })).total).toBe(SEARCH_CONTAINS_WINDOW);
+    expect((await provider.search({ q: 'receipt 2499', match: 'contains' })).total).toBe(1);
+    await ds.getRepository(Message).insert(row('s1', 'c9', 'Invoice reminder', MessageDirection.INCOMING, 5000));
     expect((await provider.search({ q: 'voic', match: 'contains' })).total).toBe(3);
+  });
+
+  it('stays sound when a row the backfill has not reached yet is edited or deleted mid-build', async () => {
+    await insertBulk(2500, i => `Bulk receipt ${i}`);
+    const repo = ds.getRepository(Message);
+    const edited = await repo.findOneByOrFail({ body: 'Bulk receipt 2400' });
+    const deleted = await repo.findOneByOrFail({ body: 'Bulk receipt 2401' });
+    const query = ds.query.bind(ds);
+    let interleaved = false;
+    jest.spyOn(ds, 'query').mockImplementation(async (sql: string, params?: Parameters<DataSource['query']>[1]) => {
+      if (!interleaved && /m\."rowid" > \?/.test(sql)) {
+        interleaved = true;
+        await repo.update({ id: edited.id }, { body: 'Bulk invoice edited' });
+        await repo.delete({ id: deleted.id });
+      }
+      return query(sql, params);
+    });
+    const provider = new BuiltInFtsProvider(ds, containsOn);
+
+    await provider.buildContainsIndex();
+
+    expect(interleaved).toBe(true);
+    await expect(integrityCheck()).resolves.toBeDefined();
+    expect((await provider.search({ q: 'edited', match: 'contains' })).total).toBe(1);
+    expect((await provider.search({ q: 'receipt 2400', match: 'contains' })).total).toBe(0);
+    expect((await provider.search({ q: 'receipt 2401', match: 'contains' })).total).toBe(0);
   });
 });
 

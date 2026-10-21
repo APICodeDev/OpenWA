@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, NotImplementedException } from '@nestjs/common';
 import { ChatScopeService } from '../../../modules/auth/chat-scope.service';
 import type { AuthService } from '../../../modules/auth/auth.service';
+import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { SearchService } from '../../../modules/search/search.service';
 import { invokeTool } from '../tool-invoker';
 import { searchTools } from './search.tools';
@@ -18,7 +19,7 @@ function authFor(key: object): AuthService {
 
 describe('MessageSearch tool', () => {
   const search = jest.fn().mockResolvedValue(results);
-  const tool = searchTools({ search } as unknown as SearchService)[0];
+  const tool = searchTools({ search } as unknown as SearchService, true)[0];
   const call = (key: object, input: unknown) =>
     invokeTool(tool, input, 'key', authFor(key), undefined, undefined, new ChatScopeService());
 
@@ -31,6 +32,17 @@ describe('MessageSearch tool', () => {
     await expect(call(key, input)).resolves.toBe(results);
 
     expect(search).toHaveBeenCalledWith(input, ['s1'], undefined);
+  });
+
+  it('requires OPERATOR: a below-role key is refused before the search runs', async () => {
+    expect(tool.requiredRole).toBe(ApiKeyRole.OPERATOR);
+
+    const auth = authFor({ id: 'k1', allowedSessions: null, allowedChats: null });
+    (auth.hasPermission as jest.Mock).mockReturnValue(false);
+    await expect(
+      invokeTool(tool, { q: 'invoice' }, 'key', auth, undefined, undefined, new ChatScopeService()),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(search).not.toHaveBeenCalled();
   });
 
   it('searches every session with match=contains when the agent names neither', async () => {
@@ -71,6 +83,34 @@ describe('MessageSearch tool', () => {
         undefined,
         expect.arrayContaining([CHAT]),
       );
+    });
+  });
+
+  describe('while SEARCH_CONTAINS_ENABLED is off', () => {
+    const wordTool = searchTools({ search } as unknown as SearchService)[0];
+    const callWord = (input: unknown) =>
+      invokeTool(
+        wordTool,
+        input,
+        'key',
+        authFor({ id: 'k1', allowedSessions: null, allowedChats: null }),
+        undefined,
+        undefined,
+        new ChatScopeService(),
+      );
+
+    it('defaults to match=word, as REST does', async () => {
+      await callWord({ q: 'invoice' });
+
+      expect(search).toHaveBeenCalledWith({ q: 'invoice', match: 'word' }, undefined, undefined);
+      expect(wordTool.description).toContain('SEARCH_CONTAINS_ENABLED=true');
+    });
+
+    it('passes an explicit match=contains through and surfaces the 501 the provider answers', async () => {
+      search.mockRejectedValueOnce(new NotImplementedException('Contains search is disabled'));
+
+      await expect(callWord({ q: 'invoice', match: 'contains' })).rejects.toBeInstanceOf(NotImplementedException);
+      expect(search).toHaveBeenCalledWith({ q: 'invoice', match: 'contains' }, undefined, undefined);
     });
   });
 

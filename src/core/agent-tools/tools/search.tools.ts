@@ -19,8 +19,17 @@ import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
  * `search` is undefined when SEARCH_ENABLED=false leaves SearchModule out. The tool is still
  * registered, so the published tool surface (and the counts the README states) does not depend on
  * configuration; calling it answers 501, as the REST route answers 404 then.
+ *
+ * `containsEnabled` is SEARCH_CONTAINS_ENABLED. With it on, `match` defaults to contains, unlike REST
+ * (word): an agent often knows only part of a word or types it without accents, and contains finds
+ * everything word finds. With it off the built-in provider answers 501 to contains, so the tool
+ * defaults to word like REST.
  */
-export function searchTools(search: SearchService | undefined): AnyToolDescriptor[] {
+export function searchTools(search: SearchService | undefined, containsEnabled = false): AnyToolDescriptor[] {
+  const defaultMatch = containsEnabled ? 'contains' : 'word';
+  const matchHelp = containsEnabled
+    ? `match=contains (the default) finds any part of a word, ignoring case and accents, and ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches (whole words first, then newest), so total is at most ${SEARCH_CONTAINS_WINDOW}: narrow with more terms, chatId or dateTo to reach older ones. match=word finds whole words only.`
+    : 'match=word (the default) finds whole words; match=contains needs SEARCH_CONTAINS_ENABLED=true on the server.';
   return [
     defineTool({
       name: 'MessageSearch',
@@ -30,18 +39,15 @@ export function searchTools(search: SearchService | undefined): AnyToolDescripto
       chatScope: ['chatId'],
       description:
         'Search persisted messages across every session and chat the API key may read. Returns ranked hits with a <mark>-highlighted snippet, chatId, sender and timestamp; resolve names with SessionGetChats or ContactFindOne. ' +
-        `match=contains (the default) finds any part of a word, ignoring case and accents, and ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches (whole words first, then newest), so total is at most ${SEARCH_CONTAINS_WINDOW}: narrow with more terms, chatId or dateTo to reach older ones. ` +
-        'match=word finds whole words only. A key restricted to selected chats must pass chatId.',
+        `${matchHelp} A key restricted to selected chats must pass chatId.`,
       tier: 'read',
       requiredRole: ApiKeyRole.OPERATOR,
       inputSchema: z.object({
         q: z.string().trim().min(1).max(SEARCH_QUERY_MAX_LENGTH).describe('Search term'),
-        // Defaults to contains, unlike REST (word): an agent often knows only part of a word or types
-        // it without accents, and contains finds everything word finds.
         match: z
           .enum(SEARCH_MATCH_MODES)
-          .default('contains')
-          .describe('contains: any part of a word (default); word: whole words only'),
+          .default(defaultMatch)
+          .describe(`contains: any part of a word; word: whole words only. Default: ${defaultMatch}`),
         chatId: chatIdSchema.optional().describe('Restrict to a single chat JID'),
         from: z.string().optional().describe('Filter by sender phone or JID'),
         direction: z.enum(MessageDirection).optional(),

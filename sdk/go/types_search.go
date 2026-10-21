@@ -5,7 +5,7 @@ import "net/url"
 // SearchQuery is the query for GET /search. Q is required; all else optional.
 // DateFrom/DateTo are epoch-ms. Match is "word" (the server default: whole
 // words) or "contains" (any part of a word, ignoring case and accents; needs a
-// term of 3+ characters).
+// term of 3+ characters, and a server with SEARCH_CONTAINS_ENABLED=true, else 501).
 type SearchQuery struct {
 	Q         string
 	Match     *string

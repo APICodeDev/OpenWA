@@ -27,6 +27,8 @@ export interface AgentToolDeps {
   automation: AutomationRulesService;
   /** Absent when SEARCH_ENABLED=false omits SearchModule; MessageSearch then answers 501. */
   search?: SearchService;
+  /** SEARCH_CONTAINS_ENABLED: MessageSearch defaults to match=contains only when it is on. */
+  searchContainsEnabled?: boolean;
 }
 
 /**
@@ -46,6 +48,6 @@ export function allAgentTools(deps: AgentToolDeps): AnyToolDescriptor[] {
     ...webhookTools(deps.webhook),
     ...labelTools(deps.labels),
     ...automationTools(deps.automation),
-    ...searchTools(deps.search),
+    ...searchTools(deps.search, deps.searchContainsEnabled),
   ];
 }

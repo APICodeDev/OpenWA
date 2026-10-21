@@ -37,7 +37,8 @@ export const SEARCH_MATCH_MODES = ['word', 'contains'] as const satisfies readon
 /**
  * Shortest term a match=contains search can look up in a trigram index: a trigram is three characters,
  * so a shorter term has none (SQLite's trigram table returns nothing for it, pg_trgm scans every row).
- * A query needs at least one term this long; shorter ones only narrow what it found.
+ * A query needs at least one term this long, counted in letters and digits in a row on Postgres, whose
+ * pg_trgm takes trigrams from nothing else; shorter ones only narrow what it found.
  */
 export const SEARCH_CONTAINS_MIN_TERM_LENGTH = 3;
 
