@@ -1584,6 +1584,12 @@ export interface StoredChatMessage {
   author?: string;
   /** Epoch seconds. */
   timestamp: number;
+  /**
+   * The `<lid>@lid` of a 1:1 chat, and of `author`, as the persisted lid mapping holds them. Read from
+   * the table rather than an in-memory cache, which can lack a mapping; absent when none is known.
+   */
+  lid?: string;
+  authorLid?: string;
 }
 
 /**
@@ -1615,7 +1621,7 @@ export interface ChatCapability {
 
   /**
    * Resolves false when the engine cannot act. On Baileys an archived chat needs a known message to
-   * key the mark to; a chat that is not archived is marked without one.
+   * key the mark to; a chat that is not archived is marked without one if the session knows it.
    */
   markUnread(chatId: string, stored?: StoredChatMessageLookup): Promise<boolean>;
 
@@ -1627,7 +1633,8 @@ export interface ChatCapability {
 
   /**
    * Archive or unarchive a chat. Baileys keys the change to a known message of the chat and sends it
-   * without one when none is known, which WhatsApp applies as well.
+   * without one when none is known, which WhatsApp applies as well, but only for a chat the session
+   * knows (a chat record, a persisted state row or a stored message); otherwise it resolves false.
    */
   archiveChat(chatId: string, archive: boolean, stored?: StoredChatMessageLookup): Promise<boolean>;
 

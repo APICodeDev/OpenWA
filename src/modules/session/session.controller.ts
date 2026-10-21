@@ -812,7 +812,8 @@ export class SessionController {
     description:
       'Returns `{ success }`. `false` means the engine declined to act. The Baileys engine keys the ' +
       "change to the chat's newest message in memory, else the newest stored one, else sends it " +
-      'without one, which WhatsApp applies as well.',
+      'without one, which WhatsApp applies as well, for a chat the session knows; an id it knows no ' +
+      'chat for answers `false`.',
     type: SessionActionResponseDto,
   })
   @ApiResponse({ status: 400, description: 'Session not ready' })

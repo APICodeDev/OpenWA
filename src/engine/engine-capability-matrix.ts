@@ -111,7 +111,7 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },
     evidence:
-      "wwjs Client.archiveChat(chatId)/unarchiveChat(chatId) → Promise<boolean> (index.d.ts:46,328) — the CLIENT methods, not Chat.archive(), which resolves void; baileys chatModify({archive,lastMessages}, jid) (Types/Chat.d.ts:63-66) keyed to the chat's last message in memory, else the newest stored one, else sent with an empty range, which WhatsApp applies as well",
+      "wwjs Client.archiveChat(chatId)/unarchiveChat(chatId) → Promise<boolean> (index.d.ts:46,328) — the CLIENT methods, not Chat.archive(), which resolves void; baileys chatModify({archive,lastMessages}, jid) (Types/Chat.d.ts:63-66) keyed to the chat's last message in memory, else the newest stored one, else sent with an empty range for a chat the session knows, which WhatsApp applies as well; an unknown id resolves false",
   },
   getBlockedContacts: {
     wwjs: { status: 'supported' },

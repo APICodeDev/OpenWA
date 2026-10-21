@@ -4,6 +4,7 @@ import { PresenceStore } from './presence-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, QueryFailedError } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import {
   NotFoundException,
   ConflictException,
@@ -8496,10 +8497,12 @@ describe('SessionService', () => {
         timestamp: 1690000000,
       });
 
+      // The chat's lid comes from the table-backed lookup, which the engine's cache can lack.
       await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
         id: 'S1',
         fromMe: true,
         timestamp: 1690000000,
+        lid: '999@lid',
       });
       const base = {
         sessionId: 'sess-uuid-1',
@@ -8513,7 +8516,10 @@ describe('SessionService', () => {
       );
     });
 
-    it('in a group, takes an own message or a received one with its sender', async () => {
+    it('in a group, takes an own message or a received one with its sender, and its lid from the table', async () => {
+      (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+        Promise.resolve(phone === '628222' ? ['555'] : []),
+      );
       (messageRepository.findOne as jest.Mock).mockResolvedValueOnce({
         waMessageId: 'G1',
         direction: MessageDirection.INCOMING,
@@ -8523,7 +8529,14 @@ describe('SessionService', () => {
 
       await expect(
         lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1234567890-123@g.us')),
-      ).resolves.toEqual({ id: 'G1', fromMe: false, author: '628222@c.us', timestamp: 1690000001 });
+      ).resolves.toEqual({
+        id: 'G1',
+        fromMe: false,
+        author: '628222@c.us',
+        authorLid: '555@lid',
+        timestamp: 1690000001,
+      });
+      expect(lidMappingStore.findLidsForPhone).toHaveBeenCalledWith('628222');
       const base = {
         sessionId: 'sess-uuid-1',
         chatId: In(['1234567890-123@g.us']),
@@ -8539,6 +8552,66 @@ describe('SessionService', () => {
     it('for a read receipt, takes only a received message', async () => {
       await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '123@c.us'))).resolves.toBeNull();
       expect(whereOf()).toEqual([expect.objectContaining({ direction: MessageDirection.INCOMING })]);
+    });
+
+    // The query itself, on a real database: the id-form `In`, the group sender rule and the ordering.
+    describe('against a real database', () => {
+      let db: DataSource;
+      let messages: Repository<Message>;
+
+      beforeAll(async () => {
+        db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Message], synchronize: true });
+        await db.initialize();
+        messages = db.getRepository(Message);
+        const row = (
+          chatId: string,
+          waMessageId: string | null,
+          direction: MessageDirection,
+          timestamp: number,
+          author?: string,
+        ) => ({ sessionId: 'sess-uuid-1', chatId, waMessageId, direction, timestamp, author, from: 'a', to: 'b' });
+        await messages.insert([
+          row('123@c.us', 'OUT', MessageDirection.OUTGOING, 100),
+          row('999@lid', 'IN', MessageDirection.INCOMING, 200),
+          row('123@c.us', null, MessageDirection.INCOMING, 300),
+          row('777@c.us', 'OTHER', MessageDirection.INCOMING, 400),
+          row('1-2@g.us', 'G-ANON', MessageDirection.INCOMING, 500),
+          row('1-2@g.us', 'G-OWN', MessageDirection.OUTGOING, 300),
+          row('1-2@g.us', 'G-IN', MessageDirection.INCOMING, 250, '628222@c.us'),
+        ] as QueryDeepPartialEntity<Message>[]);
+      });
+
+      afterAll(async () => {
+        await db.destroy();
+      });
+
+      beforeEach(() => {
+        Object.assign(service as unknown as Record<string, unknown>, { messageRepository: messages });
+        (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+          Promise.resolve(phone === '123' ? ['999'] : []),
+        );
+      });
+
+      it("finds a 1:1 chat's newest message under its lid twin and skips rows without an id", async () => {
+        await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
+          id: 'IN',
+          fromMe: false,
+          timestamp: 200,
+          lid: '999@lid',
+        });
+      });
+
+      it('in a group, skips a received message without its sender, and a receipt takes only a received one', async () => {
+        await expect(
+          lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1-2@g.us')),
+        ).resolves.toMatchObject({ id: 'G-OWN', fromMe: true, timestamp: 300 });
+        await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '1-2@g.us'))).resolves.toMatchObject({
+          id: 'G-IN',
+          fromMe: false,
+          author: '628222@c.us',
+          timestamp: 250,
+        });
+      });
     });
 
     it('is not read until the engine asks for it', async () => {

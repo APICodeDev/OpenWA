@@ -1028,7 +1028,7 @@ Mark a chat as unread.
 
 This route takes `chatId` alone. It previously shared `MarkChatReadDto`, which is why the two are described separately now that the read body carries `messageIds`.
 
-On Baileys the mark is keyed to the chat's newest message: the one held in memory, else the newest one the gateway stored. With neither it is sent without one, which WhatsApp applies to a chat in the list; for an archived chat the phone ignores that, so the route answers `success: false` there instead.
+On Baileys the mark is keyed to the chat's newest message: the one held in memory, else the newest one the gateway stored. With neither it is sent without one, which WhatsApp applies to a chat in the list. The route answers `success: false` instead for an archived chat, which the phone leaves unmarked without one, and for an id the session knows no chat for.
 
 ```json
 { "chatId": "1234567890@c.us" }
@@ -1103,7 +1103,9 @@ Archive or unarchive a chat.
 > On the Baileys engine the archive is an app-state modification keyed to the chat's **last
 > message**: the one held in memory, else the newest one the gateway stored. A chat with neither,
 > one that had no traffic since the session started and none stored, is archived without one, which
-> WhatsApp applies as well.
+> WhatsApp applies as well. An id the session knows no chat for (no chat record, persisted state or
+> stored message) answers `success: false`: Baileys replays its own change locally, so archiving it
+> would list a chat the account does not have.
 
 > **No `chat.archived` webhook fires for your own archive.** Baileys emits no event for a change the
 > account itself made (remote-device archives arrive later via chat-update diffing), and

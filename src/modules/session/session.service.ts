@@ -1181,13 +1181,28 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
         select: { id: true, waMessageId: true, direction: true, author: true, timestamp: true },
       });
       if (!row) return null;
+      // The lids the engine keys a lid-migrated chat by, read from the persisted mapping: the engine's
+      // own cache can lack them (#1901).
+      const lid = expanded.find(candidate => parseWaId(candidate).kind === 'lid');
+      const authorLid = row.author ? await this.persistedLidOf(row.author) : undefined;
       return {
         id: row.waMessageId,
         fromMe: row.direction === MessageDirection.OUTGOING,
         ...(row.author ? { author: row.author } : {}),
         timestamp: row.timestamp,
+        ...(lid ? { lid } : {}),
+        ...(authorLid ? { authorLid } : {}),
       };
     };
+  }
+
+  /** The `<lid>@lid` the persisted mapping holds for a person, or undefined. */
+  private async persistedLidOf(jid: string): Promise<string | undefined> {
+    const parsed = parseWaId(jid);
+    if (parsed.kind === 'lid') return `${parsed.userPart}@lid`;
+    if (parsed.kind !== 'user') return undefined;
+    const [lid] = await this.lidMappingStore.findLidsForPhone(parsed.userPart);
+    return lid ? `${lid}@lid` : undefined;
   }
 
   /**
@@ -1208,7 +1223,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
   /**
    * Archive or unarchive a chat. Resolves false when the engine could not act. Baileys keys the
    * change to the chat's newest message in memory, else the newest stored one, else sends it
-   * without one, which WhatsApp applies too.
+   * without one for a chat the session knows, which WhatsApp applies too.
    */
   async archiveChat(id: string, chatId: string, archive: boolean): Promise<boolean> {
     await this.findOne(id); // Verify session exists

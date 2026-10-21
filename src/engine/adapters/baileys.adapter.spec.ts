@@ -7073,12 +7073,16 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     );
   });
 
-  // WhatsApp applies an unread mark with no range to a chat in the list (#1891), so a chat the session
-  // knows no message of is still marked.
-  it('markUnread marks a chat with no known message without a range', async () => {
+  // WhatsApp applies an unread mark with no range to a chat in the list (#1891), so a listed chat the
+  // session knows no message of is still marked; an id the account has no chat with is not.
+  it('markUnread marks a listed chat with no known message without a range, and declines an unknown id', async () => {
     const adapter = newAdapter();
     await adapter.initialize({});
     fakeSock.fire('connection.update', { connection: 'open' });
+    expect(await adapter.markUnread('628999@s.whatsapp.net')).toBe(false);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+
+    fakeSock.fire('chats.upsert', [{ id: '628999@s.whatsapp.net' }]);
     expect(await adapter.markUnread('628999@s.whatsapp.net')).toBe(true);
     expect(fakeSock.chatModify).toHaveBeenCalledWith({ markRead: false, lastMessages: [] }, '628999@s.whatsapp.net');
   });
@@ -7297,11 +7301,16 @@ describe('BaileysAdapter sendSeen + markUnread + deleteChat', () => {
     );
   });
 
-  // WhatsApp applies an archive with no range (#1891), so a chat with no known message is archived too.
-  it('archiveChat archives a chat with no known message without a range', async () => {
+  // WhatsApp applies an archive with no range (#1891), so a listed chat with no known message is
+  // archived too. An unknown id is not: Baileys replays its own patch locally, which would list it.
+  it('archiveChat archives a listed chat with no known message without a range, and declines an unknown id', async () => {
     const adapter = newAdapter();
     await adapter.initialize({});
     fakeSock.fire('connection.update', { connection: 'open' });
+    expect(await adapter.archiveChat('628999@s.whatsapp.net', true)).toBe(false);
+    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+
+    fakeSock.fire('chats.upsert', [{ id: '628999@s.whatsapp.net' }]);
     expect(await adapter.archiveChat('628999@s.whatsapp.net', true)).toBe(true);
     expect(fakeSock.chatModify).toHaveBeenCalledWith({ archive: true, lastMessages: [] }, '628999@s.whatsapp.net');
   });
@@ -7519,14 +7528,93 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
   it.each([
     ['nothing stored', () => lookup(null)],
     ['a lookup that fails', () => jest.fn(() => Promise.reject(new Error('db down')))],
-  ])('with %s, clear and delete decline and archive goes out without a range', async (_n, make) => {
-    const adapter = await ready();
-    await expect(adapter.clearChatMessages('628111@c.us', make())).resolves.toBe(false);
-    await expect(adapter.deleteChat('628111@c.us', make())).resolves.toBe(false);
-    expect(fakeSock.chatModify).not.toHaveBeenCalled();
+  ])(
+    'with %s, clear and delete decline, and archive goes out without a range only for a listed chat',
+    async (_n, make) => {
+      const adapter = await ready();
+      await expect(adapter.clearChatMessages('628111@c.us', make())).resolves.toBe(false);
+      await expect(adapter.deleteChat('628111@c.us', make())).resolves.toBe(false);
+      await expect(adapter.archiveChat('628111@c.us', false, make())).resolves.toBe(false);
+      await expect(adapter.markUnread('628111@c.us', make())).resolves.toBe(false);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
 
-    await expect(adapter.archiveChat('628111@c.us', false, make())).resolves.toBe(true);
-    expect(fakeSock.chatModify).toHaveBeenCalledWith({ archive: false, lastMessages: [] }, '628111@s.whatsapp.net');
+      fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net' }]);
+      await expect(adapter.clearChatMessages('628111@c.us', make())).resolves.toBe(false);
+      await expect(adapter.archiveChat('628111@c.us', false, make())).resolves.toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith({ archive: false, lastMessages: [] }, '628111@s.whatsapp.net');
+    },
+  );
+
+  it('archives a chat known only by a stored message without a range, and the store makes the chat known', async () => {
+    const adapter = await ready();
+    // A stored received group message without its sender gives no usable key, but the chat exists.
+    const stored = lookup({ id: 'G1', fromMe: false, timestamp: 1690000000 });
+    await expect(adapter.archiveChat('120363@g.us', true, stored)).resolves.toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith({ archive: true, lastMessages: [] }, '120363@g.us');
+  });
+
+  it('keys a stored message by the lid the stored row brings when the session cache holds no mapping', async () => {
+    const adapter = await ready();
+    await adapter.clearChatMessages(
+      '628111@c.us',
+      lookup({ id: 'S1', fromMe: false, timestamp: 1690000000, lid: '484848@lid' }),
+    );
+    expect(fakeSock.chatModify).toHaveBeenLastCalledWith(
+      {
+        clear: true,
+        lastMessages: [{ key: { remoteJid: '484848@lid', fromMe: false, id: 'S1' }, messageTimestamp: 1690000000 }],
+      },
+      '484848@lid',
+    );
+
+    await adapter.clearChatMessages(
+      '120363@g.us',
+      lookup({ id: 'G1', fromMe: false, author: '628222@c.us', authorLid: '555@lid', timestamp: 1690000001 }),
+    );
+    expect(fakeSock.chatModify).toHaveBeenLastCalledWith(
+      {
+        clear: true,
+        lastMessages: [
+          {
+            key: { remoteJid: '120363@g.us', fromMe: false, id: 'G1', participant: '555@lid' },
+            messageTimestamp: 1690000001,
+          },
+        ],
+      },
+      '120363@g.us',
+    );
+  });
+
+  it('keys a message held in memory under the jid it arrived with, even when a lid is known for the chat', async () => {
+    const adapter = await ready();
+    fakeSock.fire('lid-mapping.update', { lid: '484848@lid', pn: '628111@s.whatsapp.net' });
+    fakeSock.fire('chats.upsert', [{ id: '628111@s.whatsapp.net' }]);
+    await upsert({ remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'PN1' });
+    await adapter.clearChatMessages('628111@c.us');
+    expect(fakeSock.chatModify).toHaveBeenLastCalledWith(
+      {
+        clear: true,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: false, id: 'PN1' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+
+    await upsert({ remoteJid: '120363@g.us', fromMe: false, id: 'GPN', participant: '628222@s.whatsapp.net' });
+    await adapter.clearChatMessages('120363@g.us');
+    expect(fakeSock.chatModify).toHaveBeenLastCalledWith(
+      {
+        clear: true,
+        lastMessages: [
+          {
+            key: { remoteJid: '120363@g.us', fromMe: false, id: 'GPN', participant: '628222@s.whatsapp.net' },
+            messageTimestamp: 1700000020,
+          },
+        ],
+      },
+      '120363@g.us',
+    );
   });
 
   it('marks an archived chat unread only with a known message, since the phone ignores it without one', async () => {
