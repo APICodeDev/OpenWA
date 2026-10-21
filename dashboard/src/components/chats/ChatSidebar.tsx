@@ -98,7 +98,7 @@ function ChatSidebar({
 }: ChatSidebarProps) {
   const { t } = useTranslation();
   // Posting a status needs an operator key; a read-only key would only reach a 403.
-  const { canWrite } = useRole();
+  const { canWrite, scoped } = useRole();
   const [showMessageSearch, setShowMessageSearch] = useState(false);
 
   const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
@@ -184,7 +184,9 @@ function ChatSidebar({
           sessions={pickerSessions ?? sessions}
           selectedSessionId={selectedSessionId}
           onSelectSession={onSelectSession}
-          canAddSession={canWrite}
+          // A session-scoped key cannot create a session (the Sessions page hides its form), so it gets no
+          // link to pair another number.
+          canAddSession={canWrite && !scoped}
         />
 
         <div className="sidebar-header-actions">

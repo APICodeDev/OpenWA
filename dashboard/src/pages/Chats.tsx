@@ -55,6 +55,7 @@ import {
   type MessageMedia,
 } from '../utils/chatMessages';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { createSessionFeedState, noteSessionFeedError, subscribeSessionFeed } from '../utils/sessionFeedSubscription';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { useToast } from '../hooks/useToast';
 import { useRole } from '../hooks/useRole';
@@ -175,7 +176,7 @@ const statusFontStyle = (font?: number): { fontFamily?: string; fontWeight?: num
 };
 
 export function Chats() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   useDocumentTitle(t('nav.chats'));
   const { error: showErrorToast, warning: showWarningToast, success: showSuccessToast } = useToast();
   const { canWrite, engineType } = useRole();
@@ -806,10 +807,39 @@ export function Chats() {
     [queryClient],
   );
 
+  // The session switcher shows every session's state and lets only a ready one be picked, so both lists
+  // follow the live session feed the Sessions page uses (the '*' room, or one room per listed session for
+  // a session-scoped key) instead of the read at mount alone. The open session stays selectable when it
+  // drops, so the page does not switch away under the operator.
+  const listedSessionsRef = useRef(listedSessions);
+  useEffect(() => {
+    listedSessionsRef.current = listedSessions;
+  });
+  const sessionFeedRef = useRef(createSessionFeedState());
+  const [sessionFeedError, setSessionFeedError] = useState<string | null>(null);
+  const handleSessionStatus = useCallback((event: { sessionId: string; status: string }) => {
+    const status = event.status as Session['status'];
+    const withStatus = (session: Session) => (session.id === event.sessionId ? { ...session, status } : session);
+    setListedSessions(prev => prev.map(withStatus));
+    setSessions(prev => {
+      if (status === 'ready') {
+        if (prev.some(session => session.id === event.sessionId)) return prev.map(withStatus);
+        const listed = listedSessionsRef.current.find(session => session.id === event.sessionId);
+        return listed ? [...prev, { ...listed, status }] : prev;
+      }
+      return prev
+        .filter(session => session.id !== event.sessionId || session.id === selectedSessionRef.current)
+        .map(withStatus);
+    });
+  }, []);
+  const handleServerError = useCallback((frame: { code: string }) => setSessionFeedError(frame.code), []);
+
   // The events object must be referentially stable: useWebSocket re-registers its socket handler
   // on every identity change, so an inline literal would tear down and re-attach per render.
   const wsEvents = useMemo(
     () => ({
+      onSessionStatus: handleSessionStatus,
+      onServerError: handleServerError,
       onMessage: handleIncomingMessage,
       onMessageAck: handleIncomingMessageAck,
       onMessageReaction: handleIncomingMessageReaction,
@@ -818,6 +848,8 @@ export function Chats() {
       onStatusReceived: handleStatusReceived,
     }),
     [
+      handleSessionStatus,
+      handleServerError,
       handleIncomingMessage,
       handleIncomingMessageAck,
       handleIncomingMessageReaction,
@@ -827,6 +859,29 @@ export function Chats() {
     ],
   );
   const { isConnected, connectionFailed, reconnect, subscribe, unsubscribe } = useWebSocket(wsEvents);
+
+  // A session-scoped key may not join '*': fall back to one subscription per listed session.
+  useEffect(() => {
+    if (sessionFeedError && noteSessionFeedError(sessionFeedRef.current, sessionFeedError)) {
+      subscribeSessionFeed(
+        { subscribe },
+        sessionFeedRef.current,
+        listedSessionsRef.current.map(session => session.id),
+      );
+    }
+  }, [sessionFeedError, subscribe]);
+
+  // Join the feed on connect and for every listed session. A reconnect lands on a fresh socket, and a
+  // session switch leaves every room of the session left behind, its feed room included, so both make the
+  // listed sessions subscribable again.
+  const listedSessionIds = listedSessions.map(session => session.id).join(',');
+  useEffect(() => {
+    if (!isConnected) {
+      sessionFeedRef.current.subscribedIds.clear();
+      return;
+    }
+    subscribeSessionFeed({ subscribe }, sessionFeedRef.current, listedSessionIds ? listedSessionIds.split(',') : []);
+  }, [isConnected, subscribe, listedSessionIds, selectedSessionId]);
 
   // A transient WebSocket gap means message.received/ack/revoke/status events were missed. On a
   // reconnect (isConnected false→true after a prior connect), refresh what the gap left stale; the
@@ -886,6 +941,7 @@ export function Chats() {
 
   useEffect(() => {
     if (selectedSessionId && isConnected) {
+      const sessionFeed = sessionFeedRef.current;
       subscribe(selectedSessionId, [
         'message.received',
         'message.sent',
@@ -900,6 +956,8 @@ export function Chats() {
       void queryClient.invalidateQueries({ queryKey: ['messages', selectedSessionId] });
       return () => {
         unsubscribe(selectedSessionId);
+        // Leaving the session's rooms leaves its feed room too, so the feed effect joins it again.
+        sessionFeed.subscribedIds.delete(selectedSessionId);
       };
     }
   }, [selectedSessionId, isConnected, subscribe, unsubscribe, queryClient]);
@@ -1119,14 +1177,14 @@ export function Chats() {
 
   // Helper formats. The list time follows WhatsApp's ladder, so the list scans the way operators
   // expect: the clock for today, "Yesterday", the weekday within the last week, else a short date.
-  // In the dashboard's language rather than the browser's.
+  // Times and dates follow the browser's locale, as on the other pages.
   const formatChatTime = useCallback(
     (timestamp?: number) => {
       if (!timestamp) return '';
       const date = new Date(timestamp * 1000);
       const today = new Date();
       if (date.toDateString() === today.toDateString()) {
-        return date.toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       }
       const yesterday = new Date(today);
       yesterday.setDate(yesterday.getDate() - 1);
@@ -1137,16 +1195,16 @@ export function Chats() {
       weekAgo.setHours(0, 0, 0, 0);
       weekAgo.setDate(weekAgo.getDate() - 6);
       if (date >= weekAgo) {
-        return date.toLocaleDateString(i18n.language, { weekday: 'long' });
+        return date.toLocaleDateString([], { weekday: 'long' });
       }
-      return date.toLocaleDateString(i18n.language, {
+      return date.toLocaleDateString([], {
         weekday: 'short',
         day: '2-digit',
         month: 'short',
         ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}),
       });
     },
-    [t, i18n.language],
+    [t],
   );
 
   // One search box drives all three tabs; each matches on its own fields. Plain consts (not useMemo)

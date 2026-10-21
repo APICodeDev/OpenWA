@@ -11,11 +11,15 @@
   --chat-bubble-in: #ffffff;
   --chat-bubble-out: #d9fdd3;
   --chat-bubble-text: #111b21;
-  --chat-meta: #667781;
+  /* Text tokens clear WCAG AA (4.5:1) on every surface they land on: the list rows (resting, hover,
+     active) and both bubbles. theme-contrast.test.ts checks each pair. */
+  --chat-meta: #54656f;
+  --chat-meta-out: #54656f;
   --chat-pill: #ffffff;
   --chat-pill-active-bg: #d9fdd3;
   --chat-pill-active-text: #008069;
   --chat-accent: #00a884;
+  --chat-accent-text: #017561;
   --chat-accent-hover: #008f6f;
   --chat-quote-accent: #06cf9c;
   --chat-link: #027eb5;
@@ -43,7 +47,9 @@
   --chat-bubble-in: #202c33;
   --chat-bubble-out: #005c4b;
   --chat-bubble-text: #e9edef;
-  --chat-meta: #8696a0;
+  --chat-meta: #9aa8b0;
+  --chat-meta-out: #c2d6cf;
+  --chat-accent-text: #1fbf95;
   --chat-pill: #202c33;
   --chat-pill-active-bg: #0a332c;
   --chat-pill-active-text: #00a884;
@@ -67,7 +73,9 @@
     --chat-bubble-in: #202c33;
     --chat-bubble-out: #005c4b;
     --chat-bubble-text: #e9edef;
-    --chat-meta: #8696a0;
+    --chat-meta: #9aa8b0;
+    --chat-meta-out: #c2d6cf;
+    --chat-accent-text: #1fbf95;
     --chat-pill: #202c33;
     --chat-pill-active-bg: #0a332c;
     --chat-pill-active-text: #00a884;
@@ -342,7 +350,15 @@
 .chats-page .session-picker-add:hover,
 .chats-page .session-picker-add:focus-visible {
   background: var(--chat-hover);
-  outline: none;
+}
+
+/* The hover tint alone is too faint to show keyboard focus (about 1.1:1 against the panel), so focus keeps a
+   ring, drawn inside so the scrolling list does not clip it. */
+.chats-page .session-picker-option:focus-visible,
+.chats-page .session-picker-add:focus-visible,
+.chats-page .chat-row-menu-popover button:focus-visible {
+  outline: 2px solid var(--chat-accent);
+  outline-offset: -2px;
 }
 
 .chats-page .session-picker-option:disabled {
@@ -508,16 +524,11 @@
 /* Filter pills */
 .chats-page .chat-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding-block: 0.75rem;
   padding-inline: 1rem;
-  overflow-x: auto;
-  scrollbar-width: none;
   flex-shrink: 0;
-}
-
-.chats-page .chat-filters::-webkit-scrollbar {
-  display: none;
 }
 
 .chats-page .chat-filter-pill {
@@ -748,7 +759,7 @@
 }
 
 .chats-page .chat-item-card.unread .chat-item-time {
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
   font-weight: 600;
 }
 
@@ -890,7 +901,6 @@
 .chats-page .chat-row-menu-popover button:hover,
 .chats-page .chat-row-menu-popover button:focus-visible {
   background: var(--chat-hover);
-  outline: none;
 }
 
 .chats-page .chat-row-menu-group {
@@ -2103,6 +2113,11 @@
 .chats-page .message-time {
   font-size: 0.6875rem;
   color: var(--chat-meta);
+}
+
+.chats-page .message-bubble.outgoing .message-edited,
+.chats-page .message-bubble.outgoing .message-time {
+  color: var(--chat-meta-out);
 }
 
 /* A styled status bubble sets its own inline background + white text; let its timestamp inherit

@@ -1910,7 +1910,9 @@ test('a background reload that lands before the initial list is not overwritten 
   const { screen, waitFor } = rtl;
   const answers = holdChatLists();
   const { container } = renderChats();
-  await screen.findByText('Main (15551234567)');
+  await waitFor(() =>
+    assert.equal(container.querySelector('.session-switcher-btn .session-name')?.textContent, SESSION.name),
+  );
   await waitFor(() => assert.equal(answers.length, 1));
   assert.ok(container.querySelector('.chats-list-loading'), 'the initial list showed no spinner');
 
@@ -1936,7 +1938,7 @@ test('a background reload that lands before the initial list is not overwritten 
 });
 
 test("a session switch drops the previous session's trailing reload and lets the new session reload at once", async () => {
-  const { screen, fireEvent, waitFor } = rtl;
+  const { screen, waitFor } = rtl;
   twoSessions = true;
   const asked = { one: 0, two: 0 };
   const held: Array<() => void> = [];
@@ -1964,9 +1966,7 @@ test("a session switch drops the previous session's trailing reload and lets the
     await waitFor(() => assert.equal(held.length, 1));
     assert.equal(asked.one, 2);
 
-    fireEvent.change(container.querySelector('select.session-selector') as HTMLSelectElement, {
-      target: { value: SESSION_2.id },
-    });
+    selectSession(container, SESSION_2.id);
     await screen.findByText('carol on two');
 
     // Session 2 is not queued behind the reload session 1 left out.

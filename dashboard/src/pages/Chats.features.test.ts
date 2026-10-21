@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Session, Chat } from '../services/api';
-import { resetSocketDouble } from '../test-helpers/socket-io-double.ts';
+import { lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 
 const SESSION: Session = {
   id: 'session-1',
@@ -410,6 +410,73 @@ test('the session switcher lists every session with its state, and only a connec
 
   fireEvent.change(screen.getByLabelText('Search sessions...'), { target: { value: 'marie' } });
   assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
+});
+
+test('the session switcher follows live session status: a session that connects can be picked, one that drops cannot', async () => {
+  const { screen, fireEvent, act } = rtl;
+  listOffline = true;
+  listSecond = true;
+  renderPage();
+  await screen.findByText('Alice');
+  const pushStatus = (sessionId: string, status: string) =>
+    act(() => {
+      lastSocket()?.receive('message', {
+        type: 'event',
+        timestamp: new Date(1_700_003_000_000).toISOString(),
+        payload: { event: 'session.status', sessionId, data: { status } },
+      });
+    });
+  const disabledOf = (name: string) =>
+    (screen.getAllByRole('option').find(option => option.textContent?.includes(name)) as HTMLButtonElement).disabled;
+
+  fireEvent.click(screen.getByRole('button', { name: /Main/ }));
+  assert.deepEqual([disabledOf('Main'), disabledOf('Second'), disabledOf('Marie Haas')], [false, false, true]);
+
+  pushStatus(OFFLINE_SESSION.id, 'ready');
+  pushStatus(SECOND_SESSION.id, 'disconnected');
+  assert.equal(disabledOf('Marie Haas'), false, 'a session that connected stayed unpickable');
+  assert.equal(disabledOf('Second'), true, 'a session that dropped could still be picked');
+
+  // The open session stays selected when it drops; the switcher shows its state.
+  pushStatus(SESSION.id, 'disconnected');
+  assert.ok(screen.getByRole('button', { name: /Main/ }), 'the open session left the switcher');
+});
+
+test('the session switcher links to pairing another number only for a key that may create a session', async () => {
+  const { screen, fireEvent } = rtl;
+  const { MemoryRouter } = await import('react-router-dom');
+  const renderInRouter = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 1_000 } } });
+    queryClients.push(queryClient);
+    return rtl.render(
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(RoleProvider, null, createElement(ToastProvider, null, createElement(Chats))),
+        ),
+      ),
+    );
+  };
+
+  renderInRouter();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: /Main/ }));
+  assert.ok(screen.getByText('Pair another number'), 'an unscoped operator key got no pairing link');
+  rtl.cleanup();
+
+  // A session-scoped key is refused on the create route, so the link would end on a page with nothing to do.
+  window.sessionStorage.setItem('openwa_key_scoped', 'true');
+  try {
+    renderInRouter();
+    await screen.findByText('Alice');
+    fireEvent.click(screen.getByRole('button', { name: /Main/ }));
+    assert.ok(!screen.queryByText('Pair another number'), 'a session-scoped key got a pairing link');
+  } finally {
+    window.sessionStorage.removeItem('openwa_key_scoped');
+  }
 });
 
 test('Escape closes the session switcher, not the open chat', async () => {
@@ -915,7 +982,7 @@ test('on Baileys neither the row nor the room menu offers Clear chat or Delete c
   assert.ok(!screen.queryByRole('button', { name: 'Delete chat' }), 'the row menu offered Delete chat');
   fireEvent.keyDown(document, { key: 'Escape' });
 
-  fireEvent.click(container.querySelector('.room-menu-trigger') as HTMLElement);
+  fireEvent.click(container.querySelector('.room-menu > button') as HTMLElement);
   const menu = container.querySelector('.room-menu-popover') as HTMLElement;
   assert.ok(within(menu).getByRole('button', { name: 'Copy chat ID' }), 'the room menu did not open');
   assert.ok(!within(menu).queryByRole('button', { name: 'Clear chat' }), 'the room menu offered Clear chat');

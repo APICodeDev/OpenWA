@@ -491,8 +491,10 @@ Three pages keep a server list in local state instead of the query cache:
   refetch.
 - **Chats** (`Chats.tsx`) reads the sessions directly on mount, and again when a search hit names a
   session that list lacks. The session switcher lists all of them, but only a ready one can be
-  selected. The page keeps the chat list in local state that socket pushes, sends, marking a chat
-  read and the chat actions (pin, mute, archive, rename) update.
+  selected; it follows `session.status` pushes through the same live session feed the Sessions page
+  joins (`utils/sessionFeedSubscription`), so a session that connects or drops changes in place. The
+  page keeps the chat list in local state that socket pushes, sends, marking a chat read and the chat
+  actions (pin, mute, archive, rename) update.
 - **Plugins** (`Plugins.tsx`) keeps the catalog in local state. It prefetches it silently on mount
   so installed cards can show an update chip, fetches it again when the Catalog tab opens with an
   empty list, and reloads it after any install, update or uninstall.

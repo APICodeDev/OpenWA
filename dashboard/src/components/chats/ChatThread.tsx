@@ -121,7 +121,7 @@ function ChatThread({
   onDelete,
   onClickButton,
 }: ChatThreadProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   // Reply, react, delete and prompt taps all need an operator key, like the composer; a viewer
   // would only reach a 403.
   const { canWrite } = useRole();
@@ -415,10 +415,10 @@ function ChatThread({
     setButtonClick({});
   }, [activeChat?.id]);
 
-  // Helper formats, in the dashboard's language rather than the browser's.
+  // Helper formats. Times and dates follow the browser's locale, as on the other pages.
   const formatTime = (timestamp?: number) => {
     if (!timestamp) return '';
-    return new Date(timestamp * 1000).toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' });
+    return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
   // The pill above the first message of each day: Today, Yesterday, else a short date (with the year
@@ -429,7 +429,7 @@ function ChatThread({
     yesterday.setDate(yesterday.getDate() - 1);
     if (date.toDateString() === new Date().toDateString()) return t('chats.today');
     if (date.toDateString() === yesterday.toDateString()) return t('chats.yesterday');
-    return date.toLocaleDateString(i18n.language, {
+    return date.toLocaleDateString([], {
       weekday: 'short',
       day: '2-digit',
       month: 'short',
