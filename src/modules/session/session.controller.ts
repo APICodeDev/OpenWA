@@ -516,8 +516,9 @@ export class SessionController {
       'On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link. A request ' +
       'for a number that already has a linked session has been observed to end with WhatsApp revoking that ' +
       'device: the linked session logs out, its credentials are deleted and it falls back to `qr_ready`. ' +
-      'A number another session of this gateway is linked with is refused with `409`; WhatsApp is not asked, ' +
-      'and the gateway cannot see a link made on another gateway or only on the phone. ' +
+      'A number that is the stored phone of another session of this gateway, compared digit for digit, is refused ' +
+      'with `409` and WhatsApp is not asked; the gateway cannot see a link made on another gateway or only on ' +
+      'the phone, nor another spelling of the same number. ' +
       'Baileys was not affected in the same tests. Link by QR when a session of that number must stay up.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
@@ -528,8 +529,8 @@ export class SessionController {
     status: 409,
     description:
       PAIRING_NOT_READY_409 +
-      ' Also answered, with nothing sent to WhatsApp, when another session of this gateway is linked with the ' +
-      'requested number: log that session out or delete it first.',
+      ' Also answered, with nothing sent to WhatsApp, when the requested number is the stored phone of another ' +
+      'session of this gateway: log that session out or delete it first.',
   })
   @ApiResponse({ status: 503, description: PAIRING_TRANSPORT_503 })
   async requestPairingCode(
