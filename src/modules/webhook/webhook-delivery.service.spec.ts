@@ -79,7 +79,11 @@ describe('WebhookDeliveryService', () => {
   let hookManager: jest.Mocked<Partial<HookManager>>;
   let webhookQueue: jest.Mocked<Record<string, jest.Mock>>;
   let lidStore: { getCached: jest.Mock; resolveLid: jest.Mock; phonesForLidsPersisted: jest.Mock };
-  let outboxService: { open: jest.Mock; close: jest.Mock; markQueued: jest.Mock };
+  let outboxService: {
+    open: jest.MockedFunction<WebhookOutboxService['open']>;
+    close: jest.Mock;
+    markQueued: jest.Mock;
+  };
   let insertedFailures: Array<Partial<WebhookDeliveryFailure>>;
 
   beforeEach(async () => {
@@ -202,6 +206,41 @@ describe('WebhookDeliveryService', () => {
     }).compile();
 
     service = module.get<WebhookDeliveryService>(WebhookDeliveryService);
+  });
+
+  it.each(['message.edited', 'message.reaction', 'session.status'])(
+    'keeps separate %s occurrences distinct within one clock millisecond',
+    async event => {
+      const clock = jest.spyOn(Date.prototype, 'toISOString').mockReturnValue('2026-10-25T12:00:00.000Z');
+      (repository.find as jest.Mock).mockResolvedValue([createMockWebhook({ events: [event] })]);
+      (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+      (undiciFetch as jest.Mock).mockResolvedValue({ ok: true, status: 200 });
+      const data = { messageId: 'same-message', senderId: '628111@c.us', status: 'ready' };
+      try {
+        await service.dispatch('sess-1', event, { ...data, body: 'first', reaction: 'a' });
+        await service.dispatch('sess-1', event, { ...data, body: 'second', reaction: 'b' });
+        const keys = outboxService.open.mock.calls.map(([row]) => row.idempotencyKey);
+        expect(keys).toHaveLength(2);
+        expect(new Set(keys).size).toBe(2);
+      } finally {
+        clock.mockRestore();
+        (undiciFetch as jest.Mock).mockReset();
+      }
+    },
+  );
+
+  it('retains a stable key for duplicate message deliveries in one clock millisecond', async () => {
+    (repository.find as jest.Mock).mockResolvedValue([createMockWebhook()]);
+    (hookManager.execute as jest.Mock).mockResolvedValue({ continue: true, data: {} });
+    (undiciFetch as jest.Mock).mockResolvedValue({ ok: true, status: 200 });
+    try {
+      for (let i = 0; i < 2; i++) await service.dispatch('sess-1', 'message.received', { id: 'same-message' });
+      const keys = outboxService.open.mock.calls.map(([row]) => row.idempotencyKey);
+      expect(keys).toHaveLength(2);
+      expect(new Set(keys).size).toBe(1);
+    } finally {
+      (undiciFetch as jest.Mock).mockReset();
+    }
   });
 
   // The drain bound at shutdown must cover the per-delivery timeout, or a delivery that takes nearly

@@ -5,6 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { setTimeout } from 'node:timers/promises';
+import { randomUUID } from 'node:crypto';
 import { Webhook } from './entities/webhook.entity';
 import { WebhookOutboxService, type ReplayableDelivery } from './webhook-outbox.service';
 import { WebhookDeliveryFailure } from './entities/webhook-delivery-failure.entity';
@@ -434,11 +435,10 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
       data,
     );
 
-    // Base idempotency key for this event occurrence. occurredAt is captured once here and reused for
-    // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key
-    // while retries of the same event stay stable. It is salted PER WEBHOOK below.
-    const occurredAt = new Date().toISOString();
-    const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, occurredAt);
+    // Base idempotency key for this event occurrence. The occurrence id is minted once here and reused for
+    // every retry of this dispatch, so recurring lifecycle events get a distinct-per-occurrence key (even two
+    // within one clock millisecond) while retries of the same event stay stable. It is salted PER WEBHOOK below.
+    const baseIdempotencyKey = generateIdempotencyKey(event, { ...data, sessionId }, randomUUID());
 
     // Fan-out amplification bound: shed an over-cap inline media blob ONCE here, before the
     // per-webhook structuredClone below, so N matching webhooks (and the queued jobs retained in
