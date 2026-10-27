@@ -222,14 +222,17 @@ export class WebhookDeliveryService implements OnModuleInit, OnModuleDestroy {
    * pool. One flush of buffered receipts is thousands of dispatches in a tick: a quarter of the dispatch
    * concurrency runs at once, shared by the session's webhooks that name the event, up to three quarters of
    * WEBHOOK_DISPATCH_MAX_QUEUED events wait their turn (holding only the event), and the rest are dropped
-   * before they open an outbox row, a failure row or a hook call. A stage holds one webhook's deliveries, so
-   * a receiver that never answers holds only its own places, not those of its siblings. A stage keeps at
-   * least one place, so the session's webhooks together could take more than a quarter: the session gate in
+   * before they open an outbox row, a failure row or a hook call. A stage holds one webhook's deliveries and
+   * is sized once, when it is created, from the webhooks then naming the event. It keeps at least one place,
+   * so the session's webhooks together could take more than a quarter: the session gate in
    * `optInSessionStages` caps what they run at once to that quarter however many webhooks name the event or
    * change while earlier stages are active. The pool therefore never sees more than a quarter from one session,
    * so a flood, or a receiver that never answers, cannot shed or hold back what another session sends until
-   * several sessions have such receivers at once. An entry lives while its webhook has events in the stage;
-   * `dropped` counts those turned away since it was created.
+   * several sessions have such receivers at once. That cap is the guarantee. Isolation between the session's
+   * own webhooks holds only while their stages fit in the gate, one place each at least: with more webhooks
+   * naming the event than the gate has places, or one added while a larger stage is still live, a receiver
+   * that never answers can hold places its siblings would have used, up to the cap. An entry lives while its
+   * webhook has events in the stage; `dropped` counts those turned away since it was created.
    */
   private readonly optInStages = new Map<string, OptInStage>();
   private readonly optInSessionStages = new Map<string, { gate: ConcurrencyLimiter; stages: number }>();
