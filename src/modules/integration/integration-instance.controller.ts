@@ -27,6 +27,10 @@ import { ApiTags, ApiResponse } from '@nestjs/swagger';
 
 const isWildcardScope = (scope: string | null): boolean => !scope || scope === '*';
 
+// A session-restricted key narrows nothing outside its own sessions: binding or releasing its instance
+// must not retire the plugin's all-sessions activation, which an unrestricted operator set.
+const isScopedKey = (apiKey: ApiKey | undefined): boolean => (apiKey?.allowedSessions?.length ?? 0) > 0;
+
 /**
  * What the instance has put into the plugin's base config: its config while it is enabled on the wildcard
  * scope, nothing otherwise. That merged config is where a secret the instance stops contributing would stay
@@ -79,7 +83,9 @@ export class IntegrationInstanceController {
       void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_CREATED, {
         metadata: { pluginId, instanceId: dto.instanceId },
       });
-      await this.scopeBinding.applyScopeBinding(pluginId, inst.sessionScope, inst.config ?? {}, inst.enabled);
+      await this.scopeBinding.applyScopeBinding(pluginId, inst.sessionScope, inst.config ?? {}, inst.enabled, {
+        additive: isScopedKey(apiKey),
+      });
       return this.view(inst, routes, /* reveal */ true);
     } catch (err) {
       if (err instanceof InstanceExistsError) throw new ConflictException(err.message);
@@ -169,10 +175,12 @@ export class IntegrationInstanceController {
       // only hand the running plugin a config without its secrets for the length of one call.
       await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false, {
         previousConfig: isWildcardScope(updated.sessionScope) ? undefined : previousConfig,
+        additive: isScopedKey(apiKey),
       });
     }
     await this.scopeBinding.applyScopeBinding(pluginId, updated.sessionScope, updated.config ?? {}, updated.enabled, {
       previousConfig,
+      additive: isScopedKey(apiKey),
     });
     // Audit the successful update with the CHANGED FIELD NAMES only — never the values: a config patch
     // can carry credentials, and audit metadata is not a credential store.
@@ -201,7 +209,10 @@ export class IntegrationInstanceController {
     // Delete the row FIRST, then tear down its scope: for a wildcard/null scope the teardown lists the
     // remaining instances to decide whether to retire '*', and that check must not count this instance.
     await this.instances.remove(pluginId, instanceId);
-    await this.scopeBinding.applyScopeBinding(pluginId, scope, {}, false, { previousConfig: contributedConfig(inst) });
+    await this.scopeBinding.applyScopeBinding(pluginId, scope, {}, false, {
+      previousConfig: contributedConfig(inst),
+      additive: isScopedKey(apiKey),
+    });
     void this.audit.logInfo(AuditAction.INTEGRATION_INSTANCE_DELETED, { metadata: { pluginId, instanceId } });
   }
 
