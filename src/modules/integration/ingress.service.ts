@@ -344,8 +344,15 @@ export function extractConversationId(
   if (spec.jsonPointer) {
     try {
       let node: unknown = JSON.parse(rawBody);
-      for (const seg of spec.jsonPointer.split('/').filter(Boolean)) {
-        node = (node as Record<string, unknown>)?.[seg];
+      // RFC 6901: an empty token is a key, `~1` and `~0` stand for `/` and `~`, and an array takes only an
+      // index. A pointer written without its leading slash keeps resolving as it did.
+      const path = spec.jsonPointer.startsWith('/') ? spec.jsonPointer.slice(1) : spec.jsonPointer;
+      for (const token of path.split('/')) {
+        if (/~(?:[^01]|$)/.test(token)) return undefined;
+        const key = token.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (node === null || typeof node !== 'object' || !Object.hasOwn(node, key)) return undefined;
+        if (Array.isArray(node) && !/^(0|[1-9][0-9]*)$/.test(key)) return undefined;
+        node = (node as Record<string, unknown>)[key];
       }
       // Only a scalar is a usable conversation key — an object/array would stringify to junk.
       if (typeof node === 'string') return node;

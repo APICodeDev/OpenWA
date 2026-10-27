@@ -643,6 +643,32 @@ describe('extractConversationId', () => {
   it('returns undefined on a malformed body without throwing', () => {
     expect(extractConversationId({ jsonPointer: '/a/b' }, {}, 'not json')).toBeUndefined();
   });
+
+  it.each([
+    ['/a~1b/id', { 'a/b': { id: 'slash' } }, 'slash'],
+    ['/a~0b/id', { 'a~b': { id: 'tilde' } }, 'tilde'],
+    ['/a~01b/id', { 'a~1b': { id: 'once' } }, 'once'],
+    ['/box//id', { box: { '': { id: 'empty' }, id: 'wrong' } }, 'empty'],
+    ['/', { '': 'empty-root-key' }, 'empty-root-key'],
+    ['/items/0/id', { items: [{ id: 42 }] }, '42'],
+    ['conversation/id', { conversation: { id: 'no-leading-slash' } }, 'no-leading-slash'],
+  ])('resolves the pointer %s by its RFC 6901 tokens', (jsonPointer, body, expected) => {
+    expect(extractConversationId({ jsonPointer }, {}, JSON.stringify(body))).toBe(expected);
+  });
+
+  it.each(['/a~2b', '/a~', '/items/01/id', '/items/length', '/toString', '/name/length'])(
+    'finds nothing for the pointer %s',
+    jsonPointer => {
+      const body = { 'a~2b': 'wrong', 'a~': 'wrong', items: [{ id: 1 }], name: 'abc' };
+      expect(extractConversationId({ jsonPointer }, {}, JSON.stringify(body))).toBeUndefined();
+    },
+  );
+
+  it('keeps the declared header ahead of a body pointer', () => {
+    expect(extractConversationId({ header: 'X-Conv', jsonPointer: '/' }, { 'x-conv': 'header' }, '{"":"body"}')).toBe(
+      'header',
+    );
+  });
 });
 
 describe('IngressService.handle — response contract', () => {
