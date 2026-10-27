@@ -184,6 +184,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private readonly chatDeliveries = new Map<string, Promise<void>>();
+  // Subscribes still re-validating their key. An unsubscribe answered meanwhile cancels the ones it covers, so
+  // they cannot join rooms after the client was told they were left.
+  private readonly pendingSubscriptions = new WeakMap<Socket, Set<{ sessionId: string; cancelled: boolean }>>();
   private authzSweepTimer?: ReturnType<typeof setInterval>;
 
   /**
@@ -590,6 +593,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // here too, not just at connect.
     const rawApiKey = (client.data as { rawApiKey?: string }).rawApiKey;
     const clientIp = this.resolveClientIp(client);
+    const subscription = { sessionId, cancelled: false };
+    let pending = this.pendingSubscriptions.get(client);
+    if (!pending) {
+      pending = new Set();
+      this.pendingSubscriptions.set(client, pending);
+    }
+    pending.add(subscription);
     let subscriberKey: ApiKey | null;
     try {
       subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey, clientIp) : null;
@@ -602,6 +612,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      pending.delete(subscription);
+      if (pending.size === 0) this.pendingSubscriptions.delete(client);
     }
     if (!subscriberKey) {
       client.emit('message', this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId));
@@ -697,6 +710,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
     }
 
+    if (subscription.cancelled) {
+      return this.createError('SUBSCRIPTION_CANCELLED', 'Subscription was cancelled', requestId);
+    }
+
     // Join rooms for each session/event combination
     for (const room of rooms) {
       void client.join(room);
@@ -732,6 +749,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     if (!isSessionSelector(sessionId)) {
       return this.createError('INVALID_SESSION', 'sessionId must be "*" or a session id', requestId);
+    }
+
+    for (const subscription of this.pendingSubscriptions.get(client) ?? []) {
+      if (sessionId === '*' || subscription.sessionId === sessionId) subscription.cancelled = true;
     }
 
     // Leave all rooms for this session

@@ -493,6 +493,76 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(sessionRoomJoins(sock)).toEqual([]);
   });
 
+  describe('pending subscription cancellation', () => {
+    const pendingSubscribe = async (sessionId = 'sess-1') => {
+      const apiKey = { id: 'k1', name: 'k', role: 'viewer', allowedSessions: null };
+      authService.validateApiKey.mockResolvedValue(apiKey);
+      const sock = makeSocket({ apiKey: 'good' });
+      sock.join.mockImplementation((room: string) => sock.rooms.add(room));
+      sock.leave.mockImplementation((room: string) => sock.rooms.delete(room));
+      await gateway.handleConnection(asSocket(sock));
+      let resolve!: (key: typeof apiKey) => void;
+      let reject!: (error: Error) => void;
+      const validation = new Promise<typeof apiKey>((yes, no) => {
+        resolve = yes;
+        reject = no;
+      });
+      let entered!: () => void;
+      const started = new Promise<void>(yes => (entered = yes));
+      authService.validateApiKey.mockImplementationOnce(() => {
+        entered();
+        return validation;
+      });
+      const subscribing = gateway.handleMessage(asSocket(sock), subscribeMsg(sessionId, ['message.received']));
+      await started;
+      return { sock, apiKey, resolve, reject, subscribing };
+    };
+    const pendingFor = (sock: MockSocket) =>
+      (gateway as unknown as { pendingSubscriptions: WeakMap<Socket, Set<unknown>> }).pendingSubscriptions.get(
+        asSocket(sock),
+      );
+
+    it.each([
+      ['sess-1', 'sess-1'],
+      ['sess-1', '*'],
+      ['*', '*'],
+    ])('cancels a pending subscribe to %s when unsubscribing from %s', async (sessionId, unsubscribe) => {
+      const pending = await pendingSubscribe(sessionId);
+      expect(
+        await gateway.handleMessage(asSocket(pending.sock), { type: 'unsubscribe', sessionId: unsubscribe }),
+      ).toMatchObject({ type: 'unsubscribed' });
+      pending.resolve(pending.apiKey);
+      expect(await pending.subscribing).toMatchObject({ code: 'SUBSCRIPTION_CANCELLED', requestId: 'r1' });
+      expect(sessionRoomJoins(pending.sock)).toEqual([]);
+      expect(pendingFor(pending.sock)).toBeUndefined();
+
+      expect(
+        await gateway.handleMessage(asSocket(pending.sock), subscribeMsg(sessionId, ['message.received'])),
+      ).toMatchObject({ type: 'subscribed' });
+      expect(pending.sock.rooms.has(buildRoomName(sessionId, 'message.received'))).toBe(true);
+    });
+
+    it('does not cancel a pending subscribe when another session is unsubscribed', async () => {
+      const pending = await pendingSubscribe();
+      expect(
+        await gateway.handleMessage(asSocket(pending.sock), { type: 'unsubscribe', sessionId: 'sess-2' }),
+      ).toMatchObject({ type: 'unsubscribed' });
+      pending.resolve(pending.apiKey);
+      expect(await pending.subscribing).toMatchObject({ type: 'subscribed' });
+      expect(pending.sock.rooms.has(buildRoomName('sess-1', 'message.received'))).toBe(true);
+    });
+
+    it('still refuses failed authorization after a cancellation and clears the pending subscription', async () => {
+      const pending = await pendingSubscribe();
+      await gateway.handleMessage(asSocket(pending.sock), { type: 'unsubscribe', sessionId: '*' });
+      pending.reject(new UnauthorizedException('API key revoked'));
+      expect(await pending.subscribing).toMatchObject({ code: 'UNAUTHORIZED' });
+      expect(pending.sock.disconnected).toBe(true);
+      expect(sessionRoomJoins(pending.sock)).toEqual([]);
+      expect(pendingFor(pending.sock)).toBeUndefined();
+    });
+  });
+
   // Client-IP resolution: an IP-restricted key (allowedIps set) must be ENFORCED at the WS surface,
   // not blanket-rejected. validateApiKey throws "Client IP could not be determined" when allowedIps is
   // set but no clientIp is supplied — so the gateway must pass the trusted-proxy-aware IP at connect
