@@ -20,6 +20,9 @@ const { spawnSync } = require('node:child_process');
 const WORK = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'patch-write-failure-')));
 test.after(() => fs.rmSync(WORK, { recursive: true, force: true }));
 
+// The mode every fixture file is given by an explicit chmod, so the cases do not depend on the umask the
+// suite runs under (a default creation mode is masked by it).
+const FIXTURE_MODE = 0o640;
 const PREFIX_BYTES = 64;
 const MARKER = 'FIXTURE_WRITE_FAULT';
 const PRELOAD = path.join(WORK, 'write-fault.cjs');
@@ -97,7 +100,8 @@ function fixture(name, files) {
   for (const [relative, content] of Object.entries(files)) {
     const target = path.join(root, 'node_modules', relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content, { mode: 0o640 });
+    fs.writeFileSync(target, content);
+    fs.chmodSync(target, FIXTURE_MODE);
     targets[relative] = target;
   }
   return { root, script, targets };
@@ -146,7 +150,7 @@ for (const [name, relative, shapeOf] of PATCHERS) {
     const target = tree.targets[relative];
     assert.equal(patch(tree).status, 0);
     assert.notEqual(fs.readFileSync(target, 'utf8'), shape);
-    assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+    assert.equal(fs.statSync(target).mode & 0o777, FIXTURE_MODE);
     assert.deepEqual(leftovers(tree), []);
   });
 
@@ -222,15 +226,17 @@ test('patch-baileys-pairing.js fails even under --best-effort when only the firs
 });
 
 // A file system that refuses chmod (a bind mount, FAT) must not turn into a failed or skipped patch: the
-// in-place write this replaced needed none. The file is patched, keeps the mode it had, and no temporary
-// file is left, under --best-effort and, for the Puppeteer patch, without it.
+// in-place write this replaced needed none. The file is patched, no temporary file is left, and with the
+// restoring chmod refused it keeps the mode the create gave it, which the umask masked; under
+// --best-effort and, for the Puppeteer patch, without it.
 const refusedChmod = tree => ({ op: 'chmod', code: 'EPERM', file: Object.values(tree.targets)[0] });
-const patchedWithoutChmod = (tree, result, before) => {
+const patchedWithoutChmod = (tree, result, before, refused = Object.keys(before)) => {
   assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
   assert.equal(result.status, 0, result.stderr);
   Object.entries(before).forEach(([relative, text]) => {
     assert.notEqual(fs.readFileSync(tree.targets[relative], 'utf8'), text);
-    assert.equal(fs.statSync(tree.targets[relative]).mode & 0o777, 0o640);
+    const expected = refused.includes(relative) ? FIXTURE_MODE & ~process.umask() : FIXTURE_MODE;
+    assert.equal(fs.statSync(tree.targets[relative]).mode & 0o777, expected);
   });
   assert.deepEqual(leftovers(tree), []);
 };
@@ -248,7 +254,9 @@ test('patch-baileys-pairing.js patches both files when the file system refuses c
   const before = Object.fromEntries(
     Object.entries(tree.targets).map(([key, file]) => [key, fs.readFileSync(file, 'utf8')]),
   );
-  patchedWithoutChmod(tree, patch(tree, { fault: { op: 'chmod', code: 'EPERM', file: tree.targets[SOCKET] } }), before);
+  // Only socket.js has its chmod refused: messages-recv.js gets its mode back.
+  const result = patch(tree, { fault: { op: 'chmod', code: 'EPERM', file: tree.targets[SOCKET] } });
+  patchedWithoutChmod(tree, result, before, [SOCKET]);
 });
 
 // The Puppeteer patch has no --best-effort mode: any failure is fatal, and leaves the file untouched.
