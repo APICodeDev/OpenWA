@@ -183,7 +183,9 @@ export class IngressProcessor extends WorkerHost {
    */
   @OnWorkerEvent('failed')
   async onWorkerFailed(job: Job<IngressJobData> | undefined, error: Error): Promise<void> {
-    if (!job || error.message !== STALL_EXHAUSTION_MESSAGE) return;
+    // The sentinel text alone is not proof: a failed attempt whose error reads the same is retried and is not
+    // this. BullMQ marks a job it fails for stalling by storing the reason as its deferred failure.
+    if (!job || job.deferredFailure !== STALL_EXHAUSTION_MESSAGE || error.message !== STALL_EXHAUSTION_MESSAGE) return;
     const d = job.data;
     this.logger.error('Ingress job failed after stalling beyond the recovery limit', error.message, {
       pluginId: d.pluginId,
