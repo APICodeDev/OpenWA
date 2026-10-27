@@ -50,6 +50,13 @@ export const QUEUE_READ_TIMEOUT_MS = 2000;
 /** Budget for waiting on database-derived statistics during a scrape. */
 export const STATS_READ_TIMEOUT_MS = 2000;
 
+/**
+ * How long the last overview read stands in for one that is slower than the budget. A read that outlasts the
+ * budget still completes, and the stats memo it fills expires before a scrape interval of a minute comes round
+ * again, so without this every such scrape would meet a cold memo and drop the series.
+ */
+export const STATS_STALE_MAX_MS = 5 * 60_000;
+
 /** The job states reported per queue. `completed` is left out: removeOnComplete trims it, so it means nothing. */
 const QUEUE_JOB_STATES = ['wait', 'active', 'delayed', 'failed'] as const;
 
@@ -66,6 +73,7 @@ export class MetricsService implements OnModuleDestroy {
 
   private cachedRender: { at: number; text: string } | null = null;
   private pendingOverview: Promise<OverviewStats | null> | null = null;
+  private lastOverview: { overview: OverviewStats; at: number } | null = null;
 
   /**
    * The route skips the shared throttler so a scrape interval costs no request budget, which left
@@ -257,18 +265,20 @@ export class MetricsService implements OnModuleDestroy {
   }
 
   /**
-   * The overview, or null when it failed or did not settle within STATS_READ_TIMEOUT_MS. The wait is shared
-   * until the read itself settles, so scrapes arriving behind a stuck read neither queue up nor each start a
-   * deadline of their own.
+   * The overview, or null when it failed or did not settle within STATS_READ_TIMEOUT_MS and no recent one is
+   * known. The wait is shared until the read itself settles, so scrapes arriving behind a stuck read neither
+   * queue up nor each start a deadline of their own. A read that only runs late is kept when it completes, and
+   * stands in for the next scrape that finds it late again (STATS_STALE_MAX_MS); a failed read never does.
    */
   private readOverviewOrNull(): Promise<OverviewStats | null> {
     if (this.pendingOverview) return this.pendingOverview;
     const work = Promise.resolve().then(() => this.statsService.getOverview());
+    const late = new Error('statistics read timed out');
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waiting = Promise.race([
       work,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('statistics read timed out')), STATS_READ_TIMEOUT_MS);
+        timer = setTimeout(() => reject(late), STATS_READ_TIMEOUT_MS);
       }),
     ]).then(
       overview => {
@@ -277,18 +287,28 @@ export class MetricsService implements OnModuleDestroy {
       },
       err => {
         clearTimeout(timer);
+        const recent = err === late ? this.recentOverview() : null;
         this.logger.warn(
-          `Metrics scrape could not read stats; database-derived series omitted: ${err instanceof Error ? err.message : String(err)}`,
+          `Metrics scrape could not read stats; ${recent ? 'serving the last result' : 'database-derived series omitted'}: ` +
+            (err instanceof Error ? err.message : String(err)),
         );
-        return null;
+        return recent;
       },
     );
     this.pendingOverview = waiting;
-    const clear = (): void => {
+    const settled = (): void => {
       if (this.pendingOverview === waiting) this.pendingOverview = null;
     };
-    void work.then(clear, clear);
+    void work.then(overview => {
+      this.lastOverview = { overview, at: Date.now() };
+      settled();
+    }, settled);
     return waiting;
+  }
+
+  private recentOverview(): OverviewStats | null {
+    const last = this.lastOverview;
+    return last && Date.now() - last.at < STATS_STALE_MAX_MS ? last.overview : null;
   }
 
   /**

@@ -1,5 +1,5 @@
-import { MetricsService, METRICS_RENDER_TTL_MS } from './metrics.service';
-import type { OverviewStats } from '../stats/stats.service';
+import { MetricsService, METRICS_RENDER_TTL_MS, STATS_STALE_MAX_MS } from './metrics.service';
+import { StatsService, type OverviewStats } from '../stats/stats.service';
 
 const STATS_BUDGET_MS = 2000;
 const overview: OverviewStats = {
@@ -199,5 +199,82 @@ describe('MetricsService bounded degraded renders', () => {
       held.resolve(overview);
       await Promise.all(calls.map(call => call.done));
     }
+  });
+});
+
+describe('MetricsService statistics slower than its budget, with the real stats memo', () => {
+  // The memo lives 30 s from completion, so a scan of 3 s run by a scrape every 15 s or 60 s always meets it cold.
+  const SCAN_MS = 3000;
+  const later = <T>(value: T, delay = SCAN_MS) => new Promise<T>(resolve => setTimeout(() => resolve(value), delay));
+  function slowDatabase() {
+    const state = { fail: false };
+    const query = (): Record<string, unknown> => {
+      const chain: Record<string, unknown> = {};
+      for (const step of ['select', 'addSelect', 'where', 'groupBy']) chain[step] = () => chain;
+      chain.getRawMany = () => later([{ direction: 'outgoing', count: '4' }]);
+      return chain;
+    };
+    const sessions = {
+      find: () => (state.fail ? Promise.reject(new Error('pool exhausted')) : later([{ status: 'ready' }])),
+    };
+    const messages = { createQueryBuilder: query, count: () => later(1) };
+    const stats = new StatsService(
+      sessions as never,
+      messages as never,
+      {
+        get: (key: string, fallback?: unknown) => (key === 'stats.cacheTtlMs' ? 30000 : fallback),
+      } as never,
+    );
+    const service = new MetricsService(
+      { get: (key: string) => (key === 'METRICS_TOKEN' ? 'fixture-token' : undefined) } as never,
+      stats,
+    );
+    services.push(service);
+    const scrape = () => {
+      service.assertScrapeAuthorized('Bearer fixture-token', { headers: {}, socket: { remoteAddress: '192.0.2.1' } });
+      return service.render();
+    };
+    return { state, scrape };
+  }
+  const scrapeAfter = async (scrape: () => Promise<string>, interval: number): Promise<string> => {
+    const pending = scrape();
+    await jest.advanceTimersByTimeAsync(interval);
+    return pending;
+  };
+
+  beforeEach(() => jest.useFakeTimers({ now: 1000000 }));
+  afterEach(() => {
+    for (const service of services.splice(0)) service.onModuleDestroy();
+    jest.clearAllTimers();
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+  });
+
+  it.each([15_000, 60_000])('keeps the database series on every scrape after the first, at %i ms', async interval => {
+    const db = slowDatabase();
+    const texts: string[] = [];
+    for (let i = 0; i < 6; i++) texts.push(await scrapeAfter(db.scrape, interval));
+
+    expect(texts[0]).toContain('openwa_stats_available 0');
+    for (const text of texts.slice(1)) {
+      expect(text).toContain('openwa_stats_available 1');
+      expect(text).toContain('openwa_sessions_active');
+      expect(text).toContain('openwa_messages_total{direction="outgoing"} 4');
+    }
+  });
+
+  it('drops the series once the last result is older than the stale bound', async () => {
+    const db = slowDatabase();
+    await scrapeAfter(db.scrape, SCAN_MS);
+    expect(await scrapeAfter(db.scrape, STATS_STALE_MAX_MS)).toContain('openwa_stats_available 0');
+  });
+
+  it('does not stand in for a read that failed', async () => {
+    const db = slowDatabase();
+    await scrapeAfter(db.scrape, 60_000);
+    db.state.fail = true;
+    const failed = await scrapeAfter(db.scrape, 60_000);
+    expect(failed).toContain('openwa_stats_available 0');
+    expect(failed).not.toContain('openwa_sessions_active');
   });
 });
