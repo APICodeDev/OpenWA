@@ -73,6 +73,10 @@ describe('isCatalogEntry', () => {
     );
   });
 
+  it('treats a null optional field as absent', () => {
+    expect(isCatalogEntry({ ...ok, homepage: null, testedOpenWAVersion: null, keywords: null })).toBe(true);
+  });
+
   it.each([
     null,
     5,
