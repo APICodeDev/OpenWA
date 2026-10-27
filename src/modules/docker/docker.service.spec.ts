@@ -1,6 +1,6 @@
 import Docker from 'dockerode';
 import { DockerService, prestartBuiltinDatabase } from './docker.service';
-import { recordPinnedEnvKeys } from '../../config/env-precedence';
+import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { HOST_SPELLINGS } from '../../../test/fixtures/builtin-mode-cases';
 
 // Prevent actual Docker connections on module init during tests
@@ -49,7 +49,7 @@ describe('DockerService.getRunningBuiltinServices', () => {
     expect(await service.getRunningBuiltinServices()).toEqual({ database: 'compose', cache: 'openwa', storage: false });
   });
 
-  it('reports all false when no bundled containers are present (e.g. Docker unavailable)', async () => {
+  it('reports all false when a live inventory contains no bundled containers', async () => {
     const service = new DockerService();
     jest.spyOn(service, 'listContainers').mockResolvedValue([]);
     expect(await service.getRunningBuiltinServices()).toEqual({ database: false, cache: false, storage: false });
@@ -447,8 +447,8 @@ describe('DockerService.listContainers', () => {
     return service;
   };
 
-  it('returns an empty list when Docker is unavailable', async () => {
-    expect(await new DockerService().listContainers()).toEqual([]);
+  it('returns no live inventory when Docker is unavailable', async () => {
+    expect(await new DockerService().listContainers()).toBeNull();
   });
 
   it('maps only OpenWA containers (label or /openwa- name) to ContainerInfo', async () => {
@@ -487,9 +487,9 @@ describe('DockerService.listContainers', () => {
     ]);
   });
 
-  it('returns an empty list when the daemon listing fails', async () => {
+  it('returns no live inventory when the daemon listing fails', async () => {
     const service = makeService(jest.fn().mockRejectedValue(new Error('daemon gone')));
-    expect(await service.listContainers()).toEqual([]);
+    expect(await service.listContainers()).toBeNull();
   });
 });
 
@@ -878,5 +878,128 @@ describe('DockerService.orchestrateProfiles', () => {
     expect(result.containersStarted).toEqual([]);
     expect(result.errors).toEqual(['Failed to start postgres: boom']);
     expect(result.message).toBe('Failed to start postgres: boom');
+  });
+});
+
+describe('DockerService availability recovery', () => {
+  const keys = [
+    'DOCKER_HOST',
+    'DATABASE_TYPE',
+    'STORAGE_TYPE',
+    'REDIS_ENABLED',
+    'QUEUE_ENABLED',
+    'CACHE_ENABLED',
+    'POSTGRES_BUILTIN',
+    'REDIS_BUILTIN',
+    'MINIO_BUILTIN',
+    'REDIS_HOST',
+    'DATABASE_PASSWORD',
+    'S3_ACCESS_KEY_ID',
+    'S3_SECRET_ACCESS_KEY',
+    'S3_ACCESS_KEY',
+    'S3_SECRET_KEY',
+  ];
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    Object.assign(process.env, {
+      DOCKER_HOST: 'tcp://proxy.invalid:2375',
+      DATABASE_TYPE: 'sqlite',
+      STORAGE_TYPE: 'local',
+      POSTGRES_BUILTIN: 'true',
+      REDIS_BUILTIN: 'true',
+      MINIO_BUILTIN: 'true',
+      REDIS_HOST: 'redis',
+      DATABASE_PASSWORD: '',
+      S3_ACCESS_KEY_ID: '',
+      S3_SECRET_ACCESS_KEY: '',
+      S3_ACCESS_KEY: '',
+      S3_SECRET_KEY: '',
+    });
+    recordPinnedEnvKeys({});
+    recordOsEnvKeys(process.env);
+    jest.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    recordPinnedEnvKeys({});
+    recordOsEnvKeys(process.env);
+    DockerMock.mockReset();
+    jest.useRealTimers();
+  });
+
+  it.each([
+    [{ REDIS_ENABLED: 'true' }, false, ['openwa-redis']],
+    [{ QUEUE_ENABLED: 'true' }, false, ['openwa-redis']],
+    [{ CACHE_ENABLED: 'true' }, false, ['openwa-redis']],
+    [{ REDIS_ENABLED: 'true' }, true, []],
+    [{}, false, []],
+  ] as const)(
+    'reconciles selected services once for %j with an external pin %s',
+    async (selection, external, expected) => {
+      Object.assign(process.env, selection);
+      if (external) {
+        process.env.REDIS_HOST = 'cache.external.invalid';
+        recordPinnedEnvKeys({ REDIS_HOST: 'cache.external.invalid' });
+      }
+      let reconnect: (() => void) | undefined;
+      let releaseStart: (() => void) | undefined;
+      const reconnecting = new Promise<void>(resolve => (reconnect = resolve));
+      const starting = new Promise<void>(resolve => (releaseStart = resolve));
+      const created: string[] = [];
+      const daemon = {
+        ping: jest
+          .fn()
+          .mockRejectedValueOnce(new Error('proxy not ready'))
+          .mockImplementation(() => reconnecting),
+        listContainers: jest.fn().mockResolvedValue([]),
+        getImage: () => ({ inspect: () => Promise.resolve({}) }),
+        modem: {},
+        createVolume: jest.fn().mockResolvedValue({}),
+        createContainer: jest.fn((config: { name: string }) => {
+          created.push(config.name);
+          return Promise.resolve({ start: () => starting });
+        }),
+      };
+      DockerMock.mockImplementation(() => daemon);
+      const service = new DockerService();
+      await service.onModuleInit();
+      for (let i = 0; i < 10; i++) service.isDockerAvailable();
+      expect(DockerMock).toHaveBeenCalledTimes(2);
+      reconnect!();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(created).toEqual(expected);
+      for (let i = 0; i < 10; i++) service.isDockerAvailable();
+      expect(created).toEqual(expected);
+      expect(DockerMock).toHaveBeenCalledTimes(2);
+      releaseStart!();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(created).toEqual(expected);
+    },
+  );
+
+  it('recovers a previously reachable local socket after its inventory fails', async () => {
+    delete process.env.DOCKER_HOST;
+    process.env.POSTGRES_BUILTIN = 'false';
+    process.env.REDIS_BUILTIN = 'false';
+    process.env.MINIO_BUILTIN = 'false';
+    const daemon = {
+      ping: jest.fn().mockResolvedValue(undefined),
+      listContainers: jest.fn().mockRejectedValueOnce(new Error('daemon restarted')).mockResolvedValue([]),
+    };
+    DockerMock.mockImplementation(() => daemon);
+    const service = new DockerService();
+    await service.onModuleInit();
+    await expect(service.listContainers()).resolves.toBeNull();
+    expect(service.isDockerAvailable()).toBe(false);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(service.isDockerAvailable()).toBe(true);
+    await expect(service.listContainers()).resolves.toEqual([]);
   });
 });

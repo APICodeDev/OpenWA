@@ -56,6 +56,8 @@ export class DockerService implements OnModuleInit {
   private readonly logger = createLogger(DockerService.name);
   private docker: Docker | null = null;
   private isAvailable = false;
+  /** Whether a daemon has ever answered, so a later loss is a reconnect and not a deployment without Docker. */
+  private hasConnected = false;
   private reinitInFlight = false;
   /** Visible for testing. */
   callTimeoutMs = DOCKER_CALL_TIMEOUT_MS;
@@ -152,6 +154,7 @@ export class DockerService implements OnModuleInit {
       this.docker = new Docker(this.buildDockerOptions());
       await this.answered(abortSignal => this.abortable<unknown>('ping', abortSignal), 'a ping');
       this.isAvailable = true;
+      this.hasConnected = true;
       this.logger.log('Docker API connected successfully');
     } catch (error) {
       this.logger.warn('Docker not available. Container orchestration disabled.', {
@@ -180,25 +183,30 @@ export class DockerService implements OnModuleInit {
    * (DOCKER_HOST=tcp://...), the proxy container may not be accepting connections at
    * the moment onModuleInit runs (compose `service_started` doesn't wait for readiness).
    * If the first connect failed, retry it once in the background here so orchestration
-   * recovers without a process restart. Only for the DOCKER_HOST (proxy/tcp) case — a
-   * socket-based or docker-less deployment has no such race.
+   * recovers without a process restart. Only for the DOCKER_HOST (proxy/tcp) case or a daemon
+   * that answered before: a docker-less deployment has no such race. Built-in services the boot
+   * skipped while Docker was unreachable are started once it answers.
    */
   isDockerAvailable(): boolean {
-    if (!this.isAvailable && !this.reinitInFlight && process.env.DOCKER_HOST) {
+    if (!this.isAvailable && !this.reinitInFlight && (process.env.DOCKER_HOST || this.hasConnected)) {
       this.reinitInFlight = true;
-      void this.initializeDocker().finally(() => {
-        this.reinitInFlight = false;
-      });
+      void this.initializeDocker()
+        .then(() => this.bootstrapOrchestration())
+        .catch(error => this.logger.warn('Could not start built-in services after Docker recovery', String(error)))
+        .finally(() => {
+          this.reinitInFlight = false;
+        });
     }
     return this.isAvailable;
   }
 
   /**
-   * List all OpenWA-related containers
+   * List all OpenWA-related containers, or null when the daemon could not be asked: an empty list
+   * means it was asked and none exist, which callers act on.
    */
-  async listContainers(): Promise<ContainerInfo[]> {
+  async listContainers(): Promise<ContainerInfo[] | null> {
     if (!this.docker || !this.isAvailable) {
-      return [];
+      return null;
     }
 
     try {
@@ -221,7 +229,8 @@ export class DockerService implements OnModuleInit {
         }));
     } catch (error) {
       this.logger.error('Failed to list containers', error);
-      return [];
+      this.isAvailable = false;
+      return null;
     }
   }
 
@@ -230,10 +239,14 @@ export class DockerService implements OnModuleInit {
    * `com.openwa.service` label (`database` | `cache` | `storage`), and who created each: `'compose'` for one
    * Docker Compose created (it carries Compose's project label and belongs to the deployment), `'openwa'` for
    * one createService made. Lets the dashboard show the real built-in state instead of the saved intent. All
-   * false when Docker is unavailable or none run.
+   * false when none run; null when Docker could not be observed.
    */
-  async getRunningBuiltinServices(): Promise<Record<'database' | 'cache' | 'storage', false | 'compose' | 'openwa'>> {
+  async getRunningBuiltinServices(): Promise<Record<
+    'database' | 'cache' | 'storage',
+    false | 'compose' | 'openwa'
+  > | null> {
     const containers = await this.listContainers();
+    if (containers === null) return null;
     const creator = (svc: string): false | 'compose' | 'openwa' => {
       const running = containers.find(
         c =>
