@@ -808,10 +808,16 @@ export class InfraDataService {
         // `.catch(() => {})` here could otherwise silently commit a MERGED (not replaced) restore on
         // SQLite, violating the endpoint's "replaces existing data" contract.
         const clearTable = async (table: string, where = ''): Promise<void> => {
+          // Asked first on PostgreSQL: a statement that names a missing relation aborts the whole transaction even
+          // when its error is caught, and every later statement then fails with 25P02.
+          if (isPostgres && !(await queryRunner.hasTable(table))) {
+            this.logger.debug('Skipped clearing a table that does not exist during import', { table });
+            return;
+          }
           try {
             await queryRunner.query(`DELETE FROM ${table}${where}`);
           } catch (err) {
-            if (!isMissingTableError(err)) throw err;
+            if (isPostgres || !isMissingTableError(err)) throw err;
             this.logger.debug('Skipped clearing a table that does not exist during import', { table });
           }
         };
