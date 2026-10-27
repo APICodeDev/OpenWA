@@ -113,7 +113,7 @@ public class OpenWAApiError extends OpenWAError {
         try {
             Instant at = ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
             return Math.max(0L, (long) Math.ceil((at.toEpochMilli() - System.currentTimeMillis()) / 1000.0));
-        } catch (DateTimeParseException e) {
+        } catch (DateTimeParseException | ArithmeticException e) {
             return null;
         }
     }

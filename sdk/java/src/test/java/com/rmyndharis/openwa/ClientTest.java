@@ -96,6 +96,9 @@ class ClientTest {
         tx.respondRaw(503, new byte[0], Map.of("Retry-After", List.of("soon")));
         assertNull(assertThrows(OpenWAApiError.class,
             () -> client.requestVoid(HttpMethod.GET, "/api/sessions", null, null)).retryAfterSeconds());
+        tx.respondRaw(503, new byte[0], Map.of("Retry-After", List.of("Sun, 6 Nov 1994 08:49:37 GMT")));
+        assertEquals(0L, assertThrows(OpenWAApiError.class,
+            () -> client.requestVoid(HttpMethod.GET, "/api/sessions", null, null)).retryAfterSeconds());
 
         tx.respond(502, "{\"statusCode\":502,\"message\":\"x\",\"code\":\"SESSION_LOGOUT_INCOMPLETE\"}");
         assertEquals("SESSION_LOGOUT_INCOMPLETE", assertThrows(OpenWAApiError.class,
