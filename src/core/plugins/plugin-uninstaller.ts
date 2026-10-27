@@ -6,7 +6,7 @@ import { PluginStorageService } from './plugin-storage.service';
 
 /**
  * The uninstall half of the plugin loader: fully remove an installed user plugin — disable + unload
- * from the runtime, drop its persisted registry entry, and delete its directories from disk. Install,
+ * from the runtime, delete its directories from disk, then drop its persisted registry entry. Install,
  * download and unpack live feature-side (modules/plugins); this is the runtime-owned removal they and
  * the REST surface call through PluginLoaderService.
  *
@@ -50,8 +50,8 @@ export class PluginUninstaller {
   }
 
   /**
-   * Fully remove an installed user plugin: disable + unload from the runtime, drop its persisted
-   * registry entry, and delete its directory from disk. Built-ins (engines, bundled extensions) are
+   * Fully remove an installed user plugin: disable + unload from the runtime, delete its directory from
+   * disk, then drop its persisted registry entry (last, so a failed removal can be repeated). Built-ins (engines, bundled extensions) are
    * registered programmatically with no on-disk dir and must never be removable.
    */
   async uninstallPlugin(pluginId: string): Promise<void> {
