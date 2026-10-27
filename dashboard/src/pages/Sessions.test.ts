@@ -756,6 +756,27 @@ test('the pairing phone field leaves a composition in progress alone and reads i
   assert.equal(phoneInput.value, '628123456789');
 });
 
+// A native maxLength counts the separators of a pasted number and cuts it before the page reads it: "+62 812-3456-7890"
+// is 17 characters but 12 digits. The digits are capped instead, at the 15 a number can have.
+test('the pairing phone field caps the digits it keeps, not the characters a paste may carry', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  renderSessions();
+
+  await screen.findByText('new-device');
+  const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
+  fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
+  await screen.findByAltText('QR');
+  fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
+  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+
+  assert.equal(phoneInput.hasAttribute('maxlength'), false, 'a native maxLength cuts a pasted formatted number');
+  fireEvent.change(phoneInput, { target: { value: '+62 812-3456-7890' } });
+  assert.equal(phoneInput.value, '6281234567890');
+  fireEvent.change(phoneInput, { target: { value: '1234567890123456789' } });
+  assert.equal(phoneInput.value, '123456789012345');
+});
+
 // Nothing server-side refuses a pairing code for a number linked elsewhere, so the panel has to say
 // what it can cost before the operator types one.
 test('the phone pairing tab warns that a code can unlink an existing session', async () => {

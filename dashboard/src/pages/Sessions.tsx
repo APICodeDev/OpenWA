@@ -68,6 +68,9 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
   return parts.join(' · ');
 }
 
+const PAIRING_PHONE_MAX_DIGITS = 15;
+const pairingDigits = (text: string) => normalizePhoneText(text).replace(/\D/g, '').slice(0, PAIRING_PHONE_MAX_DIGITS);
+
 export function Sessions() {
   const { t } = useTranslation();
   useDocumentTitle(t('sessions.title'));
@@ -890,21 +893,18 @@ export function Sessions() {
                       className="pairing-input"
                       type="tel"
                       inputMode="numeric"
-                      maxLength={15}
                       placeholder={t('sessions.pairing.phonePlaceholder')}
                       value={phoneNumber}
                       // A composition in progress is left as typed, since rewriting it garbles what the IME commits;
                       // it is read when the composition ends. Pasted and directly typed text is read at once.
+                      // The cap is on the digits, not a native maxLength: that counts the separators of a pasted
+                      // "+62 812-3456-7890" and cuts the number short.
                       onChange={e =>
                         setPhoneNumber(
-                          (e.nativeEvent as InputEvent).isComposing
-                            ? e.target.value
-                            : normalizePhoneText(e.target.value).replace(/\D/g, ''),
+                          (e.nativeEvent as InputEvent).isComposing ? e.target.value : pairingDigits(e.target.value),
                         )
                       }
-                      onCompositionEnd={e =>
-                        setPhoneNumber(normalizePhoneText(e.currentTarget.value).replace(/\D/g, ''))
-                      }
+                      onCompositionEnd={e => setPhoneNumber(pairingDigits(e.currentTarget.value))}
                       onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
                     />
                     <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
