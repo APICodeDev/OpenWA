@@ -387,6 +387,8 @@ export interface PluginStorage {
 }
 ```
 
+A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get`, `set` and `delete` accept.
+
 ## 19.5 Hook System
 
 ### Hook Lifecycle
