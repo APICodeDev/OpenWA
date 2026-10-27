@@ -31,7 +31,7 @@ import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SaveConfigDto } from './dto/save-config.dto';
 import { assertNoDefaultSecretsInProduction } from '../../config/bootstrap-security';
-import { validateEnv } from '../../config/env.validation';
+import { s3EndpointError, validateEnv } from '../../config/env.validation';
 import { BLANK_SHADOWED_ENV_KEYS, isEnvPinned, isOsProvidedEnv } from '../../config/env-precedence';
 import { resolveStorageRoot } from '../../config/storage-root';
 import { randomUUID } from 'crypto';
@@ -216,7 +216,7 @@ export class InfraConfigController {
       this.assertNoLineBreakValues(updates);
       const merged = this.mergeWithExisting(existing, ctx);
       this.assertProductionBootable(merged);
-      this.assertBootValidates(merged);
+      this.assertBootValidates(updates, merged);
       this.assertStorageRootWritable(updates, merged);
       this.persistGeneratedEnv(envPath, merged);
       this.auditConfigSaved(config, profiles);
@@ -355,10 +355,15 @@ export class InfraConfigController {
   // The environment validation the next boot runs (env.validation.ts), applied to the same view of the merged result.
   // Without it a save the dashboard accepts, a PostgreSQL selection with no host or a pool size that is not a plain
   // integer, crash-loops the instance and the dashboard that could undo it.
-  private assertBootValidates(merged: Record<string, string>): void {
+  // The boot only reports an S3 endpoint the client cannot use, so a deployment on its local fallback keeps starting
+  // and keeps saving other settings; a save that names the storage type or the endpoint is refused instead.
+  private assertBootValidates(updates: Record<string, string>, merged: Record<string, string>): void {
     const bootValue = this.bootValueReader(merged);
     try {
-      validateEnv(Object.fromEntries(Object.keys({ ...process.env, ...merged }).map(key => [key, bootValue(key)])));
+      const env = Object.fromEntries(Object.keys({ ...process.env, ...merged }).map(key => [key, bootValue(key)]));
+      validateEnv(env);
+      const s3Problem = 'STORAGE_TYPE' in updates || 'S3_ENDPOINT' in updates ? s3EndpointError(env) : null;
+      if (s3Problem) throw new Error(s3Problem);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       throw new BadRequestException(`Refusing to save a configuration that fails boot validation. ${detail}`);

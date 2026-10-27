@@ -64,7 +64,7 @@ interface Case {
   flag: Flag;
 }
 
-// A storage endpoint that is not an absolute http(s) URL is refused by boot validation, so a save never reaches the
+// A storage endpoint that is not an absolute http(s) URL is refused by the save, so a save never reaches the
 // decisions below with one; the blank spelling is no endpoint at all.
 const isSavableHost = (service: ServiceName, host: string): boolean =>
   service !== 'storage' || host.trim() === '' || /^https?:\/\//i.test(host.trim());

@@ -92,6 +92,30 @@ export function builtinRedisUsernameError(config: EnvConfig): string | null {
 }
 
 /**
+ * The S3 client builds every request from S3_ENDPOINT. A value without a scheme (`minio:9000`) does not stop the
+ * client from being built: each call then fails as "Invalid URL" and media goes to the local fallback directory.
+ * That deployment runs today, so validateEnv leaves it alone and the boot reports this message at ERROR level; the
+ * Infrastructure save refuses it, so the page never stores one. Only checked while S3 is the selected storage, and
+ * the value is not echoed, as it may hold keys.
+ */
+export function s3EndpointError(config: EnvConfig): string | null {
+  const raw = config.S3_ENDPOINT;
+  const endpoint = typeof raw === 'string' ? raw.trim() : '';
+  if (!endpoint || config.STORAGE_TYPE !== 's3') return null;
+  let protocol: string | undefined;
+  try {
+    protocol = new URL(endpoint).protocol;
+  } catch {
+    protocol = undefined;
+  }
+  if (protocol === 'http:' || protocol === 'https:') return null;
+  return (
+    'S3_ENDPOINT must be an absolute http(s) URL such as "http://minio:9000"; set it in the environment, ./.env or ' +
+    'data/.env.generated, or on the Infrastructure page'
+  );
+}
+
+/**
  * Fail-fast environment validation. Wired as ConfigModule's `validate`
  * callback so a misconfigured deployment is rejected at BOOT instead of silently
  * coercing (e.g. a `DATABASE_TYPE=postgre` typo falling back to SQLite) or failing on
@@ -617,22 +641,6 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       errors.push(`NODE_URL must be an absolute http(s) URL (got "${nodeUrl}")`);
     } else if (parsed.username || parsed.password) {
       errors.push('NODE_URL must not embed credentials — the forwarder cannot send a URL with a userinfo component');
-    }
-  }
-
-  // The S3 client builds every request from this URL. A value without a scheme (`minio:9000`) fails each call as
-  // "Invalid URL" and media goes to the local fallback directory instead, so a typo in the endpoint reads as a
-  // working bucket. Only checked while S3 is the selected storage; the value is not echoed, as it may hold keys.
-  const s3Endpoint = str('S3_ENDPOINT');
-  if (s3Endpoint && rawEnum('STORAGE_TYPE') === 's3') {
-    let protocol: string | undefined;
-    try {
-      protocol = new URL(s3Endpoint).protocol;
-    } catch {
-      protocol = undefined;
-    }
-    if (protocol !== 'http:' && protocol !== 'https:') {
-      errors.push('S3_ENDPOINT must be an absolute http(s) URL such as "http://minio:9000"');
     }
   }
 

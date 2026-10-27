@@ -17,7 +17,7 @@ import {
 } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
-import { validateEnv } from './config/env.validation';
+import { s3EndpointError, validateEnv } from './config/env.validation';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
@@ -66,6 +66,15 @@ async function bootstrap() {
   // only once NestFactory.create awaits it, which is after the storage root is created and a built-in
   // PostgreSQL container is started; an invalid config would do both and then be reported twice.
   validateEnv(process.env);
+
+  // Reported, not refused: with S3 selected and an endpoint the client cannot use, the instance runs today on its
+  // local fallback directory, so an upgrade must not turn that into a crash loop. The Infrastructure save refuses it.
+  const s3EndpointProblem = s3EndpointError(process.env);
+  if (s3EndpointProblem) {
+    bootstrapLogger.error(
+      `${s3EndpointProblem}. Until then S3 is unavailable and media is written to the local directory.`,
+    );
+  }
 
   // Advisory (not enforced): an unset/blank NODE_ENV is the deliberate local-dev default, but it
   // silently degrades four controls to their dev posture (the default-secret guard, wildcard CORS,

@@ -180,11 +180,56 @@ describe('InfraConfigController.saveConfig values the next boot refuses', () => 
     ['a negative pool size', { database: { ...external, poolSize: -5 } }],
     ['a fractional pool size', { database: { ...external, poolSize: 1.5 } }],
     ['a redis port that is not a number', { redis: { enabled: true, host: 'cache', port: 'x' } }],
+    [
+      'an S3 endpoint without a scheme',
+      {
+        storage: {
+          type: 's3',
+          builtIn: false,
+          s3Endpoint: 'minio:9000',
+          s3AccessKey: 'AccessKey1234',
+          s3SecretKey: 'SecretKey1234567',
+        },
+      },
+    ],
   ])('refuses %s instead of writing it', (_label, config) => {
     (fs.writeFileSync as jest.Mock).mockClear();
 
     expect(() => newController().saveConfig(config as never)).toThrow(BadRequestException);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  // The boot only reports an S3 endpoint the client cannot use, so a deployment running on its local fallback must
+  // still be able to save other settings; only a save that names the storage type or the endpoint is refused.
+  describe('an S3 endpoint without a scheme already stored', () => {
+    const STORED =
+      'STORAGE_TYPE=s3\nS3_ENDPOINT=minio:9000\nS3_ACCESS_KEY_ID=AccessKey1234\nS3_SECRET_ACCESS_KEY=SecretKey1234567\n';
+    beforeEach(() => {
+      (fs.existsSync as jest.Mock).mockReturnValue(true);
+      (fs.readFileSync as jest.Mock).mockReturnValue(STORED);
+      (fs.writeFileSync as jest.Mock).mockClear();
+    });
+    afterEach(() => {
+      (fs.existsSync as jest.Mock).mockReturnValue(false);
+      (fs.readFileSync as jest.Mock).mockReturnValue('');
+    });
+
+    it('does not stop a save of another section', () => {
+      expect(newController().saveConfig({ engine: { headless: false } }).saved).toBe(true);
+    });
+
+    it('refuses a save that names the storage type again, with the boot text', () => {
+      expect(() => newController().saveConfig({ storage: { type: 's3', s3Bucket: 'media' } } as never)).toThrow(
+        /fails boot validation\. S3_ENDPOINT must be an absolute http\(s\) URL/,
+      );
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('accepts the endpoint once it carries the scheme', () => {
+      expect(
+        newController().saveConfig({ storage: { type: 's3', s3Endpoint: 'http://minio:9000' } } as never).saved,
+      ).toBe(true);
+    });
   });
 
   it('writes a blank host and user as the defaults and trims a padded port', () => {

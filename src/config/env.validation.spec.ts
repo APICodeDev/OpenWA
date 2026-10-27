@@ -1,5 +1,5 @@
 import { LogLevel } from '../common/services/logger.service';
-import { validateEnv } from './env.validation';
+import { s3EndpointError, validateEnv } from './env.validation';
 
 /** Regression locks for boot-time env validation (no silent coercion). */
 describe('validateEnv', () => {
@@ -627,38 +627,47 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ NODE_URL: 'https://node-a.internal' })).not.toThrow();
   });
 
-  // Without a scheme the S3 client throws "Invalid URL" on every call and media quietly lands on local disk.
+  // Without a scheme the S3 client throws "Invalid URL" on every call and media quietly lands on local disk. That
+  // deployment runs today, so the boot reports the endpoint instead of refusing it (validateEnv never throws for
+  // it); the Infrastructure save is what refuses.
   describe('S3_ENDPOINT', () => {
+    const s3 = (S3_ENDPOINT: string | undefined, STORAGE_TYPE = 's3') => ({ STORAGE_TYPE, S3_ENDPOINT });
+
     it.each(['minio:9000', '127.0.0.1:9000', 'localhost:9000', 'minio', 'ftp://minio:9000'])(
-      'rejects %s while S3 is the selected storage',
+      'reports %s while S3 is the selected storage, and still lets validateEnv pass',
       endpoint => {
-        expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: endpoint })).toThrow(
-          /S3_ENDPOINT must be an absolute http\(s\) URL/,
-        );
+        expect(s3EndpointError(s3(endpoint))).toMatch(/^S3_ENDPOINT must be an absolute http\(s\) URL/);
+        expect(() => validateEnv(s3(endpoint))).not.toThrow();
       },
     );
 
-    it('does not echo the value, which may carry credentials', () => {
-      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: 'AKIAKEY:hunter2@s3host:9000' })).not.toThrow(
-        /hunter2/,
-      );
-      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: 'AKIAKEY:hunter2@s3host:9000' })).toThrow(
-        /S3_ENDPOINT/,
+    it('says where to fix it', () => {
+      expect(s3EndpointError(s3('minio:9000'))).toMatch(
+        /environment, \.\/\.env or data\/\.env\.generated, or on the Infrastructure page/,
       );
     });
 
-    it.each(['http://minio:9000', 'https://s3.example.com', 'https://gateway.example.com/s3/', ' http://minio:9000 '])(
-      'accepts %s',
-      endpoint => {
-        expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: endpoint })).not.toThrow();
-      },
-    );
+    it('does not echo the value, which may carry credentials', () => {
+      const message = s3EndpointError(s3('AKIAKEY:hunter2@s3host:9000'));
+      expect(message).toMatch(/S3_ENDPOINT/);
+      expect(message).not.toMatch(/hunter2|AKIAKEY|s3host/);
+    });
+
+    it.each([
+      'http://minio:9000',
+      'https://s3.example.com',
+      'https://gateway.example.com/s3/',
+      ' http://minio:9000 ',
+      'HTTP://minio:9000',
+    ])('accepts %s', endpoint => {
+      expect(s3EndpointError(s3(endpoint))).toBeNull();
+    });
 
     it('leaves an unset or blank endpoint alone, and a stale one while storage is local', () => {
-      expect(() => validateEnv({ STORAGE_TYPE: 's3' })).not.toThrow();
-      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: '  ' })).not.toThrow();
-      expect(() => validateEnv({ STORAGE_TYPE: 'local', S3_ENDPOINT: 'minio:9000' })).not.toThrow();
-      expect(() => validateEnv({ S3_ENDPOINT: 'minio:9000' })).not.toThrow();
+      expect(s3EndpointError(s3(undefined))).toBeNull();
+      expect(s3EndpointError(s3('  '))).toBeNull();
+      expect(s3EndpointError(s3('minio:9000', 'local'))).toBeNull();
+      expect(s3EndpointError({ S3_ENDPOINT: 'minio:9000' })).toBeNull();
     });
   });
 
