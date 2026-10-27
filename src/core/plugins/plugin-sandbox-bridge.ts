@@ -6,7 +6,12 @@ import { PluginCapabilityPermission, PluginContext, PluginInstance, PluginStatus
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
 import { PluginCapabilityContext } from './plugin-capability-context';
-import { isPluginActiveForSession, resolveInstanceConfig, resolvePluginConfig } from './plugin-activation';
+import {
+  isPluginActiveForSession,
+  resolveInstanceConfig,
+  resolvePluginConfig,
+  sessionScopeKey,
+} from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
@@ -16,9 +21,6 @@ import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
-
-/** The all-sessions scope is spelled null, undefined or '*' depending on where it was stored. */
-const scopeKey = (scope: string | null | undefined): string => (!scope || scope === '*' ? '*' : scope);
 
 /** Time budget for a sandboxed plugin's hook handler before the chain proceeds without it. */
 const SANDBOX_HOOK_TIMEOUT_MS = 5000;
@@ -214,7 +216,7 @@ export class PluginSandboxBridge {
     }
     // The job carries the session the instance acted on at admission. Rebound since, the delivery would
     // reach the handler under that session with the new session's config, so it is refused instead.
-    if (scopeKey(instance.sessionScope) !== scopeKey(d.sessionId)) {
+    if (sessionScopeKey(instance.sessionScope) !== sessionScopeKey(d.sessionId)) {
       throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' was rebound since this delivery');
     }
     // Three layers, most specific last: the base ('*') config, then the operator's per-session

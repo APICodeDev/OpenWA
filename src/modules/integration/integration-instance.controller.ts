@@ -17,6 +17,7 @@ import { type ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { AuditService } from '../audit/audit.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
+import { isAllSessionsScope } from '../../core/plugins/plugin-activation';
 import { InstanceExistsError, PluginInstanceService } from './plugin-instance.service';
 import { ScopeBindingService } from './scope-binding.service';
 import { PluginInstance } from './entities/plugin-instance.entity';
@@ -24,8 +25,6 @@ import { buildIngressUrls } from './ingress-url';
 import { CreateInstanceDto, InstanceView, UpdateInstanceDto } from './dto/instance.dto';
 import { sessionScopeVisible } from '../../common/security/session-scope';
 import { ApiTags, ApiResponse } from '@nestjs/swagger';
-
-const isWildcardScope = (scope: string | null): boolean => !scope || scope === '*';
 
 // A session-restricted key narrows nothing outside its own sessions: binding or releasing its instance
 // must not retire the plugin's all-sessions activation, which an unrestricted operator set.
@@ -38,7 +37,7 @@ const isScopedKey = (apiKey: ApiKey | undefined): boolean => (apiKey?.allowedSes
  * disabled or on one session, left nothing there to take back.
  */
 const contributedConfig = (inst: PluginInstance): Record<string, unknown> | undefined =>
-  inst.enabled && isWildcardScope(inst.sessionScope) ? (inst.config ?? undefined) : undefined;
+  inst.enabled && isAllSessionsScope(inst.sessionScope) ? (inst.config ?? undefined) : undefined;
 
 // ADMIN-only provisioning surface for per-plugin instances (e.g. one Chatwoot account). Only plugins
 // that declare an ingress route AND the webhook:ingress permission can have instances; everything
@@ -174,7 +173,7 @@ export class IntegrationInstanceController {
       // A move between the spellings of the wildcard scope is re-bound right below: retracting here would
       // only hand the running plugin a config without its secrets for the length of one call.
       await this.scopeBinding.applyScopeBinding(pluginId, previousScope, {}, false, {
-        previousConfig: isWildcardScope(updated.sessionScope) ? undefined : previousConfig,
+        previousConfig: isAllSessionsScope(updated.sessionScope) ? undefined : previousConfig,
         additive: isScopedKey(apiKey),
       });
     }
