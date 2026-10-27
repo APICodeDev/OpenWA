@@ -326,7 +326,7 @@ export class SessionController {
       'effect runs before this refusal. Also returned when another node currently holds this ' +
       "session's engine: only the owner may start it, and the claim is refused before any engine " +
       'is launched, so no second connection to the account is opened. Also returned, with no `code`, ' +
-      'when a stop, a force-kill that found a running engine to kill, or a data import (`stopOrphans`) ' +
+      'when a stop, a logout or force-kill that found a running engine, or a data import (`stopOrphans`) ' +
       'of this session began or finished while the start was waiting, or a delete of it was still ' +
       'running: the start yields and launches nothing. After a stop or force-kill, a new POST /start ' +
       'clears it and starts the session; after a delete, or an import that removed the session, the ' +
