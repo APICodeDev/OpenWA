@@ -962,7 +962,7 @@ export class SessionEngineControls {
       // names are then that session's live login, the same exact-id guard the migration keeps. A
       // failed lookup withholds the name rather than fail a delete that has already committed. The id
       // column is varchar on PostgreSQL too (an import keeps any safe key), so a name of any shape can be
-      // a session's id there; it is compared as text, which also covers a column typed uuid.
+      // a session's id there; it is compared as text, so only a name that really is an id withholds itself.
       // Keyed by `id`, not `session.id`: TypeORM clears a removed entity's primary key, so session.id
       // is undefined here and the purge would refuse it as an unsafe key and remove nothing.
       const legacyId =
