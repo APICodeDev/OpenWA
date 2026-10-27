@@ -3,6 +3,7 @@ import { DataSource, DataSourceOptions } from 'typeorm';
 import { createLogger } from '../common/services/logger.service';
 import { assertDataConnectionUtc, postgresUtcExtra } from './postgres-utc';
 import { DeduplicateTerminalWebhookFailures1787200000000 } from './migrations/1787200000000-DeduplicateTerminalWebhookFailures';
+import { repairSqliteMessageFts } from './sqlite-message-fts';
 
 const logger = createLogger('PgBootMigrations');
 
@@ -68,6 +69,11 @@ export async function createBootDataSource(
         await runner.release();
       }
       await dataSource.synchronize();
+      // synchronize rebuilds `messages` without its rowids, so the index it kept can now name other messages.
+      // Never fail boot over the index: search answers 501 until the next boot repairs it.
+      await repairSqliteMessageFts(dataSource).catch((error: unknown) =>
+        logger.error(`Failed to repair the SQLite message full-text index: ${String(error)}`),
+      );
       return dataSource;
     } catch (error) {
       if (dataSource.isInitialized) await dataSource.destroy().catch(() => undefined);
