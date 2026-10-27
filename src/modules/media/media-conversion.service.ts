@@ -46,6 +46,7 @@ export class MediaConversionService implements OnApplicationShutdown {
    * request holds only its own body, and at most the cap's worth of inputs sit in heap at once.
    */
   private readonly ffmpegGate: ConcurrencyLimiter;
+  private readonly shutdown = new AbortController();
 
   constructor(
     private readonly configService: ConfigService,
@@ -63,6 +64,8 @@ export class MediaConversionService implements OnApplicationShutdown {
    * on that path and on `app.close()`.
    */
   onApplicationShutdown(): void {
+    this.shutdown.abort();
+    this.ffmpegGate.close();
     killRunningConversions();
   }
 
@@ -85,8 +88,10 @@ export class MediaConversionService implements OnApplicationShutdown {
 
   /** Whether conversion is both switched on and actually runnable on this host. */
   async isAvailable(): Promise<boolean> {
-    if (!this.configService.get<boolean>('mediaConversion.enabled', false)) return false;
-    return this.probeOnce();
+    if (this.shutdown.signal.aborted || !this.configService.get<boolean>('mediaConversion.enabled', false))
+      return false;
+    const available = await this.probeOnce();
+    return available && !this.shutdown.signal.aborted;
   }
 
   private async convert(
@@ -96,6 +101,7 @@ export class MediaConversionService implements OnApplicationShutdown {
     encodeArgs: string[],
     outputMimetype: string,
   ): Promise<ConvertedMedia> {
+    this.assertRunning();
     await this.assertAvailable();
 
     try {
@@ -103,8 +109,11 @@ export class MediaConversionService implements OnApplicationShutdown {
       // base64 body, held for each request that had not yet reached a slot, would stack 50 MiB a request
       // in heap while the gate answers 503 only after the downloads finished.
       const { input, output } = await this.ffmpegGate.run(async () => {
+        this.assertRunning();
         const loaded = await this.resolveInput(sessionId, dto);
+        this.assertRunning();
         const converted = await runFfmpeg(loaded, 'bin', outputExtension, encodeArgs, {
+          signal: this.shutdown.signal,
           ffmpegPath: this.configService.get<string>('mediaConversion.ffmpegPath', 'ffmpeg'),
           timeoutMs: this.configService.get<number>('mediaConversion.timeoutMs', 60_000),
           maxOutputBytes: this.configService.get<number>('mediaConversion.maxOutputBytes', 50 * 1024 * 1024),
@@ -114,6 +123,7 @@ export class MediaConversionService implements OnApplicationShutdown {
       this.logger.log('Media converted', { inputBytes: input.length, outputBytes: output.length, outputMimetype });
       return { base64: output.toString('base64'), mimetype: outputMimetype, bytes: output.length };
     } catch (error) {
+      this.assertRunning();
       if (error instanceof Error && error.message === 'ConcurrencyLimiter queue full') {
         throw new ServiceUnavailableException('Media conversion is busy — retry shortly');
       }
@@ -193,6 +203,12 @@ export class MediaConversionService implements OnApplicationShutdown {
       }
     }
     throw new BadRequestException('Either url or base64 must be provided');
+  }
+
+  private assertRunning(): void {
+    if (this.shutdown.signal.aborted) {
+      throw new ServiceUnavailableException('Media conversion is shutting down');
+    }
   }
 
   private async assertAvailable(): Promise<void> {
