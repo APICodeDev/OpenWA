@@ -588,6 +588,7 @@ describe('DockerService.createService', () => {
 
   it('returns false when the daemon rejects the image pull', async () => {
     const docker = {
+      modem: {},
       getImage: imageNotCached,
       pull: (_image: string, cb: (err: Error | null, stream: null) => void) =>
         cb(new Error('pull access denied'), null),
@@ -602,6 +603,7 @@ describe('DockerService.createService', () => {
     const start = jest.fn().mockResolvedValue(undefined);
     const getImage = jest.fn(() => ({ inspect: jest.fn().mockResolvedValue({ Id: 'sha256:abc' }) }));
     const docker = {
+      modem: {},
       getImage,
       pull: jest.fn(),
       createVolume: jest.fn().mockResolvedValue({}),
@@ -1002,4 +1004,126 @@ describe('DockerService availability recovery', () => {
     expect(service.isDockerAvailable()).toBe(true);
     await expect(service.listContainers()).resolves.toEqual([]);
   });
+});
+
+describe('DockerService image inspection failures', () => {
+  function serviceFor(docker: unknown): DockerService {
+    const service = new DockerService();
+    service.callTimeoutMs = 40;
+    Object.assign(service as unknown as Record<string, unknown>, { docker, isAvailable: true });
+    jest.spyOn(service, 'getContainerByService').mockResolvedValue(null);
+    return service;
+  }
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it('aborts the real Dockerode image request without starting a pull after its deadline', async () => {
+    const RealDocker = jest.requireActual<typeof import('dockerode')>('dockerode');
+    let signal: AbortSignal | undefined;
+    const dial = jest.fn(
+      (options: { abortSignal?: AbortSignal }, callback: (error: Error | null, value?: unknown) => void) => {
+        signal = options.abortSignal;
+        signal?.addEventListener('abort', () => callback(new Error('inspection aborted')), { once: true });
+      },
+    );
+    const modem = { Promise, dial };
+    const pull = jest.fn();
+    const service = serviceFor({ modem, getImage: () => new RealDocker.Image(modem, 'redis:7-alpine'), pull });
+    jest.useFakeTimers();
+    const result = service.createService('redis');
+    await jest.advanceTimersByTimeAsync(80);
+
+    await expect(result).resolves.toBe(false);
+    expect(signal?.aborted).toBe(true);
+    expect(modem.dial).toBe(dial);
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it.each([401, 500, undefined])('does not pull after an inspection error with status %s', async statusCode => {
+    const pull = jest.fn();
+    const error = Object.assign(new Error('inspection failed'), { statusCode });
+    const service = serviceFor({
+      modem: {},
+      getImage: () => ({ inspect: () => Promise.reject(error) }),
+      pull,
+    });
+
+    await expect(service.createService('redis')).resolves.toBe(false);
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it('lets a missing image finish pulling after the short inspection deadline', async () => {
+    let finishPull: ((error: Error | null) => void) | undefined;
+    const start = jest.fn().mockResolvedValue(undefined);
+    const service = serviceFor({
+      modem: { followProgress: (_stream: unknown, callback: (error: Error | null) => void) => (finishPull = callback) },
+      getImage: imageNotCached,
+      pull: (_image: string, callback: (error: Error | null, stream: unknown) => void) => callback(null, {}),
+      createVolume: jest.fn().mockResolvedValue({}),
+      createContainer: jest.fn().mockResolvedValue({ start }),
+    });
+    jest.useFakeTimers();
+    let finished = false;
+    const result = service.createService('redis').then(value => {
+      finished = true;
+      return value;
+    });
+    await jest.advanceTimersByTimeAsync(160);
+    expect(finished).toBe(false);
+    expect(finishPull).toBeDefined();
+    finishPull!(null);
+    await expect(result).resolves.toBe(true);
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DockerService existing container inspection deadlines', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+  });
+
+  it.each(['create', 'start', 'stop'] as const)(
+    'aborts a stalled inspection before %s mutates a container',
+    async operation => {
+      const service = new DockerService();
+      service.callTimeoutMs = 40;
+      Object.assign(service as unknown as Record<string, unknown>, { docker: {}, isAvailable: true });
+      let signal: AbortSignal | undefined;
+      const container = {
+        inspect: jest.fn(
+          (options?: Docker.ContainerInspectOptions) =>
+            new Promise<never>((_resolve, reject) => {
+              signal = options?.abortSignal;
+              signal?.addEventListener('abort', () => reject(new Error('inspection aborted')), { once: true });
+            }),
+        ),
+        start: jest.fn(),
+        stop: jest.fn(),
+      };
+      jest.spyOn(service, 'getContainerByService').mockResolvedValue(container as never);
+      jest.useFakeTimers();
+      let settled: boolean | undefined;
+      const action =
+        operation === 'create'
+          ? service.createService('redis')
+          : operation === 'start'
+            ? service.startService('cache')
+            : service.stopService('cache');
+      const work = action.then(value => {
+        settled = value;
+        return value;
+      });
+      await jest.advanceTimersByTimeAsync(80);
+      expect(settled).toBe(false);
+      expect(signal?.aborted).toBe(true);
+      expect(container.inspect).toHaveBeenCalledTimes(1);
+      expect(container.start).not.toHaveBeenCalled();
+      expect(container.stop).not.toHaveBeenCalled();
+      await expect(work).resolves.toBe(false);
+    },
+  );
 });

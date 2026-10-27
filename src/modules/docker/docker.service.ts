@@ -446,7 +446,7 @@ export class DockerService implements OnModuleInit {
       // Check if container already exists
       const existing = await this.getContainerByService(profile);
       if (existing) {
-        const info = await existing.inspect();
+        const info = await this.answered(abortSignal => existing.inspect({ abortSignal }), 'a container inspection');
         this.warnOnImageDrift(profile, spec.name, info);
         if (info.State.Running) {
           this.logger.log(`Container ${spec.name} already running`);
@@ -461,14 +461,26 @@ export class DockerService implements OnModuleInit {
       // Pull only when the image is not already on the host, as compose's default
       // `pull_policy: missing` does: a host that has the image keeps working when the registry is
       // unreachable or has withdrawn it. As with compose, a cached floating tag is not refreshed
-      // here. Any inspect failure falls back to pulling.
-      const cached = await this.docker
-        .getImage(spec.image)
-        .inspect()
-        .then(
-          () => true,
-          () => false,
-        );
+      // here. Only an answer that the image is absent pulls: a daemon that fails or does not answer the
+      // inspection could not complete a pull either, and the pull itself is not bounded.
+      const cached = await this.answered(abortSignal => {
+        const image = Object.create(this.docker!.getImage(spec.image)) as Docker.Image;
+        const modem = this.docker!.modem;
+        // Dockerode 5 leaves the signal out of an image inspection; forward it without changing the shared modem.
+        const imageModem = Object.create(modem) as Docker['modem'];
+        image.modem = imageModem;
+        imageModem.dial = (
+          options: Parameters<Docker['modem']['dial']>[0],
+          callback: Parameters<Docker['modem']['dial']>[1],
+        ) => modem.dial({ ...options, abortSignal }, callback);
+        return image.inspect({ abortSignal } as Docker.ImageInspectOptions);
+      }, 'an image inspection').then(
+        () => true,
+        (error: unknown) => {
+          if ((error as { statusCode?: number } | null)?.statusCode !== 404) throw error;
+          return false;
+        },
+      );
       if (!cached) {
         this.logger.log(`Pulling image: ${spec.image}`);
         await new Promise<void>((resolve, reject) => {
@@ -560,7 +572,7 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const info = await container.inspect();
+      const info = await this.answered(abortSignal => container.inspect({ abortSignal }), 'a container inspection');
       this.warnOnImageDrift(profile, info.Name?.replace(/^\//, '') || service, info);
       if (info.State.Running) {
         this.logger.log(`Service '${service}' is already running`);
@@ -637,7 +649,7 @@ export class DockerService implements OnModuleInit {
     }
 
     try {
-      const info = await container.inspect();
+      const info = await this.answered(abortSignal => container.inspect({ abortSignal }), 'a container inspection');
       if (!info.State.Running) {
         this.logger.log(`Service '${service}' is already stopped`);
         return true;
