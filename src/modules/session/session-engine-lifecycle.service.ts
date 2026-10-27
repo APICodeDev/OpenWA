@@ -469,8 +469,8 @@ export class SessionEngineLifecycle {
   }
 
   /** Delegate: SessionEngineControls.logout. */
-  logout(id: string): Promise<Session> {
-    return this.controls.logout(id);
+  logout(id: string, hooks?: StopHooks): Promise<Session> {
+    return this.controls.logout(id, hooks);
   }
 
   /** Delegate: SessionEngineControls.forceKill. */

@@ -1068,8 +1068,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   /** See SessionEngineLifecycle.logout() for the full unlink/502 contract. */
   async logout(id: string): Promise<Session> {
+    // A start still waiting on its claim yields to the logout rather than relaunching the session it just
+    // took down. Not recorded as a stop: logout clears the phone, which keeps the session out of auto-start.
+    let request: StopRequest | undefined;
+    const issue = (): StopRequest => (request ??= this.requestStop(id, 'stop'));
+    const withdraw = (): void => {
+      if (request) this.withdrawStop(request);
+    };
+    if (this.engines.get(id)) issue();
     try {
-      const session = await this.engineLifecycle.logout(id);
+      const session = await this.engineLifecycle.logout(id, {
+        onReadFailed: withdraw,
+        onEngineFound: () => {
+          issue();
+        },
+      });
       // Torn down locally on the 200 path — hand the claim back the way stop() does.
       await this.releaseAfterTeardown(id);
       return session;
@@ -1077,8 +1090,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // The 502-incomplete path tears the engine down, so its claim must not survive the call. A 400
       // "not started" refusal changed nothing and keeps whatever claim there is: release() also
       // clears a LAPSED foreign claim, which would take a crashed node's session out of takeover.
+      if (error instanceof BadRequestException) withdraw();
       if (!(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
       throw error;
+    } finally {
+      if (request) this.endStop(id, request);
     }
   }
 

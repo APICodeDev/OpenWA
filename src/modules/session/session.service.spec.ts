@@ -1951,6 +1951,48 @@ describe('SessionService', () => {
 
     // The same race with a force-kill: the start sent while the engine still ran launched a new one
     // once its claim resolved and cleared the stop record the kill had just written.
+    it.each([false, true])('retires a pending start after logout (incomplete: %s)', async incomplete => {
+      const ownership = withOwnership();
+      const desired = trackDesiredState();
+      registry.set('sess-uuid-1', mockEngine as never);
+      if (incomplete) mockEngine.logout.mockRejectedValueOnce(new Error('unlink unavailable'));
+      let finishClaim: () => void = () => undefined;
+      ownership.claim.mockImplementationOnce(
+        () =>
+          new Promise<boolean>(resolve => {
+            finishClaim = () => resolve(true);
+          }),
+      );
+      const outcome = service.start('sess-uuid-1', { explicit: true }).catch((error: unknown) => error);
+      if (incomplete) await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadGatewayException);
+      else await service.logout('sess-uuid-1');
+      finishClaim();
+
+      expect(await outcome).toBeInstanceOf(SessionStoppedException);
+      expect(engineFactory.create).not.toHaveBeenCalled();
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
+      expect(desired()).toBeNull();
+      await service.start('sess-uuid-1', { explicit: true });
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(true);
+    });
+
+    it('keeps a pending start eligible when logout has no engine', async () => {
+      const ownership = withOwnership();
+      trackDesiredState();
+      let finishClaim: () => void = () => undefined;
+      ownership.claim.mockImplementationOnce(
+        () =>
+          new Promise<boolean>(resolve => {
+            finishClaim = () => resolve(true);
+          }),
+      );
+      const starting = service.start('sess-uuid-1', { explicit: true });
+      await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+      finishClaim();
+      await starting;
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(true);
+    });
+
     it('start() refuses with 409 when a forceKill() lands while its claim is pending', async () => {
       const ownership = withOwnership();
       const desired = trackDesiredState();

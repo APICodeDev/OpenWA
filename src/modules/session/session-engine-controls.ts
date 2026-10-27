@@ -148,7 +148,7 @@ export interface StopHooks {
    * withdraws the caller's stop request.
    */
   onReadFailed?: () => void;
-  /** forceKill() only: runs synchronously once there is an engine to kill; records the stop request. */
+  /** forceKill()/logout(): runs synchronously once there is an engine to retire. */
   onEngineFound?: () => void;
   /** forceKill() only: persist the stop with the caller's current ownership predicate. */
   recordStop?: () => Promise<void>;
@@ -682,13 +682,17 @@ export class SessionEngineControls {
    * the 502 path (the controller audits SESSION_LOGGED_OUT only after the service resolves). The
    * operator can start the session and retry the logout.
    */
-  async logout(id: string): Promise<Session> {
-    const session = await this.requireSession(id);
+  async logout(id: string, hooks: StopHooks = {}): Promise<Session> {
+    const session = await this.requireSession(id).catch((error: unknown) => {
+      hooks.onReadFailed?.();
+      throw error;
+    });
     const engine = this.engines.get(id);
 
     if (!engine) {
       throw new BadRequestException('Session is not started. Call POST /sessions/:sessionId/start first.');
     }
+    hooks.onEngineFound?.();
 
     // Mark as tearing down BEFORE cleanup so an in-flight reconnect can't resurrect it.
     this.stoppingSessions.add(id);
