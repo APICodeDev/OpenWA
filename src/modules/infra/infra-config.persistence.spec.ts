@@ -168,15 +168,71 @@ it('preserves the old overlay and removes staging after a replacement failure', 
   expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
 });
 
-it.each(['EBUSY', 'EXDEV'])('writes in place when the filesystem refuses the replacement with %s', async code => {
+it.each(['EBUSY', 'EXDEV', 'EACCES', 'EPERM', 'EROFS'])(
+  'writes in place when the replacement fails with %s',
+  async code => {
+    seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+    jest.mocked(fs.renameSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('the file cannot be replaced'), { code });
+    });
+    expect((await save({ engine: { headless: false } })).saved).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('false');
+    expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+  },
+);
+
+it.each(['EACCES', 'EPERM', 'EROFS'])('writes in place when the staged file cannot be created (%s)', async code => {
   seed({ ...database, PUPPETEER_HEADLESS: 'true' });
-  jest.mocked(fs.renameSync).mockImplementationOnce(() => {
-    throw Object.assign(new Error('the file cannot be replaced'), { code });
+  jest.mocked(fs.writeFileSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error('the directory cannot be written'), { code });
   });
   expect((await save({ engine: { headless: false } })).saved).toBe(true);
   expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('false');
   expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
 });
+
+it('fails the save when the in-place write fails too, leaving the old overlay', async () => {
+  seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+  const before = actualFs.readFileSync(file);
+  jest
+    .mocked(fs.writeFileSync)
+    .mockImplementationOnce(() => {
+      throw Object.assign(new Error('the directory cannot be written'), { code: 'EACCES' });
+    })
+    .mockImplementationOnce(() => {
+      throw Object.assign(new Error('the file cannot be written'), { code: 'EIO' });
+    });
+  expect((await save({ engine: { headless: false } })).saved).toBe(false);
+  expect(actualFs.readFileSync(file)).toEqual(before);
+});
+
+it('never writes in place after the staged copy ran out of space', async () => {
+  seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+  const before = actualFs.readFileSync(file);
+  const writes = jest.mocked(fs.writeFileSync);
+  writes.mockClear();
+  writes.mockImplementationOnce(() => {
+    throw Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+  });
+  expect((await save({ engine: { headless: false } })).saved).toBe(false);
+  expect(writes).toHaveBeenCalledTimes(1);
+  expect(actualFs.readFileSync(file)).toEqual(before);
+});
+
+// A directory the app user cannot write that holds an overlay file it can: a real kernel refusal, not a mocked one.
+(process.getuid?.() === 0 ? it.skip : it)(
+  'saves a writable overlay file inside a directory that cannot be written',
+  async () => {
+    seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+    actualFs.chmodSync(path.dirname(file), 0o555);
+    try {
+      expect((await save({ engine: { headless: false } })).saved).toBe(true);
+      expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('false');
+    } finally {
+      actualFs.chmodSync(path.dirname(file), 0o755);
+    }
+  },
+);
 
 describe('an overlay that is a symbolic link', () => {
   const managed = () => path.join(directory, 'managed', 'overlay.env');

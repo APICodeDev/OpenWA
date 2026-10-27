@@ -86,6 +86,9 @@ interface SavedConfigResponse {
   engine: { type: string; headless: boolean; sessionDataPath: string; browserArgs: string };
 }
 
+// Errors of replacing the overlay by rename that the in-place write v0.25.0 used can still get past.
+const IN_PLACE_FALLBACK_CODES = ['EBUSY', 'EXDEV', 'EACCES', 'EPERM', 'EROFS'];
+
 @ApiTags('infrastructure')
 @Controller('infra')
 // Every route here is deployment-global (data export/import, infra config, service orchestration),
@@ -426,8 +429,9 @@ export class InfraConfigController {
     // the DB/S3/Redis credentials, so it must not be world-readable between save and next restart.
     // Staged beside the target and renamed over it: a write that fails part-way (disk full) would
     // otherwise leave a truncated overlay for the next boot to load. A symlink is written through to its
-    // target, and a file the filesystem will not replace by rename (a single-file bind mount, another
-    // device) is written in place, as before.
+    // target. A file the filesystem will not replace by rename (a single-file bind mount, another device) or
+    // that cannot be staged beside (a directory the app cannot write, holding a file it can) is written in
+    // place, as before. Any other failure, a full disk included, leaves the previous overlay untouched.
     const target = this.overlayTarget(envPath);
     if (target === undefined) {
       writeSecretFile(envPath, contents);
@@ -442,7 +446,7 @@ export class InfraConfigController {
         } catch {
           // Keep the original write or rename error if cleanup also fails.
         }
-        if (!['EBUSY', 'EXDEV'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        if (!IN_PLACE_FALLBACK_CODES.includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
         writeSecretFile(target, contents);
       }
     }
