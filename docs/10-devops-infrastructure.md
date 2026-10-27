@@ -931,10 +931,12 @@ short TTL (~5s, so back-to-back scrapes don't repeat the DB scan), and exposes i
 `GET /api/metrics`.
 
 A scrape waits at most 2 seconds for that overview. When the read fails, the database-derived series are
-left out and `openwa_stats_available` reads 0. When it is still pending after that, the scrape serves the last
-result it kept, up to 5 minutes old, and `openwa_stats_available` stays 1; the late result fills the memo for the
-next scrape. With no result that recent, such as the first scrape after start, the series are left out and the
-gauge reads 0. The process, HTTP, webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
+left out and `openwa_stats_available` reads 0, and the result the last good read kept is discarded. When it is
+still pending after that, the scrape serves the last result it kept, up to 5 minutes after that read started, and
+`openwa_stats_available` stays 1; the late result fills the memo and is kept for the next scrape. With no result
+that recent, such as the first scrape after start, or a read that has hung for more than 5 minutes after the last
+good one, the series are left out and the gauge reads 0. A read still pending after 5 minutes is given up on and the
+next scrape starts a new one. The process, HTTP, webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
 meanwhile, so they answer without waiting again and add no query of their own, whatever
 `STATS_CACHE_TTL_MS` is. The 2 seconds bound the wait, not the query: nothing cancels it in the database.
 
@@ -995,7 +997,7 @@ export class MetricsService {
 | `openwa_event_loop_delay_max_seconds`        | gauge     | none                                | Maximum event-loop delay since the previous uncached scrape                                                                         |
 | `openwa_unhandled_rejections_total`          | counter   | `kind`                              | Unhandled promise rejections since process start (`other` or `page_context_lost`)                                                   |
 | `openwa_queue_jobs`                          | gauge     | `queue`, `state`                    | BullMQ jobs per queue in `wait`/`active`/`delayed`/`failed` (cluster-wide, from Redis)                                              |
-| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded, or is served from a late read (5 min), 0 if it failed |
+| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded or a kept result under 5 minutes old stands in, else 0 |
 | `openwa_sessions_total`                      | gauge     | —                                   | Configured sessions                                                                                                                 |
 | `openwa_sessions_active`                     | gauge     | —                                   | READY (active) sessions                                                                                                             |
 | `openwa_sessions`                            | gauge     | `status`                            | Session count per status                                                                                                            |
@@ -1041,8 +1043,10 @@ seen, so keep new renderers on that composition.
 > and still means "the process is alive". Alert on `openwa_stats_available == 0` for the degradation itself;
 > an alert written as `openwa_sessions_active == 0` would never fire for it, and one written with `absent()`
 > would. Because of the two caches, `openwa_stats_available` can keep reporting 1, and the series their last
-> values, for up to `STATS_CACHE_TTL_MS` + 5 s after the data database fails, so expect an alert on it to fire
-> up to that much later; a `for:` adds to that delay rather than offsetting it. `STATS_CACHE_TTL_MS=0` makes
+> values, for up to `STATS_CACHE_TTL_MS` + 5 s after the data database fails. When the database stops answering
+> instead of failing, the last kept result stands in for the late read, so it can keep reporting 1 for up to 5
+> minutes after the last good read started. Expect an alert on it to fire up to that much later; a `for:` adds to
+> that delay rather than offsetting it. `STATS_CACHE_TTL_MS=0` makes
 > the signal live at the cost of a full overview query per render.
 
 ### Grafana Dashboard Definition

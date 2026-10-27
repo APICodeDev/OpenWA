@@ -137,6 +137,38 @@ describe('MetricsService bounded degraded renders', () => {
     }
   });
 
+  it('keeps the numbers of a newer read when a read given up on settles afterwards', async () => {
+    const abandoned = deferred<OverviewStats>();
+    const hung = deferred<OverviewStats>();
+    const newer: OverviewStats = { ...overview, sessions: { ...overview.sessions, active: 7 } };
+    const f = fixture(() => abandoned.promise);
+    f.stats.getOverview.mockImplementationOnce(() => abandoned.promise);
+    f.stats.getOverview.mockImplementationOnce(() => Promise.resolve(newer));
+    f.stats.getOverview.mockImplementationOnce(() => hung.promise);
+    const calls = [observe(f.scrape())];
+    try {
+      await jest.advanceTimersByTimeAsync(STATS_BUDGET_MS);
+      degraded(calls[0].result);
+      await jest.advanceTimersByTimeAsync(STATS_STALE_MAX_MS);
+      const second = await f.scrape();
+      expect(f.stats.getOverview).toHaveBeenCalledTimes(2);
+      expect(second).toContain('openwa_sessions_active 7');
+
+      abandoned.resolve(overview);
+      await jest.advanceTimersByTimeAsync(METRICS_RENDER_TTL_MS + 1);
+      const third = observe(f.scrape());
+      calls.push(third);
+      await jest.advanceTimersByTimeAsync(STATS_BUDGET_MS);
+      expect(f.stats.getOverview).toHaveBeenCalledTimes(3);
+      expect(third.result.text).toContain('openwa_stats_available 1');
+      expect(third.result.text).toContain('openwa_sessions_active 7');
+    } finally {
+      abandoned.resolve(overview);
+      hung.resolve(overview);
+      await Promise.all(calls.map(call => call.done));
+    }
+  });
+
   it('retains healthy values and serves the completed render from cache', async () => {
     const f = fixture(() => Promise.resolve(overview));
     const first = await f.scrape();
@@ -207,17 +239,32 @@ describe('MetricsService statistics slower than its budget, with the real stats 
   const SCAN_MS = 3000;
   const later = <T>(value: T, delay = SCAN_MS) => new Promise<T>(resolve => setTimeout(() => resolve(value), delay));
   function slowDatabase() {
-    const state = { fail: false };
+    const state: { fail: boolean; delay: number; hang?: { promise: Promise<unknown[]>; release: () => void } } = {
+      fail: false,
+      delay: SCAN_MS,
+    };
+    const hold = () => {
+      let release!: () => void;
+      const promise = new Promise<unknown[]>(resolve => {
+        release = () => resolve([{ status: 'ready' }]);
+      });
+      state.hang = { promise, release };
+    };
     const query = (): Record<string, unknown> => {
       const chain: Record<string, unknown> = {};
       for (const step of ['select', 'addSelect', 'where', 'groupBy']) chain[step] = () => chain;
-      chain.getRawMany = () => later([{ direction: 'outgoing', count: '4' }]);
+      chain.getRawMany = () => later([{ direction: 'outgoing', count: '4' }], state.delay);
       return chain;
     };
     const sessions = {
-      find: () => (state.fail ? Promise.reject(new Error('pool exhausted')) : later([{ status: 'ready' }])),
+      find: () =>
+        state.hang
+          ? state.hang.promise
+          : state.fail
+            ? Promise.reject(new Error('pool exhausted'))
+            : later([{ status: 'ready' }], state.delay),
     };
-    const messages = { createQueryBuilder: query, count: () => later(1) };
+    const messages = { createQueryBuilder: query, count: () => later(1, state.delay) };
     const stats = new StatsService(
       sessions as never,
       messages as never,
@@ -234,7 +281,7 @@ describe('MetricsService statistics slower than its budget, with the real stats 
       service.assertScrapeAuthorized('Bearer fixture-token', { headers: {}, socket: { remoteAddress: '192.0.2.1' } });
       return service.render();
     };
-    return { state, scrape };
+    return { state, hold, scrape };
   }
   const scrapeAfter = async (scrape: () => Promise<string>, interval: number): Promise<string> => {
     const pending = scrape();
@@ -263,18 +310,47 @@ describe('MetricsService statistics slower than its budget, with the real stats 
     }
   });
 
-  it('drops the series once the last result is older than the stale bound', async () => {
+  it('stops serving the kept result 5 minutes after its read started while a read hangs, then recovers', async () => {
     const db = slowDatabase();
-    await scrapeAfter(db.scrape, SCAN_MS);
-    expect(await scrapeAfter(db.scrape, STATS_STALE_MAX_MS)).toContain('openwa_stats_available 0');
+    db.state.delay = 0;
+    expect(await scrapeAfter(db.scrape, 60_000)).toContain('openwa_stats_available 1');
+    db.hold();
+
+    const flags: string[] = [];
+    // Scrapes at 60 s steps from the good read: ages 62 s to 242 s are served from the kept result.
+    for (let i = 0; i < 4; i++) flags.push(await scrapeAfter(db.scrape, 60_000));
+    for (const text of flags) {
+      expect(text).toContain('openwa_stats_available 1');
+      expect(text).toContain('openwa_messages_total{direction="outgoing"} 4');
+    }
+    // At 5 minutes the kept result is too old, and so is the read: it is given up on and a new one starts.
+    for (let i = 0; i < 2; i++) {
+      const text = await scrapeAfter(db.scrape, 60_000);
+      expect(text).toContain('openwa_stats_available 0');
+      expect(text).not.toContain('openwa_sessions_active');
+    }
+
+    db.state.hang!.release();
+    await jest.advanceTimersByTimeAsync(METRICS_RENDER_TTL_MS + 1);
+    const recovered = await scrapeAfter(db.scrape, 1);
+    expect(recovered).toContain('openwa_stats_available 1');
+    expect(recovered).toContain('openwa_messages_total{direction="outgoing"} 4');
   });
 
-  it('does not stand in for a read that failed', async () => {
+  it('does not serve numbers from before a failed read when a later read is late', async () => {
     const db = slowDatabase();
+    db.state.delay = 0;
     await scrapeAfter(db.scrape, 60_000);
     db.state.fail = true;
     const failed = await scrapeAfter(db.scrape, 60_000);
     expect(failed).toContain('openwa_stats_available 0');
-    expect(failed).not.toContain('openwa_sessions_active');
+    db.state.fail = false;
+    db.state.delay = SCAN_MS;
+    const late = await scrapeAfter(db.scrape, 60_000);
+    expect(late).toContain('openwa_stats_available 0');
+    expect(late).not.toContain('openwa_sessions_active');
+    // The late read completed, so it is what the next late read falls back to.
+    const next = await scrapeAfter(db.scrape, 60_000);
+    expect(next).toContain('openwa_stats_available 1');
   });
 });

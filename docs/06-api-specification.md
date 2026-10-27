@@ -5284,8 +5284,8 @@ When the data database cannot be read the database-derived series (`openwa_sessi
 `openwa_messages*`) are OMITTED rather than reported as zero — a zero would fire an alert
 claiming every session had dropped. `openwa_stats_available` is what tells the two cases apart,
 so alert on it rather than reading a missing series as zero. A scrape waits at most 2 seconds for
-that read and serves the last result it kept, up to 5 minutes old, when it is late; the series are omitted when
-the read failed or no result is that recent, so a database that stalls costs those series and not the
+that read and serves the last result it kept, up to 5 minutes after that read started, when it is late; the series are omitted when
+the read failed (which also discards the kept result) or no result is that recent, so a database that stalls costs those series and not the
 rest of the scrape. `docs/10` lists every series.
 
 ```
@@ -5314,7 +5314,7 @@ openwa_messages_total{direction="incoming"} 940
 openwa_messages_failed_total 4
 ```
 
-Values come from `StatsService.getOverview()` plus `process.memoryUsage()`/`process.uptime()`. The render is memoized for 5000 ms to avoid re-running the overview query on every scrape, and `getOverview()` is itself memoized for `STATS_CACHE_TTL_MS` (default 30 s), so the database-derived series and `openwa_stats_available` can trail the data database by up to `STATS_CACHE_TTL_MS` + 5 s plus the time the overview query takes (the memo TTL counts from when the query completes).
+Values come from `StatsService.getOverview()` plus `process.memoryUsage()`/`process.uptime()`. The render is memoized for 5000 ms to avoid re-running the overview query on every scrape, and `getOverview()` is itself memoized for `STATS_CACHE_TTL_MS` (default 30 s), so the database-derived series and `openwa_stats_available` can trail the data database by up to `STATS_CACHE_TTL_MS` + 5 s plus the time the overview query takes (the memo TTL counts from when the query completes), or by up to 5 minutes when the database stops answering and the last kept result stands in for the late read.
 
 **Errors:** `401` — `METRICS_TOKEN` is configured but the bearer is missing or does not match (`{ "statusCode": 401, "message": "Invalid metrics token", "error": "Unauthorized" }`) · `404` — `METRICS_TOKEN` is unset/blank, so the endpoint is disabled (`{ "statusCode": 404, "message": "Metrics endpoint is disabled (set METRICS_TOKEN to enable)", "error": "Not Found" }`) · `429`: 10 failed token attempts from one client within a minute; only failures count, and the block lifts as the window slides (`{ "statusCode": 429, "message": "Too many failed metrics token attempts" }`).
 

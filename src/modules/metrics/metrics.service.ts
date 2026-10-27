@@ -51,9 +51,10 @@ export const QUEUE_READ_TIMEOUT_MS = 2000;
 export const STATS_READ_TIMEOUT_MS = 2000;
 
 /**
- * How long the last overview read stands in for one that is slower than the budget. A read that outlasts the
- * budget still completes, and the stats memo it fills expires before a scrape interval of a minute comes round
- * again, so without this every such scrape would meet a cold memo and drop the series.
+ * How long the last overview read stands in for one that is slower than the budget, counted from when that read
+ * started. A read that outlasts the budget still completes, and the stats memo it fills expires before a scrape
+ * interval of a minute comes round again, so without this every such scrape would meet a cold memo and drop the
+ * series. A read still pending after this long is given up on and a new one starts.
  */
 export const STATS_STALE_MAX_MS = 5 * 60_000;
 
@@ -73,7 +74,11 @@ export class MetricsService implements OnModuleDestroy {
 
   private cachedRender: { at: number; text: string } | null = null;
   private pendingOverview: Promise<OverviewStats | null> | null = null;
+  private pendingSince = 0;
+  /** What the newest read to finish kept: its result and when it started, or nothing after a failure. */
   private lastOverview: { overview: OverviewStats; at: number } | null = null;
+  private readSeq = 0;
+  private keptSeq = 0;
 
   /**
    * The route skips the shared throttler so a scrape interval costs no request budget, which left
@@ -199,7 +204,7 @@ export class MetricsService implements OnModuleDestroy {
 
     gauge(
       'openwa_stats_available',
-      'Whether the database-derived series below could be read (1) or not (0); cached up to STATS_CACHE_TTL_MS + 5 s.',
+      'Whether the database-derived series below could be read (1) or not (0); they can trail the database by STATS_CACHE_TTL_MS + 5 s, or up to 5 min while a read runs late.',
       overview ? 1 : 0,
     );
 
@@ -266,12 +271,21 @@ export class MetricsService implements OnModuleDestroy {
 
   /**
    * The overview, or null when it failed or did not settle within STATS_READ_TIMEOUT_MS and no recent one is
-   * known. The wait is shared until the read itself settles, so scrapes arriving behind a stuck read neither
-   * queue up nor each start a deadline of their own. A read that only runs late is kept when it completes, and
-   * stands in for the next scrape that finds it late again (STATS_STALE_MAX_MS); a failed read never does.
+   * kept. Scrapes arriving inside that wait share it, so they neither queue up nor start a deadline of their own.
+   * Once it has run out, scrapes behind the same read do not wait again: they get the kept result while it is
+   * younger than STATS_STALE_MAX_MS, else nothing, and past that age the read is given up on and a new one starts.
+   * A read that only runs late is kept when it completes; a failed one discards what an earlier read kept.
    */
   private readOverviewOrNull(): Promise<OverviewStats | null> {
-    if (this.pendingOverview) return this.pendingOverview;
+    const now = Date.now();
+    if (this.pendingOverview) {
+      const waited = now - this.pendingSince;
+      if (waited < STATS_READ_TIMEOUT_MS) return this.pendingOverview;
+      if (waited < STATS_STALE_MAX_MS) return Promise.resolve(this.recentOverview());
+      this.logger.warn('Metrics scrape gave up on a statistics read that never settled; starting a new one');
+    }
+    this.pendingSince = now;
+    const seq = ++this.readSeq;
     const work = Promise.resolve().then(() => this.statsService.getOverview());
     const late = new Error('statistics read timed out');
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -296,13 +310,19 @@ export class MetricsService implements OnModuleDestroy {
       },
     );
     this.pendingOverview = waiting;
-    const settled = (): void => {
+    // Only a read newer than the one the kept result came from may replace it, so an abandoned read that
+    // settles after its successor changes nothing.
+    const settled = (kept: { overview: OverviewStats; at: number } | null): void => {
+      if (seq > this.keptSeq) {
+        this.keptSeq = seq;
+        this.lastOverview = kept;
+      }
       if (this.pendingOverview === waiting) this.pendingOverview = null;
     };
-    void work.then(overview => {
-      this.lastOverview = { overview, at: Date.now() };
-      settled();
-    }, settled);
+    void work.then(
+      overview => settled({ overview, at: now }),
+      () => settled(null),
+    );
     return waiting;
   }
 
