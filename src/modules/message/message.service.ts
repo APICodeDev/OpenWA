@@ -1,6 +1,6 @@
 import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Repository, SelectQueryBuilder } from 'typeorm';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
@@ -455,7 +455,7 @@ export class MessageService implements PluginMessagePort {
     // base64 in metadata.media.data. Spent newest-first in the selected order, so the
     // most recently viewed media still arrives inline and the rest keeps its omitted marker.
     return {
-      messages: await this.readPageSpendingBudget(sessionId, page, inlineMediaBudget),
+      messages: await this.readPageSpendingBudget(query, page, inlineMediaBudget),
       total,
       ...(unknownTimestampTotal !== undefined ? { unknownTimestampTotal } : {}),
     };
@@ -486,10 +486,10 @@ export class MessageService implements PluginMessagePort {
    * Load the rows of a page in its order, in chunks of at most `max(budget, 1 MiB)` stored metadata
    * bytes (at least one row per chunk), spending the inline media budget on each chunk before the
    * next is read. Loading the whole page at once put every payload on the heap before the budget
-   * dropped most of them. A row deleted since the page was picked is left out.
+   * dropped most of them. Recheck the selection so deleted or replaced rows outside it are left out.
    */
   private async readPageSpendingBudget(
-    sessionId: string,
+    selection: SelectQueryBuilder<Message>,
     page: Array<{ id: string; metadataLength: number | string | null }>,
     budgetBytes: number,
   ): Promise<Message[]> {
@@ -500,7 +500,13 @@ export class MessageService implements PluginMessagePort {
     let chunkBytes = 0;
 
     const flush = async (): Promise<void> => {
-      const rows = await this.messageRepository.find({ where: { id: In(chunk), sessionId } });
+      const rows = await selection
+        .clone()
+        .select('message')
+        .take(undefined)
+        .skip(undefined)
+        .andWhere('message.id IN (:...chunkIds)', { chunkIds: chunk })
+        .getMany();
       const byId = new Map(rows.map(row => [row.id, row]));
       for (const id of chunk) {
         const row = byId.get(id);
