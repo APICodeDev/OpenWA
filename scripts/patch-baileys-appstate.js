@@ -66,7 +66,13 @@ function applyAppStatePatch(baileysDir = DEFAULT_BAILEYS) {
         'the upstream shape changed; re-check whether the loop is still unbounded before removing this patcher',
     );
   }
-  fs.writeFileSync(file, source.replace(LOOP_FIND, LOOP_REPLACE), 'utf8');
+  try {
+    fs.writeFileSync(file, source.replace(LOOP_FIND, LOOP_REPLACE), 'utf8');
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { note: 'bounded the app-state resync loop on an empty decode' };
 }
 
@@ -76,7 +82,7 @@ function run() {
     const result = applyAppStatePatch();
     console.log(`patch-baileys-appstate: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-baileys-appstate: skipped — ${error.message}`);
       return;
     }

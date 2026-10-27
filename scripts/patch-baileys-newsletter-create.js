@@ -95,7 +95,13 @@ function applyNewsletterCreatePatch(baileysDir = DEFAULT_BAILEYS) {
         'before removing this patcher',
     );
   }
-  fs.writeFileSync(file, source.replace(PARSE_FIND, PARSE_REPLACE), 'utf8');
+  try {
+    fs.writeFileSync(file, source.replace(PARSE_FIND, PARSE_REPLACE), 'utf8');
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { note: 'made the newsletter-create parse tolerate an absent picture, keeping the new channel id' };
 }
 
@@ -105,7 +111,7 @@ function run() {
     const result = applyNewsletterCreatePatch();
     console.log(`patch-baileys-newsletter-create: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-baileys-newsletter-create: skipped — ${error.message}`);
       return;
     }

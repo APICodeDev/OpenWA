@@ -51,7 +51,13 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
+  try {
+    fs.writeFileSync(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { skipped: false, note: 'media model id stripped from outgoing messages' };
 }
 
@@ -74,7 +80,7 @@ function run() {
     const result = applyBackport();
     console.log(`patch-wwebjs-media-id: ${result.skipped ? `skipped: ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-media-id: skipped: ${error.message}`);
       return;
     }

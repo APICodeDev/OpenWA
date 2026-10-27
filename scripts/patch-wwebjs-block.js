@@ -181,7 +181,13 @@ function applyBlockPatches({ wwjsDir = DEFAULT_WWJS } = {}) {
   }
 
   if (applied.length > 0) {
-    fs.writeFileSync(contactFile, source);
+    try {
+      fs.writeFileSync(contactFile, source);
+    } catch (error) {
+      // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+      error.partial = true;
+      throw error;
+    }
   }
   return { applied, skipped };
 }
@@ -196,7 +202,7 @@ function run() {
     ].join('; ');
     console.log(`patch-wwebjs-block: ${report}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-block: skipped, ${error.message}`);
       return;
     }

@@ -97,7 +97,13 @@ function applyGroupDescriptionFix(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(groupChatFile, source.replace(POSITIONAL_CALL, OPTIONS_CALL));
+  try {
+    fs.writeFileSync(groupChatFile, source.replace(POSITIONAL_CALL, OPTIONS_CALL));
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { skipped: false, note: 'group description job called with an options object' };
 }
 
@@ -107,7 +113,7 @@ function run() {
     const result = applyGroupDescriptionFix();
     console.log(`patch-wwebjs-group-description: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-group-description: skipped — ${error.message}`);
       return;
     }

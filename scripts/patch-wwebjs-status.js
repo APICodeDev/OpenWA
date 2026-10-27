@@ -170,7 +170,13 @@ function applyStatusPatches(wwjsDir = DEFAULT_WWJS) {
   }
 
   if (applied.length) {
-    fs.writeFileSync(utilsFile, source);
+    try {
+      fs.writeFileSync(utilsFile, source);
+    } catch (error) {
+      // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+      error.partial = true;
+      throw error;
+    }
   }
   return { applied, skipped };
 }
@@ -185,7 +191,7 @@ function run() {
     ].join('; ');
     console.log(`patch-wwebjs-status: ${report}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-status: skipped — ${error.message}`);
       return;
     }

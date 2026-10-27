@@ -157,7 +157,13 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(clientFile, source.replace(ANCHOR, FIX));
+  try {
+    fs.writeFileSync(clientFile, source.replace(ANCHOR, FIX));
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { skipped: false, note: 'page-side send errors now carry what the page threw' };
 }
 
@@ -180,7 +186,7 @@ function run() {
     const result = applyBackport();
     console.log(`patch-wwebjs-send-error: ${result.skipped ? `skipped: ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-send-error: skipped: ${error.message}`);
       return;
     }

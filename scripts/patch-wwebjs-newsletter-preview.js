@@ -47,7 +47,13 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  fs.writeFileSync(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
+  try {
+    fs.writeFileSync(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
+  } catch (error) {
+    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
+    error.partial = true;
+    throw error;
+  }
   return { skipped: false, note: 'destination chat context added to link previews' };
 }
 
@@ -72,7 +78,7 @@ function run() {
       `patch-wwebjs-newsletter-preview: ${result.skipped ? `skipped — ${result.reason}` : result.note}`,
     );
   } catch (error) {
-    if (bestEffort) {
+    if (bestEffort && !error.partial) {
       console.warn(`patch-wwebjs-newsletter-preview: skipped — ${error.message}`);
       return;
     }
