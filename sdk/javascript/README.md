@@ -138,10 +138,6 @@ Cutting a release:
    workflow artifact and passes its absolute path to `npm publish`, which takes
    one file, so a missing or a second tarball fails the release.
 
-## License
-
-MIT
-
 ## Send idempotency
 
 The example below requires SDK 0.6.0 or later and OpenWA 0.25.0 or later. SDK 0.5.1 does not expose this per-send key argument.
@@ -153,3 +149,7 @@ await client.messages.sendText(sessionId, { chatId: '628123@c.us', text: 'Hello'
 ```
 
 The gateway supports text, image, video, audio, document, sticker, location, contact, template, poll, reply and forward sends. Completed calls replay their response; a 409 with the error `code` `IDEMPOTENCY_KEY_IN_PROGRESS` means the first request is still running, so retry with the same key later; a 409 `IDEMPOTENCY_OUTCOME_UNKNOWN` means the message may have been sent, so check the chat and, if it did not arrive, send again with a new key (the `code` tells them apart from the 409 for a session that is not connected). A changed request with the same key returns 422. The gateway retains keys for 24 hours. Bulk, product and button operations have no such guarantee. Omit the key to preserve existing behavior.
+
+## License
+
+MIT
