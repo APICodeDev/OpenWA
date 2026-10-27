@@ -888,6 +888,9 @@ export class WwebjsMessaging {
       if (!message) {
         throw new MessageNotFoundError(messageId, chatId);
       }
+      // The message acts through the client that read it, which the host's check on getClient never sees
+      // again: a teardown that landed in the lookup is the retryable 409, not a write on a closing page.
+      this.host.ensureReady();
       await (message as MessageWithReactions).react(emoji);
     });
     this.host.logger.debug('Reacted to message', { messageId, emoji: emoji || '(removed)' });
@@ -1067,6 +1070,7 @@ export class WwebjsMessaging {
       if (!message) {
         throw new MessageNotFoundError(messageId, chatId);
       }
+      this.host.ensureReady();
       await message.delete(forEveryone);
     });
     this.host.logger.debug('Deleted message', { chatId, messageId, forEveryone });
@@ -1090,6 +1094,7 @@ export class WwebjsMessaging {
       if (!message) {
         throw new MessageNotFoundError(messageId, chatId);
       }
+      this.host.ensureReady();
       // An edit REPLACES the content, so tags are re-applied rather than preserved: omitting mentions
       // drops whatever the original carried. Options omitted entirely when none were asked for.
       return mentions?.length ? message.edit(body, { mentions }) : message.edit(body);
@@ -1112,6 +1117,9 @@ export class WwebjsMessaging {
    *
    * As with those sites, chatId is NOT lid-resolved: the pin acts on the found message's own key,
    * so resolving would only risk missing a message stored under the pre-migration @c.us chat.
+   *
+   * Readiness is checked again before the message is returned: it acts through the client that read it, so
+   * a teardown that landed in the lookup would otherwise reach a closing page.
    */
   private async findInFetchWindow(chatId: string, messageId: string): Promise<Message> {
     const chat = await this.client().getChatById(chatId);
@@ -1121,6 +1129,7 @@ export class WwebjsMessaging {
     const messages = await chat.fetchMessages({ limit: 100 });
     const message = messages.find(m => m.id._serialized === messageId || m.id.id === messageId);
     if (!message) throw new MessageNotFoundError(messageId, chatId);
+    this.host.ensureReady();
     return message;
   }
 

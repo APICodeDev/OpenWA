@@ -539,6 +539,8 @@ export class WwebjsGroups {
     const groupChat = await this.requireGroupChat(groupId, 'setGroupPicture');
     // Loaded outside the page guard: a media fetch failing with "connection closed" is not a dead page.
     const picture = await toMessageMedia(media, this.host.config.proxy?.url);
+    // The fetch can outlast the session, and the chat writes through the client that read it.
+    this.host.ensureReady();
     // GroupChat.setPicture, NOT Client.setProfilePicture — the latter targets the own account.
     const ok = await withPage(this.host, 'setGroupPicture', () => groupChat.setPicture(picture));
     if (!ok) {
