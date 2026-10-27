@@ -209,7 +209,7 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect(store.getCached('lid-b')).toBe('620002'); // the table read did not evict the resident entry
   });
 
-  it('skips a table row this process has since re-mapped, and falls back to the cache on a read error', async () => {
+  it('skips a locally superseded row and refuses cached aliases on a read error', async () => {
     const repo = makeFakeRepo([{ lid: '111', phone: '628999' }]);
     const store = await newStore(repo);
     jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
@@ -218,7 +218,7 @@ describe('LidMappingStoreService — LRU cap', () => {
     expect(await store.findLidsForPhone('628999')).toEqual([]);
 
     repo.find.mockRejectedValueOnce(new Error('connection lost'));
-    expect(await store.findLidsForPhone('628000')).toEqual(['111']);
+    expect(await store.findLidsForPhone('628000')).toEqual([]);
   });
 
   it('finds a phone by lid from the table on a cache miss, without indexing the row', async () => {
@@ -711,11 +711,28 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
     expect(repo.findOne).toHaveBeenCalledWith({ where: { lid: '111' } });
   });
 
-  it('findPhoneForLid answers from the cache when the table read fails', async () => {
+  it('findPhoneForLid refuses aliases when the table read fails', async () => {
     const repo = makeFakeRepo([{ lid: '111', phone: '628999' }]);
     const store = await newStore(repo);
     repo.findOne.mockRejectedValueOnce(new Error('connection lost'));
-    expect(await store.findPhoneForLid('111@lid')).toBe('628999');
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+    expect(store.getCached('111')).toBe('628999');
+  });
+
+  it('the chat fence admits no alias while the table cannot be read, only the id as granted', async () => {
+    const repo = makeFakeRepo([{ lid: '111', phone: '628999' }]);
+    const store = await newStore(repo);
+    jest.spyOn((store as unknown as { logger: { warn: () => void } }).logger, 'warn').mockImplementation(() => {});
+    repo.findOne.mockRejectedValue(new Error('connection lost'));
+    repo.find.mockRejectedValue(new Error('connection lost'));
+    const fence = new ChatScopeService(store);
+    expect(store.getCached('111')).toBe('628999');
+    expect(await fence.allows({ allowedChats: ['628999@c.us'] }, '111@lid')).toBe(false);
+    expect(await fence.allows({ allowedChats: ['111@lid'] }, '628999@c.us')).toBe(false);
+    expect(await fence.allows({ allowedChats: ['111@lid'] }, '111@lid')).toBe(true);
+    expect(await fence.allows({ allowedChats: ['628999@c.us'] }, '628999@c.us')).toBe(true);
+    const listed = await fence.scopeForFilter({ allowedChats: ['628999@c.us'] });
+    expect([...(listed?.allowed ?? [])].sort()).toEqual(['628999@c.us', '628999@s.whatsapp.net']);
   });
 
   it('findPhoneForLid reads the table for a lid evicted from the LRU cache', async () => {
@@ -866,11 +883,39 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
     expect(await store.lidsForPhonesPersisted([])).toEqual({});
     // The null-phone row is skipped rather than indexed under a null key.
     expect((await store.lidsForPhonesPersisted(['628999']))['628999']).toEqual(['111']);
-    // A read error falls back to the cache, which the preload filled.
+    // Display cache entries cannot authorize aliases when the table is unavailable.
     repo.find.mockRejectedValueOnce(new Error('no such table'));
-    expect(await store.phonesForLidsPersisted(['111'])).toEqual({ 111: '628999' });
+    expect(await store.phonesForLidsPersisted(['111'])).toEqual({ 111: null });
     repo.find.mockRejectedValueOnce(new Error('no such table'));
-    expect(await store.lidsForPhonesPersisted(['628999'])).toEqual({ 628999: ['111'] });
+    expect(await store.lidsForPhonesPersisted(['628999'])).toEqual({ 628999: [] });
+  });
+
+  it('does not use cached aliases for a failed forward query chunk', async () => {
+    const lids = Array.from({ length: 501 }, (_, i) => String(900000 + i));
+    const repo = makeFakeRepo(lids.map(lid => ({ lid, phone: `62${lid}` })));
+    const store = await newStore(repo);
+    const read = repo.find.getMockImplementation()!;
+    repo.find.mockImplementationOnce(read).mockRejectedValueOnce(new Error('connection lost'));
+
+    const result = await store.phonesForLidsPersisted(lids);
+
+    expect(result[lids[0]]).toBe(`62${lids[0]}`);
+    expect(result[lids[499]]).toBe(`62${lids[499]}`);
+    expect(result[lids[500]]).toBeNull();
+    expect(store.getCached(lids[500])).toBe(`62${lids[500]}`);
+  });
+
+  it('does not restore cached aliases when a reverse query chunk fails', async () => {
+    const phones = Array.from({ length: 501 }, (_, i) => String(62900000 + i));
+    const repo = makeFakeRepo(phones.map((phone, i) => ({ lid: String(900000 + i), phone })));
+    const store = await newStore(repo);
+    const read = repo.find.getMockImplementation()!;
+    repo.find.mockImplementationOnce(read).mockRejectedValueOnce(new Error('connection lost'));
+
+    const result = await store.lidsForPhonesPersisted(phones);
+
+    expect(result[phones[0]]).toEqual([]);
+    expect(result[phones[500]]).toEqual([]);
   });
 
   it('drops a cached lid that another node has re-mapped to a different phone', async () => {
@@ -1042,11 +1087,11 @@ describe('LidMappingStoreService — deterministic persisted lookups (authorizat
     expect(await store.findPhoneForLid('222@lid')).toBe('628999');
   });
 
-  it('findLidsForPhone falls back to the cache when the table read throws', async () => {
+  it('findLidsForPhone refuses aliases when the table read throws', async () => {
     const repo = makeFakeRepo([{ lid: '111', phone: '628999' }]);
     const store = await newStore(repo);
     repo.find.mockRejectedValueOnce(new Error('no such table'));
-    expect(await store.findLidsForPhone('628999')).toEqual(['111']);
+    expect(await store.findLidsForPhone('628999')).toEqual([]);
   });
 });
 
@@ -1919,7 +1964,10 @@ describe('LidMappingStoreService: a negative result on the shared table', () => 
     release();
     await expect(older).resolves.toBe(true);
     expect(store.resolveLid('111@lid')).toBe('628111');
+    expect(await store.findPhoneForLid('111@lid')).toBe('628111');
     jest.spyOn(repo, 'findOne').mockRejectedValueOnce(new Error('connection lost'));
+    expect(await store.findPhoneForLid('111@lid')).toBeNull();
+    expect(store.resolveLid('111@lid')).toBe('628111');
     expect(await store.findPhoneForLid('111@lid')).toBe('628111');
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockClear();

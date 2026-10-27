@@ -233,14 +233,14 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
    * forward cache, and nothing phone-keyed ever warms it, so a mapping past the preload cap or
    * evicted by the LRU would stay invisible to a phone filter for good. For callers that can await
    * (the message and status filters, the handover gate, the API-key chat fence). Same rule as
-   * {@link lidsForPhonesPersisted}; a read error falls back to the cache alone.
+   * {@link lidsForPhonesPersisted}; a read error grants no aliases.
    */
   async findLidsForPhone(phone: string): Promise<string[]> {
     try {
       return (await this.readLidsForPhones([phone]))[phone];
     } catch (err) {
       this.logger.warn(`Could not read lids for a phone: ${err instanceof Error ? err.message : String(err)}`);
-      return this.lidsForPhone(phone).filter(lid => !this.unreported.has(lid));
+      return [];
     }
   }
 
@@ -252,18 +252,16 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   async phonesForLidsPersisted(lids: string[]): Promise<Record<string, string | null>> {
     const out: Record<string, string | null> = {};
     if (lids.length === 0) return out;
-    // The mirror is only the fallback for a failed table read, so it is read without getCached:
-    // that warms every miss with a findOne of its own, one per lid ahead of the batched query below.
-    for (const lid of lids) out[lid] = this.unreported.has(lid) ? null : (this.lidToPhone.get(lid) ?? null);
+    // A chunk the table could not answer grants nothing: the display mirror never authorizes an alias.
+    for (const lid of lids) out[lid] = null;
     try {
       for (const batch of chunk(lids)) {
         const rows = await this.repo.find({ where: { lid: In(batch) } });
-        for (const lid of batch) out[lid] = null;
         // The table WINS: a stale cached negative must not shadow a mapping another node persisted.
         for (const row of rows) out[row.lid] = this.rowPhone(row.lid, row.phone, row.isReported);
       }
     } catch {
-      // The table may not exist yet (migration pending); the mirror is the best available answer.
+      // The table may not exist yet (migration pending); the chunks read before the failure stand.
     }
     return out;
   }
@@ -273,10 +271,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     try {
       return await this.readLidsForPhones(phones);
     } catch {
-      // The table may not exist yet (migration pending); the cache is the best available answer.
-      return Object.fromEntries(
-        phones.map(phone => [phone, this.lidsForPhone(phone).filter(lid => !this.unreported.has(lid))]),
-      );
+      return Object.fromEntries(phones.map(phone => [phone, []]));
     }
   }
 
@@ -311,7 +306,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
   /**
    * Forward lookup for callers that can await: the API-key chat fence and every chat-bound read
    * behind it (message history and media, the quoted body, status and handover filters). The table
-   * answers first, the in-memory mirror only when the read fails. The mirror alone is
+   * answers authoritatively; a failed read grants no aliases. The mirror alone is
    * not enough: it is LRU-evicted at `LID_MAPPING_CACHE_MAX`, and nothing refreshes it when another
    * node re-maps a lid in the shared table, so a cache-first answer could resolve the same lid to
    * a phone the fence no longer sees, and a read behind the fence would serve that other chat. The
@@ -327,7 +322,7 @@ export class LidMappingStoreService implements LidMappingStore, OnModuleInit {
     } catch (err) {
       this.logger.warn(`Could not read the phone for a lid: ${err instanceof Error ? err.message : String(err)}`);
     }
-    return this.unreported.has(lid) ? null : (this.getCached(lid) ?? null);
+    return null;
   }
 
   /**
