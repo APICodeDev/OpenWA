@@ -202,7 +202,9 @@ host.
 
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
-removes it for an explicit `null`.
+removes it for an explicit `null`. A per-session override and an integration instance's own config are
+overlaid on the base config, secret fields included, so a stored secret reaches every override that does
+not replace it, including one that sets its own host.
 
 ### Plugin Entry Point
 
@@ -601,8 +603,10 @@ phase, waits included, is capped at 10 s; a plugin still running at the cap is t
 process. New enables are refused once teardown starts. A disable that arrives while the same plugin is
 still being disabled (shutdown overlapping a REST disable, an uninstall or an update unload) joins the
 running teardown, so `onDisable` runs once; an unload that joins this way gets no worker-side `onUnload`.
-`uninstallPlugin` disables + unloads, drops the registry entry, and deletes the plugin's directory and
-its `ctx.storage` data dir (built-ins are protected and cannot be uninstalled). The unload path
+`uninstallPlugin` disables + unloads, deletes the plugin's directory and its `ctx.storage` data dir, and
+drops the registry entry last (built-ins are protected and cannot be uninstalled). A package or storage
+folder that cannot be removed fails the uninstall and leaves the entry, so the same call can be repeated.
+The unload path
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
 Uninstall also hands every chat the plugin had taken over back to the bot. The plugin's integration
