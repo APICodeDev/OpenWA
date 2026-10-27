@@ -21,6 +21,39 @@ export interface CatalogEntry {
   [key: string]: unknown;
 }
 
+const OPTIONAL_STRING_FIELDS = [
+  'type',
+  'status',
+  'description',
+  'author',
+  'license',
+  'minOpenWAVersion',
+  'testedOpenWAVersion',
+  'releasedAt',
+  'repoUrl',
+  'homepage',
+  'download',
+] as const;
+
+/**
+ * Whether `value` has the shape of {@link CatalogEntry}: non-empty string id, name and version, string
+ * optional fields, and a string-array `keywords`. Extra fields are tolerated. The dashboard lists and
+ * searches these fields as text, so a value of another type would break the page that renders them.
+ */
+export function isCatalogEntry(value: unknown): value is CatalogEntry {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  const text = (field: unknown): boolean => typeof field === 'string' && field !== '';
+  return (
+    text(entry.id) &&
+    text(entry.name) &&
+    text(entry.version) &&
+    OPTIONAL_STRING_FIELDS.every(key => entry[key] === undefined || typeof entry[key] === 'string') &&
+    (entry.keywords === undefined ||
+      (Array.isArray(entry.keywords) && entry.keywords.every(word => typeof word === 'string')))
+  );
+}
+
 /** A catalog entry annotated with this instance's install state. */
 export interface CatalogPlugin extends CatalogEntry {
   installed: boolean;

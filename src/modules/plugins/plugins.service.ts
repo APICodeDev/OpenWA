@@ -16,7 +16,7 @@ import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
 import { parsePluginPackage } from './plugin-installer';
 import { assertDownloadSha256, assertPluginInstallUrl, fetchSafeBuffer } from './plugin-download';
-import { annotateCatalog, CatalogEntry, CatalogPlugin } from './catalog';
+import { annotateCatalog, CatalogEntry, CatalogPlugin, isCatalogEntry } from './catalog';
 import { redactSsrfError } from '../../common/security/ssrf-guard';
 import { createLogger } from '../../common/services/logger.service';
 
@@ -484,10 +484,10 @@ export class PluginsService {
     try {
       const parsed: unknown = JSON.parse(raw.toString('utf8'));
       if (!Array.isArray(parsed)) throw new Error('catalog is not a JSON array');
-      if (!parsed.every(e => typeof e === 'object' && e !== null && !Array.isArray(e))) {
-        throw new Error('catalog entries must be JSON objects');
+      if (!parsed.every(isCatalogEntry)) {
+        throw new Error('catalog entries must be JSON objects with a string id, name and version');
       }
-      entries = parsed as CatalogEntry[];
+      entries = parsed;
     } catch (error) {
       throw new BadRequestException(
         `Invalid plugin catalog JSON: ${error instanceof Error ? error.message : String(error)}`,
