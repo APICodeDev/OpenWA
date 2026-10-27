@@ -9,6 +9,7 @@ import { Message, MessageDirection, MessageStatus } from '../message/entities/me
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { KeyedMutationQueue } from '../../common/utils/keyed-mutation-queue';
 import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
+import { captureSessionWrites } from '../../common/utils/session-write-scope';
 import { SessionLidResolver } from './session-lid-resolver.service';
 import { buildMessageMetadata, REVOKED_ROW_PATCH, storableWaMessageId } from './message-row.mapper';
 import { MessageMutationProjector } from './message-mutation-projector';
@@ -952,7 +953,12 @@ export class MessageProjector {
   ): Promise<InsertOutcome> {
     const label = `Failed to save ${direction} message ${dbMessage.waMessageId} to database`;
     const insert = async (): Promise<InsertOutcome> => {
-      const result = await this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>);
+      // Registered with the session's write scope, so a delete drains an insert already under way before it
+      // removes the session's rows; the row has no foreign key to refuse one that lands afterwards.
+      const writes = captureSessionWrites(this.messageRepository.manager?.connection ?? this.messageRepository, id);
+      const result = await writes
+        .write(() => this.messageRepository.insert(dbMessage as unknown as QueryDeepPartialEntity<Message>))
+        .finally(() => writes.close());
       // `insert()` (not `save()`) does NOT merge DB-generated columns (@PrimaryGeneratedColumn,
       // @CreateDateColumn) back onto the entity instance — so merge them explicitly here, before
       // the `message:persisted` emit. `identifiers[0]` always carries the PK on both SQLite and
