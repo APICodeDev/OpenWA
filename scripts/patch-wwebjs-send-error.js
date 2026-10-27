@@ -33,6 +33,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CLIENT_PATH = path.join('src', 'Client.js');
@@ -157,14 +158,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  try {
-    fs.writeFileSync(clientFile, source.replace(ANCHOR, FIX));
-  } catch (error) {
-    // The write truncates before it writes, so a failure after the open leaves a partial file, which
-    // --best-effort must not skip. A refused open leaves the tree as it was.
-    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-    throw error;
-  }
+  writeFileAtomic(clientFile, source.replace(ANCHOR, FIX));
   return { skipped: false, note: 'page-side send errors now carry what the page threw' };
 }
 
@@ -187,7 +181,7 @@ function run() {
     const result = applyBackport();
     console.log(`patch-wwebjs-send-error: ${result.skipped ? `skipped: ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-wwebjs-send-error: skipped: ${error.message}`);
       return;
     }

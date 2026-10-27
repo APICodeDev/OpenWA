@@ -31,6 +31,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -170,14 +171,7 @@ function applyStatusPatches(wwjsDir = DEFAULT_WWJS) {
   }
 
   if (applied.length) {
-    try {
-      fs.writeFileSync(utilsFile, source);
-    } catch (error) {
-      // The write truncates before it writes, so a failure after the open leaves a partial file, which
-      // --best-effort must not skip. A refused open leaves the tree as it was.
-      error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-      throw error;
-    }
+    writeFileAtomic(utilsFile, source);
   }
   return { applied, skipped };
 }
@@ -192,7 +186,7 @@ function run() {
     ].join('; ');
     console.log(`patch-wwebjs-status: ${report}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-wwebjs-status: skipped — ${error.message}`);
       return;
     }

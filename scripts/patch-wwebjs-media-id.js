@@ -17,6 +17,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -51,14 +52,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  try {
-    fs.writeFileSync(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
-  } catch (error) {
-    // The write truncates before it writes, so a failure after the open leaves a partial file, which
-    // --best-effort must not skip. A refused open leaves the tree as it was.
-    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-    throw error;
-  }
+  writeFileAtomic(utilsFile, source.replace(ANCHOR, FIX + ANCHOR));
   return { skipped: false, note: 'media model id stripped from outgoing messages' };
 }
 
@@ -81,7 +75,7 @@ function run() {
     const result = applyBackport();
     console.log(`patch-wwebjs-media-id: ${result.skipped ? `skipped: ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-wwebjs-media-id: skipped: ${error.message}`);
       return;
     }

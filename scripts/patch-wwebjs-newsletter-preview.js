@@ -12,6 +12,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const UTILS_PATH = path.join('src', 'util', 'Injected', 'Utils.js');
@@ -47,14 +48,7 @@ function applyBackport(wwjsDir = DEFAULT_WWJS) {
     );
   }
 
-  try {
-    fs.writeFileSync(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
-  } catch (error) {
-    // The write truncates before it writes, so a failure after the open leaves a partial file, which
-    // --best-effort must not skip. A refused open leaves the tree as it was.
-    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-    throw error;
-  }
+  writeFileAtomic(utilsFile, source.replace(LEGACY_CALL, CONTEXT_CALL));
   return { skipped: false, note: 'destination chat context added to link previews' };
 }
 
@@ -79,7 +73,7 @@ function run() {
       `patch-wwebjs-newsletter-preview: ${result.skipped ? `skipped — ${result.reason}` : result.note}`,
     );
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-wwebjs-newsletter-preview: skipped — ${error.message}`);
       return;
     }

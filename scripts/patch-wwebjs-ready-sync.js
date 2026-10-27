@@ -29,6 +29,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_WWJS = path.join(__dirname, '..', 'node_modules', 'whatsapp-web.js');
 const CLIENT_PATH = path.join('src', 'Client.js');
@@ -115,14 +116,7 @@ function applyReadySyncPatch(wwjsDir = DEFAULT_WWJS) {
     for (const edit of EDITS) {
       source = source.replace(edit.find, edit.replace);
     }
-    try {
-      fs.writeFileSync(clientFile, source);
-    } catch (error) {
-      // The write truncates before it writes, so a failure after the open leaves a partial file, which
-      // --best-effort must not skip. A refused open leaves the tree as it was.
-      error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-      throw error;
-    }
+    writeFileAtomic(clientFile, source);
     return { skipped: false, note: 'readiness marker and hasSynced level-check applied' };
   }
   throw new Error(
@@ -137,7 +131,7 @@ function run() {
     const result = applyReadySyncPatch();
     console.log(`patch-wwebjs-ready-sync: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-wwebjs-ready-sync: skipped — ${error.message}`);
       return;
     }

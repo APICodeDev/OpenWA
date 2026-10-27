@@ -36,6 +36,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const NEWSLETTER_PATH = path.join('lib', 'Socket', 'newsletter.js');
@@ -95,14 +96,7 @@ function applyNewsletterCreatePatch(baileysDir = DEFAULT_BAILEYS) {
         'before removing this patcher',
     );
   }
-  try {
-    fs.writeFileSync(file, source.replace(PARSE_FIND, PARSE_REPLACE), 'utf8');
-  } catch (error) {
-    // The write truncates before it writes, so a failure after the open leaves a partial file, which
-    // --best-effort must not skip. A refused open leaves the tree as it was.
-    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-    throw error;
-  }
+  writeFileAtomic(file, source.replace(PARSE_FIND, PARSE_REPLACE));
   return { note: 'made the newsletter-create parse tolerate an absent picture, keeping the new channel id' };
 }
 
@@ -112,7 +106,7 @@ function run() {
     const result = applyNewsletterCreatePatch();
     console.log(`patch-baileys-newsletter-create: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-baileys-newsletter-create: skipped — ${error.message}`);
       return;
     }

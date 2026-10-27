@@ -8,10 +8,11 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 /**
- * `--best-effort` lets a source install carry on without a patch it cannot place. A write that fails
- * part-way is not that case: fs.writeFileSync has already truncated the target, so the dependency is
- * left broken and no later run can tell. Each patcher must exit non-zero then. An open that is refused
- * writes nothing, and is skipped like any other tree the patcher cannot change.
+ * `--best-effort` lets a source install carry on without a patch it cannot place. The patchers replace a
+ * file by writing a temporary file beside it and renaming that over the target, so whatever fails on the
+ * way (a full disk, an I/O error, a refused or busy open, a refused rename) leaves the target as it was,
+ * and the patcher skips under --best-effort and fails without it. Only a patch over several files can be
+ * left half done, when a rename fails after an earlier one went through; that one fails the install.
  */
 
 // realpath: os.tmpdir() is a symlink on macOS and the patcher resolves its own location through it,
@@ -22,22 +23,34 @@ test.after(() => fs.rmSync(WORK, { recursive: true, force: true }));
 const PREFIX_BYTES = 64;
 const MARKER = 'FIXTURE_WRITE_FAULT';
 const PRELOAD = path.join(WORK, 'write-fault.cjs');
+// Fails one write ('write': the temporary file beside FIXTURE_FAULT_FILE, or the file itself) or one
+// rename ('rename': onto FIXTURE_FAULT_FILE). A full disk or an I/O error lands a prefix first; a refused
+// or busy open writes nothing.
 fs.writeFileSync(
   PRELOAD,
   `'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
 const write = fs.writeFileSync;
-const target = path.resolve(process.env.FIXTURE_WRITE_TARGET);
-const code = process.env.FIXTURE_WRITE_FAULT;
-fs.writeFileSync = function (file, data, ...args) {
-  if (typeof file !== 'number' && path.resolve(String(file)) === target) {
-    // A refused open writes nothing; any other failure lands a prefix first, as a full disk does.
-    if (code !== 'EACCES') write.call(fs, file, Buffer.from(String(data)).subarray(0, ${PREFIX_BYTES}));
-    process.stderr.write('${MARKER}\\n');
-    throw Object.assign(new Error('fixture write failure'), { code });
+const rename = fs.renameSync;
+const op = process.env.FIXTURE_FAULT_OP;
+const file = path.resolve(process.env.FIXTURE_FAULT_FILE);
+const code = process.env.FIXTURE_FAULT_CODE;
+const fail = () => {
+  process.stderr.write('${MARKER}\\n');
+  throw Object.assign(new Error('fixture failure'), { code });
+};
+fs.writeFileSync = function (target, data, ...args) {
+  const resolved = typeof target === 'number' ? '' : path.resolve(String(target));
+  if (op === 'write' && (resolved === file || resolved.startsWith(file + '.'))) {
+    if (['ENOSPC', 'EIO'].includes(code)) write.call(fs, target, Buffer.from(String(data)).subarray(0, ${PREFIX_BYTES}));
+    fail();
   }
-  return write.call(fs, file, data, ...args);
+  return write.call(fs, target, data, ...args);
+};
+fs.renameSync = function (from, to) {
+  if (op === 'rename' && path.resolve(String(to)) === file) fail();
+  return rename.call(fs, from, to);
 };
 `,
 );
@@ -68,56 +81,161 @@ const PATCHERS = [
   ],
 ];
 
-function fixture(name, relative, content) {
+function fixture(name, files) {
   const root = fs.mkdtempSync(path.join(WORK, 'tree-'));
   const script = path.join(root, 'scripts', name);
-  const target = path.join(root, 'node_modules', relative);
   fs.mkdirSync(path.dirname(script), { recursive: true });
-  fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.copyFileSync(path.join(__dirname, name), script);
-  fs.writeFileSync(target, content);
-  return { root, script, target };
+  // The shared write helper sits beside the patchers (the image copies it with them).
+  fs.copyFileSync(path.join(__dirname, 'atomic-write.js'), path.join(root, 'scripts', 'atomic-write.js'));
+  const targets = {};
+  for (const [relative, content] of Object.entries(files)) {
+    const target = path.join(root, 'node_modules', relative);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, { mode: 0o640 });
+    targets[relative] = target;
+  }
+  return { root, script, targets };
 }
 
-function patch({ root, script, target }, fault) {
-  const result = spawnSync(process.execPath, [...(fault ? ['--require', PRELOAD] : []), script, '--best-effort'], {
-    cwd: root,
-    env: { PATH: process.env.PATH, FIXTURE_WRITE_TARGET: target, FIXTURE_WRITE_FAULT: fault },
-    encoding: 'utf8',
-    timeout: 10000,
-  });
+// fault: { op: 'write' | 'rename', file: absolute path, code }.
+function patch({ root, script }, { fault, bestEffort = true } = {}) {
+  const result = spawnSync(
+    process.execPath,
+    [...(fault ? ['--require', PRELOAD] : []), script, ...(bestEffort ? ['--best-effort'] : [])],
+    {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        ...(fault && {
+          FIXTURE_FAULT_OP: fault.op,
+          FIXTURE_FAULT_FILE: fault.file,
+          FIXTURE_FAULT_CODE: fault.code,
+        }),
+      },
+      encoding: 'utf8',
+      timeout: 10000,
+    },
+  );
   assert.equal(result.error, undefined);
   return result;
 }
 
+const leftovers = tree =>
+  Object.values(tree.targets).flatMap(target =>
+    fs.readdirSync(path.dirname(target)).filter(entry => entry.endsWith('.tmp')),
+  );
+
+// A failure at any step of the replacement; every one leaves the target as it was.
+const FAULTS = [
+  ['a full disk while writing', 'write', 'ENOSPC'],
+  ['an open that is busy', 'write', 'EBUSY'],
+  ['a refused rename', 'rename', 'EACCES'],
+];
+
 for (const [name, relative, shapeOf] of PATCHERS) {
   const shape = `// fixture\n${shapeOf(require(`./${name}`))}\n`;
 
-  test(`${name} patches a recognised tree`, () => {
-    const tree = fixture(name, relative, shape);
+  test(`${name} patches a recognised tree, keeps its mode and leaves no temporary file`, () => {
+    const tree = fixture(name, { [relative]: shape });
+    const target = tree.targets[relative];
     assert.equal(patch(tree).status, 0);
-    assert.notEqual(fs.readFileSync(tree.target, 'utf8'), shape);
+    assert.notEqual(fs.readFileSync(target, 'utf8'), shape);
+    assert.equal(fs.statSync(target).mode & 0o777, 0o640);
+    assert.deepEqual(leftovers(tree), []);
   });
 
   test(`${name} skips an unrecognised tree under --best-effort`, () => {
-    const tree = fixture(name, relative, 'unknown source shape\n');
+    const tree = fixture(name, { [relative]: 'unknown source shape\n' });
     assert.equal(patch(tree).status, 0);
-    assert.equal(fs.readFileSync(tree.target, 'utf8'), 'unknown source shape\n');
+    assert.equal(fs.readFileSync(tree.targets[relative], 'utf8'), 'unknown source shape\n');
   });
 
-  test(`${name} fails when the write breaks part-way, even under --best-effort`, () => {
-    const tree = fixture(name, relative, shape);
-    const result = patch(tree, 'ENOSPC');
-    assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
-    assert.equal(fs.statSync(tree.target).size, PREFIX_BYTES, 'the target keeps only the written prefix');
-    assert.notEqual(result.status, 0);
-  });
-
-  test(`${name} skips a file it is not permitted to write under --best-effort`, () => {
-    const tree = fixture(name, relative, shape);
-    const result = patch(tree, 'EACCES');
-    assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
-    assert.equal(fs.readFileSync(tree.target, 'utf8'), shape);
-    assert.equal(result.status, 0);
-  });
+  for (const [label, op, code] of FAULTS) {
+    test(`${name} skips under --best-effort and fails without it on ${label}, leaving the file as it was`, () => {
+      for (const bestEffort of [true, false]) {
+        const tree = fixture(name, { [relative]: shape });
+        const fault = { op, code, file: tree.targets[relative] };
+        const result = patch(tree, { fault, bestEffort });
+        assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+        assert.equal(fs.readFileSync(tree.targets[relative], 'utf8'), shape);
+        assert.deepEqual(leftovers(tree), []);
+        assert.equal(result.status, bestEffort ? 0 : 1, result.stderr);
+        if (bestEffort) assert.match(result.stderr, /skipped/);
+      }
+    });
+  }
 }
+
+// The Baileys pairing patch spans two files: staged together, replaced one after the other.
+const pairing = require('./patch-baileys-pairing.js');
+const SOCKET = '@whiskeysockets/baileys/lib/Socket/socket.js';
+const RECV = '@whiskeysockets/baileys/lib/Socket/messages-recv.js';
+const pairingTree = () =>
+  fixture('patch-baileys-pairing.js', {
+    [SOCKET]: `// fixture\n${pairing.QR_FIND}\n`,
+    [RECV]: `// fixture\n${pairing.ACK_FIND}\n`,
+  });
+
+test('patch-baileys-pairing.js patches both files and leaves no temporary file', () => {
+  const tree = pairingTree();
+  assert.equal(patch(tree).status, 0);
+  assert.ok(fs.readFileSync(tree.targets[SOCKET], 'utf8').includes(pairing.QR_REPLACE));
+  assert.ok(fs.readFileSync(tree.targets[RECV], 'utf8').includes(pairing.ACK_REPLACE));
+  assert.deepEqual(leftovers(tree), []);
+});
+
+for (const [label, op, code] of FAULTS) {
+  for (const faulty of [SOCKET, RECV]) {
+    // Whichever file the failure hits before anything is replaced, both stay as they were.
+    if (op === 'rename' && faulty === RECV) continue;
+    test(`patch-baileys-pairing.js skips under --best-effort on ${label} for ${path.basename(faulty)}`, () => {
+      for (const bestEffort of [true, false]) {
+        const tree = pairingTree();
+        const before = Object.values(tree.targets).map(file => fs.readFileSync(file, 'utf8'));
+        const result = patch(tree, { fault: { op, code, file: tree.targets[faulty] }, bestEffort });
+        assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+        assert.deepEqual(
+          Object.values(tree.targets).map(file => fs.readFileSync(file, 'utf8')),
+          before,
+        );
+        assert.deepEqual(leftovers(tree), []);
+        assert.equal(result.status, bestEffort ? 0 : 1, result.stderr);
+      }
+    });
+  }
+}
+
+test('patch-baileys-pairing.js fails even under --best-effort when only the first file was replaced', () => {
+  const tree = pairingTree();
+  const result = patch(tree, { fault: { op: 'rename', code: 'EBUSY', file: tree.targets[RECV] } });
+  assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+  assert.ok(fs.readFileSync(tree.targets[SOCKET], 'utf8').includes(pairing.QR_REPLACE), 'the first file is patched');
+  assert.ok(fs.readFileSync(tree.targets[RECV], 'utf8').includes(pairing.ACK_FIND), 'the second file is not');
+  assert.deepEqual(leftovers(tree), []);
+  assert.equal(result.status, 1);
+});
+
+// The Puppeteer patch has no --best-effort mode: any failure is fatal, and leaves the file untouched.
+const puppeteer = require('./patch-wwebjs-puppeteer.js');
+test('patch-wwebjs-puppeteer.js fails on a write error and leaves Client.js as it was', () => {
+  const relative = 'whatsapp-web.js/src/Client.js';
+  const shape = `// fixture\n${puppeteer.REPLACEMENTS.map(([before]) => before).join('\n')}\n`;
+  const tree = fixture('patch-wwebjs-puppeteer.js', { [relative]: shape });
+  const result = patch(tree, { fault: { op: 'write', code: 'ENOSPC', file: tree.targets[relative] } });
+  assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+  assert.equal(fs.readFileSync(tree.targets[relative], 'utf8'), shape);
+  assert.deepEqual(leftovers(tree), []);
+  assert.equal(result.status, 1);
+});
+
+test('a link is written through, not replaced', () => {
+  const { writeFileAtomic } = require('./atomic-write.js');
+  const real = path.join(WORK, 'real.txt');
+  const link = path.join(WORK, 'link.txt');
+  fs.writeFileSync(real, 'old');
+  fs.symlinkSync(real, link);
+  writeFileAtomic(link, 'new');
+  assert.ok(fs.lstatSync(link).isSymbolicLink());
+  assert.equal(fs.readFileSync(real, 'utf8'), 'new');
+});

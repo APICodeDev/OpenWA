@@ -26,6 +26,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./atomic-write');
 
 const DEFAULT_BAILEYS = path.join(__dirname, '..', 'node_modules', '@whiskeysockets', 'baileys');
 const CHATS_PATH = path.join('lib', 'Socket', 'chats.js');
@@ -66,14 +67,7 @@ function applyAppStatePatch(baileysDir = DEFAULT_BAILEYS) {
         'the upstream shape changed; re-check whether the loop is still unbounded before removing this patcher',
     );
   }
-  try {
-    fs.writeFileSync(file, source.replace(LOOP_FIND, LOOP_REPLACE), 'utf8');
-  } catch (error) {
-    // The write truncates before it writes, so a failure after the open leaves a partial file, which
-    // --best-effort must not skip. A refused open leaves the tree as it was.
-    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
-    throw error;
-  }
+  writeFileAtomic(file, source.replace(LOOP_FIND, LOOP_REPLACE));
   return { note: 'bounded the app-state resync loop on an empty decode' };
 }
 
@@ -83,7 +77,7 @@ function run() {
     const result = applyAppStatePatch();
     console.log(`patch-baileys-appstate: ${result.skipped ? `skipped — ${result.reason}` : result.note}`);
   } catch (error) {
-    if (bestEffort && !error.partial) {
+    if (bestEffort) {
       console.warn(`patch-baileys-appstate: skipped — ${error.message}`);
       return;
     }
