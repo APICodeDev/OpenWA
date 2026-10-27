@@ -852,3 +852,54 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ WEBHOOK_RETRY_DELAY: '268435455' })).not.toThrow();
   });
 });
+
+// The bundled Redis container runs a plaintext listener with only its default user. A connection that
+// asks for TLS, or authenticates as a named user, fails on every attempt, as the bundled PostgreSQL does
+// with DATABASE_SSL=true.
+describe('validateEnv built-in Redis connection settings', () => {
+  const builtin = { REDIS_ENABLED: 'true', REDIS_BUILTIN: 'true', REDIS_HOST: 'redis' };
+
+  describe('REDIS_TLS', () => {
+    it.each(['redis', 'REDIS.', 'openwa-redis'])('rejects TLS against the bundled host %s', host => {
+      expect(() => validateEnv({ ...builtin, REDIS_HOST: host, REDIS_TLS: 'true' })).toThrow(/REDIS_TLS/);
+    });
+
+    it.each(['QUEUE_ENABLED', 'CACHE_ENABLED'])('rejects it when only %s uses Redis', consumer => {
+      expect(() => validateEnv({ ...builtin, REDIS_ENABLED: 'false', [consumer]: 'true', REDIS_TLS: 'true' })).toThrow(
+        /REDIS_TLS/,
+      );
+    });
+
+    it('keeps TLS to an external host, and accepts plaintext or a Redis nothing uses', () => {
+      expect(() => validateEnv({ ...builtin, REDIS_HOST: 'cache.example.com', REDIS_TLS: 'true' })).not.toThrow();
+      expect(() => validateEnv({ ...builtin, REDIS_TLS: 'false' })).not.toThrow();
+      expect(() => validateEnv({ ...builtin, REDIS_ENABLED: 'false', REDIS_TLS: 'true' })).not.toThrow();
+      expect(() => validateEnv({ ...builtin, REDIS_BUILTIN: 'false', REDIS_TLS: 'true' })).not.toThrow();
+    });
+  });
+
+  describe('REDIS_USERNAME', () => {
+    it.each(['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'])('rejects a named user for %s', consumer => {
+      expect(() =>
+        validateEnv({ ...builtin, REDIS_ENABLED: 'false', [consumer]: 'true', REDIS_USERNAME: 'worker' }),
+      ).toThrow(/REDIS_USERNAME/);
+    });
+
+    // The username is passed to the server as written, so only the exact word `default` names the default user.
+    it.each(['DEFAULT', 'default ', ' '])('does not normalize the user name %j', username => {
+      expect(() => validateEnv({ ...builtin, REDIS_USERNAME: username })).toThrow(/REDIS_USERNAME/);
+    });
+
+    it.each([undefined, '', 'default'])('accepts the default user as %j', username => {
+      expect(() => validateEnv({ ...builtin, REDIS_USERNAME: username })).not.toThrow();
+    });
+
+    it('keeps a named user for an external host, and accepts one when Redis is not the bundled one in use', () => {
+      expect(() =>
+        validateEnv({ ...builtin, REDIS_HOST: 'cache.example.com', REDIS_USERNAME: 'worker' }),
+      ).not.toThrow();
+      expect(() => validateEnv({ ...builtin, REDIS_BUILTIN: 'false', REDIS_USERNAME: 'worker' })).not.toThrow();
+      expect(() => validateEnv({ ...builtin, REDIS_ENABLED: 'false', REDIS_USERNAME: 'worker' })).not.toThrow();
+    });
+  });
+});

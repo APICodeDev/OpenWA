@@ -60,6 +60,37 @@ export function postgresSchemaError(schema: string): string | null {
   return null;
 }
 
+const REDIS_CONSUMER_FLAGS = ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'];
+
+/** The bundled Redis is the one this deployment connects to: it is selected, in use, and named as the host. */
+function usesBundledRedis(config: EnvConfig): boolean {
+  const host = typeof config.REDIS_HOST === 'string' ? config.REDIS_HOST : undefined;
+  return (
+    REDIS_CONSUMER_FLAGS.some(key => config[key] === 'true') &&
+    config.REDIS_BUILTIN === 'true' &&
+    namesBundledContainer('redis', host)
+  );
+}
+
+/** The bundled Redis listens in plaintext; a TLS handshake against it fails on every connect. */
+export function builtinRedisTlsError(config: EnvConfig): string | null {
+  if (!usesBundledRedis(config) || config.REDIS_TLS !== 'true') return null;
+  return (
+    'REDIS_TLS=true cannot reach the built-in Redis container, which runs without TLS; ' +
+    'set REDIS_TLS=false where it is configured'
+  );
+}
+
+/** The bundled Redis has only its default user; ioredis authenticates as any other name and is refused. */
+export function builtinRedisUsernameError(config: EnvConfig): string | null {
+  const username = typeof config.REDIS_USERNAME === 'string' ? config.REDIS_USERNAME : undefined;
+  if (!usesBundledRedis(config) || !username || username === 'default') return null;
+  return (
+    'REDIS_USERNAME must be unset or default for the built-in Redis container; ' +
+    'remove the named username where it is configured'
+  );
+}
+
 /**
  * Fail-fast environment validation. Wired as ConfigModule's `validate`
  * callback so a misconfigured deployment is rejected at BOOT instead of silently
@@ -213,6 +244,11 @@ export function validateEnv(config: EnvConfig): EnvConfig {
       );
     }
   }
+
+  const redisTlsError = builtinRedisTlsError(config);
+  if (redisTlsError) errors.push(redisTlsError);
+  const redisUsernameError = builtinRedisUsernameError(config);
+  if (redisUsernameError) errors.push(redisUsernameError);
 
   // Plain decimal digits only: these numeric knobs are read downstream with parseInt(raw, 10),
   // which silently truncates spellings Number() would accept (`1e6` → 1, `0x100` → 0) — the boot
