@@ -1346,7 +1346,7 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // Baileys adds a companion device and showed no such effect, so two of its sessions may share a number.
     if (this.pairingMayRevoke() && (await this.otherSessionHoldsNumber(id, phoneNumber))) {
       throw new ConflictException(
-        'That number is linked to another session. Log that session out or delete it before pairing this one.',
+        'That number is linked to another session. Delete that session, or log it out while it runs, before pairing this one.',
       );
     }
 

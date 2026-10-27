@@ -531,7 +531,7 @@ export class SessionController {
     description:
       PAIRING_NOT_READY_409 +
       ' On whatsapp-web.js also answered, with nothing sent to WhatsApp, when the requested number is the stored ' +
-      'phone of another session of this gateway: log that session out or delete it first.',
+      'phone of another session of this gateway: delete that session, or log it out while it runs, first.',
   })
   @ApiResponse({ status: 503, description: PAIRING_TRANSPORT_503 })
   async requestPairingCode(

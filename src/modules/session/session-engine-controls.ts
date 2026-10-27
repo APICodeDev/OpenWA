@@ -137,7 +137,7 @@ export class StopMarks extends Set<string> {
   }
 }
 
-/** Caller callbacks for stop()/delete(), run around the session read that opens each verb. */
+/** Caller callbacks for stop(), delete(), forceKill() and logout(), run around the session read that opens each verb. */
 export interface StopHooks {
   /** delete() only: the ownership captured by its caller still covers this operation. */
   ownsClaim?: () => boolean;
