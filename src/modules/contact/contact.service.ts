@@ -234,8 +234,10 @@ export class ContactService {
 
   upsertContact(sessionId: string, contactId: string, firstName: string, lastName?: string) {
     this.assertAddressable(contactId);
+    // The DTO lets a JSON null through as "no last name". The engines default an omitted one to '' (a default
+    // parameter ignores null), so null would otherwise reach the page-side save as a value.
     return this.getEngine(sessionId)
-      .upsertContact(this.toAddressableId(contactId), firstName, lastName)
+      .upsertContact(this.toAddressableId(contactId), firstName, lastName ?? undefined)
       .finally(() => this.listings.drop(sessionId));
   }
 

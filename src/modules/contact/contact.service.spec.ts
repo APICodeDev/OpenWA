@@ -4,6 +4,8 @@ import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
+import { WwebjsContacts } from '../../engine/adapters/wwebjs-contacts';
+import type { WwebjsEngineHost } from '../../engine/adapters/wwebjs-host';
 
 describe('ContactService', () => {
   const makeService = (engine: Partial<IWhatsAppEngine> | undefined) => {
@@ -314,6 +316,31 @@ describe('ContactService', () => {
       const upsertContact = jest.fn().mockResolvedValue(undefined);
       await makeService({ upsertContact }).upsertContact('s1', '628123@c.us', 'Ada', 'Lovelace');
       expect(upsertContact).toHaveBeenCalledWith('628123@c.us', 'Ada', 'Lovelace');
+    });
+
+    // UpsertContactDto lets a JSON null through (@IsOptional skips it). A default parameter ignores null, so
+    // the whatsapp-web.js delegate's `lastName = ''` never applied and the page-side save received null.
+    it.each([undefined, null])('hands the engine no last name for lastName %p', async lastName => {
+      const upsertContact = jest.fn().mockResolvedValue(undefined);
+      await makeService({ upsertContact }).upsertContact('s1', '628123@c.us', 'Ada', lastName as string | undefined);
+      expect(upsertContact).toHaveBeenCalledWith('628123@c.us', 'Ada', undefined);
+    });
+
+    it('reaches the whatsapp-web.js save with an empty last name when the body sent null', async () => {
+      const save = jest.fn().mockResolvedValue(undefined);
+      const host = {
+        ensureReady: jest.fn(),
+        getClient: () => ({ saveOrEditAddressbookContact: save }),
+        isPageTransportError: () => false,
+        reportIfPageTransportError: jest.fn(),
+        logger: { debug: jest.fn() },
+      } as unknown as WwebjsEngineHost;
+      const contacts = new WwebjsContacts(host);
+      const svc = makeService({
+        upsertContact: (id: string, first: string, last?: string) => contacts.upsertContact(id, first, last),
+      });
+      await svc.upsertContact('s1', '628123@c.us', 'Ada', null as unknown as string);
+      expect(save).toHaveBeenCalledWith('628123', 'Ada', '');
     });
 
     // Same hazard as the lid, different ids: a group/newsletter/broadcast id also carries digits
