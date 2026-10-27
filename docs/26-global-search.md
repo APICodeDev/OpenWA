@@ -213,6 +213,8 @@ Adding search to an existing deployment runs the one-time `1782400000000-AddMess
 The migration is safe to re-run (idempotent guards) and has a `down` path that drops the FTS schema on
 both dialects. After it applies, search works immediately — no separate reindex command.
 
+On SQLite the `1791600000000-RepairSqliteMessageFts` migration then compares the index with the full message content and rebuilds it when they differ, which a table rebuild (a schema sync, for one) can cause. A healthy index is left alone. With `DATABASE_SYNCHRONIZE=true` the same check runs after the schema sync on every boot; it reads all stored text, and a failed check is logged and does not stop the boot.
+
 ---
 
 > See also: [06 - API Specification](./06-api-specification.md) (§6.4.12 Search),
