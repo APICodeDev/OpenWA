@@ -266,6 +266,9 @@ var idempotentSendSegments = map[string]bool{
 
 // isIdempotentSendPath reports whether path is /api/sessions/{id}/messages/{segment} for one of them.
 func isIdempotentSendPath(path string) bool {
+	if i := strings.IndexAny(path, "?#"); i >= 0 {
+		path = path[:i]
+	}
 	parts := strings.Split(path, "/")
 	return len(parts) == 6 && parts[1] == "api" && parts[2] == "sessions" && parts[4] == "messages" &&
 		idempotentSendSegments[parts[5]]
