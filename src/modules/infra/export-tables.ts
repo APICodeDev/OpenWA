@@ -6,6 +6,7 @@ import type {
   MessageBatchRow,
   WebhookDeliveryFailureRow,
 } from './migration-tables.types';
+import { renderTemplate } from '../../common/utils/template-render';
 
 /**
  * A `data` value that is a POINTER rather than bytes. `metadata.media.data` holds `base64 || dto.url!`
@@ -146,12 +147,45 @@ function stripBatchInlineMedia(row: MessageBatchRow, exceedsBudget: (encodedByte
   for (const entry of parsed) {
     const content = (entry as { content?: unknown } | null)?.content;
     if (typeof content !== 'object' || content === null) continue;
+    // A `base64` may be a placeholder whose payload sits in the item's variables, so those bytes are the field's
+    // too. A variable two fields share is stored once: it is charged to the first and dropped only if every
+    // field that names it was refused.
+    const rawVariables = (entry as { variables?: unknown }).variables;
+    const variables =
+      rawVariables && typeof rawVariables === 'object' && !Array.isArray(rawVariables)
+        ? (rawVariables as Record<string, unknown>)
+        : {};
+    const kept = new Set<string>();
+    const refused = new Set<string>();
     for (const key of ['image', 'video', 'audio', 'document']) {
       const media = (content as Record<string, unknown>)[key] as { base64?: unknown } | null | undefined;
       if (!media || typeof media !== 'object' || typeof media.base64 !== 'string') continue;
-      if (!exceedsBudget(Buffer.byteLength(media.base64, 'utf8'))) continue;
+      const template = media.base64;
+      // Asked of the renderer itself, so the placeholder grammar is the one the send path substitutes.
+      const named = template.includes('{')
+        ? Object.keys(variables).filter(
+            name => variables[name] != null && renderTemplate(template, { [name]: '' }) !== template,
+          )
+        : [];
+      const scaffolding = renderTemplate(template, Object.fromEntries(named.map(name => [name, ''])));
+      const encodedBytes = named.reduce(
+        (bytes, name) => {
+          if (kept.has(name)) return bytes;
+          const value = variables[name];
+          return bytes + Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value), 'utf8');
+        },
+        Buffer.byteLength(scaffolding, 'utf8'),
+      );
+      if (!exceedsBudget(encodedBytes)) {
+        for (const name of named) kept.add(name);
+        continue;
+      }
+      for (const name of named) refused.add(name);
       delete media.base64;
       stripped = true;
+    }
+    for (const name of refused) {
+      if (!kept.has(name)) delete variables[name];
     }
   }
   if (stripped) row.messages = JSON.stringify(parsed);
