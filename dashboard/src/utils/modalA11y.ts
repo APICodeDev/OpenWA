@@ -69,7 +69,8 @@ export function bindModalA11y(
       if (!card.contains(doc.activeElement)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
-      } else if (event.shiftKey && doc.activeElement === first) {
+      } else if (event.shiftKey && (doc.activeElement === first || doc.activeElement === card)) {
+        // The card is focusable itself (a click on dialog text lands there), and Shift+Tab from it would leave.
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && doc.activeElement === last) {

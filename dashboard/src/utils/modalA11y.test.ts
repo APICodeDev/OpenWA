@@ -345,3 +345,23 @@ test('a lower dialog does not handle Tab while the nested dialog owns focus', ()
     unbindParent();
   }
 });
+
+test('Shift+Tab from the dialog card wraps to the last control, and Tab from it is left to the browser', () => {
+  const { doc, card, focusables } = makeWorld(2);
+  const unbind = bindModalA11y(doc as never, card as never, () => {});
+  try {
+    card.focus();
+    const back = makeKeyEvent('Tab', true);
+    doc.dispatchKey(back);
+    assert.equal(back.defaultPrevented, true);
+    assert.equal(doc.activeElement, focusables[1] as never);
+
+    card.focus();
+    const forward = makeKeyEvent('Tab');
+    doc.dispatchKey(forward);
+    assert.equal(forward.defaultPrevented, false);
+    assert.equal(doc.activeElement, card as never);
+  } finally {
+    unbind();
+  }
+});
