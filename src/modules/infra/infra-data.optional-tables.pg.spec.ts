@@ -93,6 +93,9 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
       ...options,
       schema,
       // Only the scratch schema: a table dropped from it must read as absent, not resolve to one in public.
+      // gen_random_uuid() is core since PostgreSQL 13; uuid_generate_v4() lives in an extension that an earlier spec may
+      // have installed in public, which this search_path no longer reaches.
+      uuidExtension: 'pgcrypto' as const,
       extra: { ...postgresUtcExtra(), options: `-c search_path=${schema}` },
       entities,
       synchronize: true,
