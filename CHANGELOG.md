@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Serve every page after the first of `GET /api/sessions/{sessionId}/chats` and `GET /api/sessions/{sessionId}/contacts` from the list the engine returned within the last 5 s, so walking a large account costs one engine read instead of one per page.
 - Name the Go SDK status font constants after the WhatsApp protocol (`StatusFontSystemText`, `StatusFontFBScript`, `StatusFontMorningBreezeRegular`, `StatusFontCalistogaRegular`, `StatusFontExo2ExtraBold`, `StatusFontCourierPrimeBold`), from Go SDK 0.7.0; the old names, which did not match the font each id selects, stay as deprecated aliases.
 - Refuse to start with `REDIS_TLS=true` or a `REDIS_USERNAME` other than `default` beside the built-in Redis, which serves plain TCP and only its default user, where every Redis connection failed; the Infrastructure page refuses to save that combination.
-- Log an error at start for `STORAGE_TYPE=s3` with an `S3_ENDPOINT` that is not an absolute `http://` or `https://` URL, where every S3 call failed and media went to local disk, and refuse to save it from the Infrastructure page.
+- Log an error at start for `STORAGE_TYPE=s3` with an `S3_ENDPOINT` that is not an absolute `http://` or `https://` URL, where every S3 call failed and media went to local disk, and refuse a save from the Infrastructure page that changes it or newly selects S3 beside it.
 
 ### Fixed
 
@@ -307,7 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a plugin's registry entry until its uninstall has removed its files, so a failed uninstall can be repeated.
 - Carry a plugin's stored data into the new tree before an update swaps it in.
 - Refuse a plugin catalog entry whose id, name, version or text fields are not text, and accept null in its optional fields.
-- Log at start the position and reason of each `SSRF_ALLOWED_HOSTS` entry that never matches a host: a scheme, credentials, port, path or wildcard, or an IP address not written as the URL parser prints it (`127.0.0.1`, not `127.1`).
+- Log at start the position and reason of each `SSRF_ALLOWED_HOSTS` entry that never matches a host: a scheme, credentials, port, path or wildcard, or an IP address not written as the URL parser prints it (`127.0.0.1`, not `127.1`); at most 20 entries are listed, and a value the URL parser rejects is named as such.
 - Run every `message:sending` handler, a moderation veto included, for a send that a hook handler schedules after its own call has ended; it was skipped as re-entrant.
 - Redrive only the dead letters written under an ingress instance's current session binding.
 - Drop a null optional field from plugin catalog entries instead of answering it.
