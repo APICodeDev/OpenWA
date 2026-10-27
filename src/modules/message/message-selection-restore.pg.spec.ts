@@ -2,7 +2,7 @@
    skipped in the default test job, so its lines would be unread and skew the global coverage gate. */
 import 'reflect-metadata';
 import { randomBytes } from 'crypto';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, SelectQueryBuilder } from 'typeorm';
 import { InfraDataService } from '../infra/infra-data.service';
 import { Session, SessionStatus } from '../session/entities/session.entity';
 import { Webhook } from '../webhook/entities/webhook.entity';
@@ -244,6 +244,21 @@ const deferred = () => {
       }
       if (drift === 'type') expect(message.type).toBe('image');
     }
+  });
+  it('still serves the picked page when the cursor row is deleted before its rows are read', async () => {
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repo.delete({ id: NEW });
+      return getMany.call(this);
+    });
+
+    const page = await service.getMessages(SID, { chatId: A, after: NEW, inlineMedia: false });
+
+    expect(page.total).toBe(3);
+    expect(page.messages.map(message => message.id)).toEqual([MID, OLD]);
   });
   it('keeps newest-first ordering and encoded inline budget without restore', async () => {
     process.env.MESSAGE_LIST_INLINE_MEDIA_BUDGET_BYTES = '1500';
