@@ -70,7 +70,8 @@ export async function createBootDataSource(
       }
       await dataSource.synchronize();
       // synchronize rebuilds `messages` without its rowids, so the index it kept can now name other messages.
-      // Never fail boot over the index: search answers 501 until the next boot repairs it.
+      // Never fail boot over the index: if this repair fails, the search provider's own start-up check re-indexes
+      // what it finds orphaned, and the next boot repairs the rest.
       await repairSqliteMessageFts(dataSource).catch((error: unknown) =>
         logger.error(`Failed to repair the SQLite message full-text index: ${String(error)}`),
       );
