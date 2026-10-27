@@ -161,6 +161,21 @@ describe('OpenWAClient', () => {
     expect(t.lastCall!.url).toBe('http://localhost:2785/api/sessions?limit=5&name=x');
   });
 
+  it('puts query params before the fragment of a raw path', async () => {
+    const cases: Array<[string, string]> = [
+      ['/api/sessions#tab', '/api/sessions?name=x#tab'],
+      ['/api/sessions?limit=5#tab', '/api/sessions?limit=5&name=x#tab'],
+      ['/api/sessions#tab?fake=1', '/api/sessions?name=x#tab?fake=1'],
+      ['/api/sessions#', '/api/sessions?name=x#'],
+    ];
+    for (const [path, expected] of cases) {
+      const t = new MockTransport().passthrough({ status: 200, body: [] });
+      await client(t).request({ method: 'GET', path, query: { name: 'x' } });
+      expect(t.lastCall!.url).toBe(`http://localhost:2785${expected}`);
+      expect(new URL(t.lastCall!.url).searchParams.get('name')).toBe('x');
+    }
+  });
+
   it('maps a 404 to OpenWANotFoundError with parsed body', async () => {
     const t = new MockTransport().on('GET', '/api/sessions/missing', {
       status: 404,
