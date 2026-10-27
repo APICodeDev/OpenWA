@@ -309,6 +309,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refuse a plugin catalog entry whose id, name, version or text fields are not text, and accept null in its optional fields.
 - Log once each `SSRF_ALLOWED_HOSTS` entry that carries a scheme, port, path or wildcard, which never matches a host.
 - Run every `message:sending` handler, a moderation veto included, for a send that a hook handler schedules after its own call has ended; it was skipped as re-entrant.
+- Redrive only the dead letters written under an ingress instance's current session binding.
+- Drop a null optional field from plugin catalog entries instead of answering it.
 
 ### Dependencies
 

@@ -264,8 +264,9 @@ few seconds.
 A queued, retried, reconciled or redriven delivery runs with what was decided when it was accepted: the
 verification verdict (a delivery stored before the verdict was recorded reads the route as it stands) and
 the session its instance was bound to. If the instance has been disabled or deleted, or bound to another
-session, by the time the delivery runs, the attempt fails and follows the retry and dead-letter path; a
-redrive of such a row fails the same way.
+session, by the time the delivery runs, the attempt fails and follows the retry and dead-letter path. A
+redrive covers only the rows written under the instance's current session binding; rows of an earlier
+binding stay in the dead-letter table.
 
 A job waiting on that lock still holds one of the `INGRESS_WORKER_CONCURRENCY` worker slots (default
 10). A burst on one lane larger than that fills every slot with same-lane waiters, and events for other

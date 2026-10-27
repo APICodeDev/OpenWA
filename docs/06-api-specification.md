@@ -6131,7 +6131,7 @@ The catalog is fetched from `PLUGIN_CATALOG_URL`, which defaults to the OpenWA-p
 
 The dashboard installs and updates an entry by passing its `download` URL to `POST /api/plugins/install-url` or `POST /api/plugins/:id/update`, so the pin rule of those routes applies: under `NODE_ENV=production` (unless `PLUGIN_INSTALL_REQUIRE_PIN=false`) an entry whose `download` has no `#sha256=` pin cannot be installed. Every entry in the default catalog carries one.
 
-**Errors:** `400` catalog fetch failed / not a JSON array · `401` · `403`
+**Errors:** `400` catalog fetch failed / not a JSON array / an entry without a text `id`, `name` or `version`, or with a non-text optional field · `401` · `403`
 
 ---
 
@@ -6452,7 +6452,8 @@ Re-dispatch one bounded batch of dead-lettered inbound deliveries for an integra
 **doc 25, Integration Fabric** for the DLQ and redrive design). Rows are drained fewest-attempts-first,
 then oldest-first, up to `batchSize` (100) — so a row that keeps failing moves behind never-retried
 rows instead of livelocking the window, while staying redrivable. `remaining` reports the DLQ depth
-still outstanding after this batch.
+still outstanding after this batch. Only rows written under the instance's current session binding are
+redriven and counted; rows of an earlier binding stay in the dead-letter table.
 
 **Auth:** API key (ADMIN) · **Scope:** session-scoped (a key restricted to `allowedSessions` may only
 redrive an instance whose current `sessionScope` is inside that allowlist; out of scope and missing
