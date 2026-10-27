@@ -1422,7 +1422,10 @@ export class SessionEngineLifecycle {
       } finally {
         if (state.started === attempt) state.initInFlight = false;
       }
-      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) {
+        await this.purgeAuthDirsIfDeleted(id);
+        return;
+      }
       // Init resolved, so a failure the engine reported meanwhile (a stuck-auth or readiness timer, an
       // auth failure) is real: apply it, unless a stop/delete/start already replaced this state.
       const parked = state.parkedFailure;
@@ -1461,7 +1464,10 @@ export class SessionEngineLifecycle {
       });
       // A delete (or delete + start) replaced this state while init ran: nothing here is ours any more,
       // and a later attempt in the same episode owns its initialization marker and parked failure too.
-      if (this.reconnectStates.get(id) !== state || state.started !== attempt) return;
+      if (this.reconnectStates.get(id) !== state || state.started !== attempt) {
+        await this.purgeAuthDirsIfDeleted(id);
+        return;
+      }
       const parked = state.parkedFailure;
       state.parkedFailure = undefined;
       // A failure only the operator can fix (re-scan, stale profile) stays terminal on a reconnect too.

@@ -4653,6 +4653,33 @@ describe('SessionService', () => {
 
     // The success path has its own replacement check: a parked failure of the OLD attempt must not
     // run against the state a delete + start put in its place while that init was still running.
+    it.each([
+      [false, false],
+      [false, true],
+      [true, false],
+      [true, true],
+    ])('rechecks cancelled reconnect auth (row survives: %s, init rejects: %s)', async (survives, rejects) => {
+      const i = internals();
+      let finishInit: () => void = () => undefined;
+      mockEngine.initialize.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finishInit = () => (rejects ? reject(new Error('late initialization failure')) : resolve());
+          }),
+      );
+      const state = armState();
+      const running = i.executeReconnect(ID, createMockSession(), state);
+      await flush();
+      if (survives) await service.stop(ID);
+      else await service.delete(ID);
+      (repository.findOne as jest.Mock).mockResolvedValue(survives ? createMockSession() : null);
+      (engineFactory.purgeSessionData as jest.Mock).mockClear();
+      finishInit();
+      await running;
+      if (survives) expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
+      else expect(engineFactory.purgeSessionData).toHaveBeenCalledWith(ID);
+    });
+
     it('drops a parked failure when a delete-then-start replaced the state before init resolved', async () => {
       const i = internals();
       let callbacks: EngineEventCallbacks = {};
