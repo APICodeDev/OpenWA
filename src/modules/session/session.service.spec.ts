@@ -7241,6 +7241,7 @@ describe('SessionService', () => {
 
     it('dispatches status.received with the ingested row once ingest resolves with created=true', async () => {
       const callbacks = await startAndCaptureCallbacks();
+      const postedAt = Date.now();
       (statusStore.ingest as jest.Mock).mockResolvedValueOnce({
         created: true,
         row: {
@@ -7250,8 +7251,8 @@ describe('SessionService', () => {
           type: 'text',
           caption: 'hi',
           mediaOmitted: false,
-          postedAt: 1000,
-          expiresAt: 1000 + 86400000,
+          postedAt,
+          expiresAt: postedAt + 86400000,
         },
       });
 
@@ -7279,8 +7280,8 @@ describe('SessionService', () => {
           caption: 'hi',
           hasMedia: false,
           mediaOmitted: false,
-          postedAt: 1000,
-          expiresAt: 1000 + 86400000,
+          postedAt,
+          expiresAt: postedAt + 86400000,
         }),
       );
       // …and the same payload goes over the websocket so the dashboard refreshes live.
