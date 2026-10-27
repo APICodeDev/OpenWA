@@ -7763,6 +7763,36 @@ describe('SessionService', () => {
       expect(await service.getPresence('sess-uuid-1', 'c@c.us')).toBeNull();
     });
 
+    it('does not replay a presence publish that settles after its engine was replaced', async () => {
+      await startAndCaptureCallbacks();
+      let finishPublish: () => void = () => undefined;
+      mockEngine.setOnlinePresence.mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finishPublish = resolve;
+          }),
+      );
+      const publishing = service.setOnlinePresence('sess-uuid-1', false);
+      await flush();
+      await service.stop('sess-uuid-1');
+      const replacement = {
+        ...mockEngine,
+        initialize: jest.fn().mockResolvedValue(undefined),
+        setOnlinePresence: jest.fn().mockResolvedValue(undefined),
+      };
+      (engineFactory.create as jest.Mock).mockReturnValue(replacement);
+      await service.start('sess-uuid-1', { explicit: true });
+      await service.setOnlinePresence('sess-uuid-1', true);
+      finishPublish();
+      await publishing;
+      replacement.setOnlinePresence.mockClear();
+      const callbacks = (replacement.initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+      callbacks.onReady!('628123', 'Alice');
+      await flush();
+      expect(replacement.setOnlinePresence).toHaveBeenCalledTimes(1);
+      expect(replacement.setOnlinePresence).toHaveBeenCalledWith(true);
+    });
+
     it('does not publish own presence on ready when the caller never set one', async () => {
       const callbacks = await startAndCaptureCallbacks();
       mockEngine.setOnlinePresence.mockClear();

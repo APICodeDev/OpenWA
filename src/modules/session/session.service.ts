@@ -1418,7 +1418,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id);
     const engine = this.requireEngine(id);
     await engine.setOnlinePresence(available);
-    this.presence.setOwnIntent(id, available);
+    // A publish that settles after its engine was replaced must not leave a preference the replacement never had.
+    if (this.engines.isLive(id, engine)) this.presence.setOwnIntent(id, available);
   }
 
   /**
