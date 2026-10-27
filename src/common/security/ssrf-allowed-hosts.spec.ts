@@ -49,6 +49,40 @@ describe('SSRF_ALLOWED_HOSTS entries the guard can never match', () => {
     expect(lines[0]).not.toMatch(/token|user|n8n|corp|hooks|minio/);
   });
 
+  it('gives a value the URL parser refuses its own reason, apart from one it rewrites', () => {
+    process.env.SSRF_ALLOWED_HOSTS = '[::1]:8080, fe80::1%eth0, exa mple.com, 127.1';
+
+    warnUnusableAllowedHosts();
+
+    const [line] = warnings();
+    expect(line).toContain('entry 1 (a value the URL parser rejects)');
+    expect(line).toContain('entry 2 (a value the URL parser rejects)');
+    expect(line).toContain('entry 3 (a value the URL parser rejects)');
+    expect(line).toContain('entry 4 (a spelling the URL parser rewrites)');
+  });
+
+  it('lists at most 20 unusable entries in one line and counts the rest', () => {
+    process.env.SSRF_ALLOWED_HOSTS = Array.from({ length: 30000 }, (_, i) => `*.many${i}`).join(',');
+
+    warnUnusableAllowedHosts();
+
+    const lines = warnings();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('entry 20 (a wildcard)');
+    expect(lines[0]).not.toContain('entry 21 ');
+    expect(lines[0]).toContain('29980 more are not listed (the list shows at most 20)');
+    expect(lines[0].length).toBeLessThan(2000);
+  });
+
+  it('adds no summary when every unusable entry fits', () => {
+    process.env.SSRF_ALLOWED_HOSTS = Array.from({ length: 20 }, (_, i) => `*.few${i}`).join(',');
+
+    warnUnusableAllowedHosts();
+
+    expect(warnings()[0]).toContain('entry 20 (a wildcard)');
+    expect(warnings()[0]).not.toContain('not listed');
+  });
+
   // The URL parser rewrites these hosts, and the guard compares the rewritten hostname, so the spelling written in
   // the entry never equals it; the same address written as the parser prints it does.
   it('is right that a non-canonical IP address entry never matches, and that the canonical one does', async () => {

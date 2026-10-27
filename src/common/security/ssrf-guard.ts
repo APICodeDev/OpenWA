@@ -82,12 +82,12 @@ function allowedHostEntries(): string[] {
   );
 }
 
-/** What the URL parser makes of an entry used as a host, brackets stripped; undefined when it is no host at all. */
-function parsedHostname(entry: string): string | undefined {
+/** What the URL parser makes of an entry used as a host, brackets stripped; null when the parser rejects it. */
+function parsedHostname(entry: string): string | null {
   try {
     return new URL(`http://${entry.includes(':') ? `[${entry}]` : entry}/`).hostname.replace(/^\[|\]$/g, '');
   } catch {
-    return undefined;
+    return null;
   }
 }
 
@@ -101,27 +101,39 @@ function unusableAllowedHostReason(entry: string): string | undefined {
   if (entry.includes('*')) return 'a wildcard';
   if (/[/?#]/.test(entry)) return 'a path';
   if (/^[^:]+:\d*$/.test(entry)) return 'a port';
-  return parsedHostname(entry) === entry ? undefined : 'a spelling the URL parser rewrites';
+  const parsed = parsedHostname(entry);
+  if (parsed === null) return 'a value the URL parser rejects';
+  return parsed === entry ? undefined : 'a spelling the URL parser rewrites';
 }
 
 let warnedUnusableHosts = '';
 
+/** The most entries one warning lists, so a long list of unusable entries cannot flood the log. */
+const MAX_LISTED_UNUSABLE_HOSTS = 20;
+
 /**
  * An entry is compared with the hostname of the URL, so one the check above names never matches, and the refusal it
- * was meant to lift only says the destination is not allowed. Name such entries once, by position and reason.
+ * was meant to lift only says the destination is not allowed. Name such entries once, by position and reason, at most
+ * MAX_LISTED_UNUSABLE_HOSTS of them, and count the rest.
  */
 export function warnUnusableAllowedHosts(entries: readonly string[] = allowedHostEntries()): void {
-  const problems = entries.flatMap((entry, index) => {
+  const listed: string[] = [];
+  let unusable = 0;
+  entries.forEach((entry, index) => {
     const reason = entry ? unusableAllowedHostReason(entry) : undefined;
-    return reason ? [`entry ${index + 1} (${reason})`] : [];
+    if (!reason) return;
+    unusable++;
+    if (listed.length < MAX_LISTED_UNUSABLE_HOSTS) listed.push(`entry ${index + 1} (${reason})`);
   });
-  const key = problems.join(', ');
+  const more = unusable - listed.length;
+  const key = more > 0 ? `${listed.join(', ')}; ${more} more are not listed` : listed.join(', ');
   if (key === warnedUnusableHosts) return;
   warnedUnusableHosts = key;
-  if (problems.length > 0) {
+  if (unusable > 0) {
     logger.warn(
       'SSRF_ALLOWED_HOSTS entries must be a bare host name or an IP address written as the URL parser prints it ' +
-        `(127.0.0.1, ::1); these never match and are ignored: ${key}`,
+        `(127.0.0.1, ::1); these never match and are ignored: ${key}` +
+        (more > 0 ? ` (the list shows at most ${MAX_LISTED_UNUSABLE_HOSTS})` : ''),
     );
   }
 }
