@@ -29,7 +29,7 @@ import {
 } from './send-message.dto';
 import { isMentionWid } from './is-mention-wid.validator';
 import { BatchMessageStatus, BatchStatus } from '../entities/message-batch.entity';
-import { templateVariableNames } from '../batch-media.util';
+import { templateVariableNames } from '../../../common/utils/template-render';
 
 /**
  * A bulk mention is a WID or a placeholder that the item's `variables` fill in, so one batch can tag a

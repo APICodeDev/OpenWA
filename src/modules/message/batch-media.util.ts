@@ -1,13 +1,6 @@
 import { DataSource, In, QueryDeepPartialEntity } from 'typeorm';
+import { templateVariableNames } from '../../common/utils/template-render';
 import { BatchStatus, MessageBatch } from './entities/message-batch.entity';
-
-/**
- * The names a template body asks for, in the renderer's own syntax: canonical `{{ name }}` and the
- * legacy `{name}` (see PLACEHOLDER_PATTERN in common/utils/template-render.ts, which a spec keeps in step).
- */
-export function templateVariableNames(body: string): string[] {
-  return Array.from(body.matchAll(/\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g), match => match[1] ?? match[2]);
-}
 
 /**
  * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is

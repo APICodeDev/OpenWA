@@ -7,8 +7,7 @@ import { BulkMessageService } from './bulk-message.service';
 import { MessageBatch, BatchStatus } from './entities/message-batch.entity';
 import { Message } from './entities/message.entity';
 import type { MessageService } from './message.service';
-import { renderTemplate } from '../../common/utils/template-render';
-import { templateVariableNames } from './batch-media.util';
+import { renderTemplate, templateVariableNames } from '../../common/utils/template-render';
 import type { SendPacingService } from './send-pacing.service';
 
 describe('bulk media variable cleanup', () => {
