@@ -407,7 +407,7 @@ jobs:
     # a matching container image, and a runtime boot check on both architectures (boot-smoke runs the
     # published image on amd64 + arm64). Trades a few minutes of buildx/boot latency for release
     # safety.
-    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, promote, verify-published]
+    needs: [lint, test, test-postgres, dashboard, build, docker, boot-smoke, image-scan, release-tags, promote, verify-published]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -443,8 +443,11 @@ jobs:
           body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           # Same rule as the image channels below: any tag with a '-' suffix is a prerelease, so a
-          # tag kept off X.Y and latest can never become GitHub's "Latest" release either.
+          # tag kept off X.Y and latest can never become GitHub's "Latest" release either. A stable
+          # release that did not take the `latest` image channel (a patch to an older line) is not
+          # marked Latest, which the in-app update check reads. release-tags is false for both.
           prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ needs.release-tags.outputs.latest }}
 
   # ──── Docker Image with Version Tag ───────────────────────────────
   docker:
@@ -712,6 +715,9 @@ jobs:
     needs: [docker]
     outputs:
       tags: ${{ steps.select.outputs.tags }}
+      # Whether this release leads every `latest` channel it published to. The GitHub Release follows it,
+      # or an older line's patch release would become the Latest release the update check reads.
+      latest: ${{ steps.select.outputs.latest }}
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -764,6 +770,8 @@ jobs:
             return 1
           }
           selected=()
+          latest=true
+          [[ "$REF_NAME" != *-* ]] || latest=false
           while IFS= read -r tag; do
             [ -n "$tag" ] || continue
             channel="${tag##*:}"
@@ -779,6 +787,7 @@ jobs:
               current="$(channel_version "$tag")"
               if [ "$current" != absent ] && [ "$(printf '%s\n' "$VERSION" "$current" | LC_ALL=C sort -V | tail -n 1)" != "$VERSION" ]; then
                 echo "Keeping $tag at newer release $current"
+                [ "$channel" != latest ] || latest=false
                 continue
               fi
             elif [ "$channel" != "$VERSION" ]; then
@@ -795,6 +804,7 @@ jobs:
             echo 'tags<<RELEASE_TAGS'
             printf '%s\n' "${selected[@]}"
             echo 'RELEASE_TAGS'
+            echo "latest=$latest"
           } >> "$GITHUB_OUTPUT"
 
   # Applies the release tags (X.Y.Z — plus X.Y and latest for non-prereleases) to the image
