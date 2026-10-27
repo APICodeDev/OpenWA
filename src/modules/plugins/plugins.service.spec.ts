@@ -161,6 +161,25 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     }
   });
 
+  it('has the plugin state in the live directory the moment the update swaps it in', async () => {
+    // Boot recovery drops the backup once a live directory exists, so state that is copied after the swap
+    // is lost by a crash between the two. Observe the live directory right after the staging rename.
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    await pluginStorage.createPluginStorage('svc-plg').set('cursor', { lastId: 'msg-42' });
+    const live = path.join(pluginsDir, 'svc-plg');
+    const realRename = fs.renameSync.bind(fs);
+    let atSwap: string[] | undefined;
+    const rename = jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      realRename(from, to);
+      if (to === live && String(from).endsWith('.svc-plg.new')) atSwap = fs.readdirSync(live);
+    });
+
+    await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+    rename.mockRestore();
+
+    expect(atSwap).toEqual(expect.arrayContaining([expect.stringMatching(/^key-.*\.json$/)]));
+  });
+
   it('preserves a legacy (pre-encoding) ctx.storage file across an in-place package update', async () => {
     service.install({ buffer: pkg({ version: '1.0.0' }) });
     const storage = pluginStorage.createPluginStorage('svc-plg');

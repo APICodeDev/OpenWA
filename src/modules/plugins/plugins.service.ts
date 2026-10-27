@@ -596,6 +596,28 @@ export class PluginsService {
           action: 'plugin_update_backup_restored',
         });
       }
+      // ctx.storage files share the package directory under shipped defaults. Carry them into the staged
+      // tree before the swap, so the live directory is complete the moment it takes the name: a crash after
+      // the swap must not leave state only in a backup that boot recovery drops once a live directory exists.
+      // Everything is carried unless the new package explicitly supplied that exact path: encoded key-* files
+      // and the legacy <key>.json files the storage service still reads (every top-level *.json except the
+      // package's manifest.json/package.json). Copy (rather than move) so the rollback below still has a
+      // complete original directory.
+      const packagePaths = new Set(entries.map(entry => entry.relPath));
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (
+          !entry.isFile() ||
+          !entry.name.endsWith('.json') ||
+          entry.name === 'manifest.json' ||
+          entry.name === 'package.json' ||
+          packagePaths.has(entry.name)
+        ) {
+          continue;
+        }
+        const stateFile = path.join(staging, entry.name);
+        fs.copyFileSync(path.join(dir, entry.name), stateFile);
+        fs.chmodSync(stateFile, 0o600);
+      }
       fs.rmSync(backup, { recursive: true, force: true });
       fs.renameSync(dir, backup);
       fs.renameSync(staging, dir);
@@ -622,26 +644,6 @@ export class PluginsService {
     });
 
     try {
-      // ctx.storage files share the package directory under shipped defaults. Restore state from the
-      // backup unless the new package explicitly supplied that exact path: encoded key-* files and the
-      // legacy <key>.json files the storage service still reads (every top-level *.json except the
-      // package's manifest.json/package.json). Copy (rather than move) so the rollback below still has
-      // a complete original directory.
-      const packagePaths = new Set(entries.map(entry => entry.relPath));
-      for (const entry of fs.readdirSync(backup, { withFileTypes: true })) {
-        if (
-          !entry.isFile() ||
-          !entry.name.endsWith('.json') ||
-          entry.name === 'manifest.json' ||
-          entry.name === 'package.json' ||
-          packagePaths.has(entry.name)
-        ) {
-          continue;
-        }
-        const stateFile = path.join(dir, entry.name);
-        fs.copyFileSync(path.join(backup, entry.name), stateFile);
-        fs.chmodSync(stateFile, 0o600);
-      }
       this.pluginLoader.loadPlugin(dir);
       // Shutdown may have begun while the old version was being stopped: roll back below rather than
       // keep the new version untested with its backup deleted.
