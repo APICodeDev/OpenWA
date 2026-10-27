@@ -170,12 +170,13 @@ export function applyDatabaseSection(
     // Switching to sqlite: drop stale postgres connection keys, and reset the built-in
     // flag with them — there is no bundled Postgres backing a SQLite database.
     updates.POSTGRES_BUILTIN = 'false';
+    // A SQLite name is its file path; only the PostgreSQL name belongs to the mode being left.
+    if (existing.DATABASE_TYPE === 'postgres') staleKeys.add('DATABASE_NAME');
     for (const k of [
       'DATABASE_HOST',
       'DATABASE_PORT',
       'DATABASE_USERNAME',
       'DATABASE_PASSWORD',
-      'DATABASE_NAME',
       'DATABASE_POOL_SIZE',
       'DATABASE_SSL',
       'DATABASE_SSL_REJECT_UNAUTHORIZED',
