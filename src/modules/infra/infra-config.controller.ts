@@ -413,20 +413,45 @@ export class InfraConfigController {
     // Write to data/ so it persists across container restarts. Owner-only (0600): this file holds
     // the DB/S3/Redis credentials, so it must not be world-readable between save and next restart.
     // Staged beside the target and renamed over it: a write that fails part-way (disk full) would
-    // otherwise leave a truncated overlay for the next boot to load.
-    const staged = `${envPath}.${randomUUID()}.tmp`;
-    try {
-      writeSecretFile(staged, contents);
-      fs.renameSync(staged, envPath);
-    } catch (error) {
+    // otherwise leave a truncated overlay for the next boot to load. A symlink is written through to its
+    // target, and a file the filesystem will not replace by rename (a single-file bind mount, another
+    // device) is written in place, as before.
+    const target = this.overlayTarget(envPath);
+    if (target === undefined) {
+      writeSecretFile(envPath, contents);
+    } else {
+      const staged = `${target}.${randomUUID()}.tmp`;
       try {
-        fs.rmSync(staged, { force: true });
-      } catch {
-        // Keep the original write or rename error if cleanup also fails.
+        writeSecretFile(staged, contents);
+        fs.renameSync(staged, target);
+      } catch (error) {
+        try {
+          fs.rmSync(staged, { force: true });
+        } catch {
+          // Keep the original write or rename error if cleanup also fails.
+        }
+        if (!['EBUSY', 'EXDEV'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+        writeSecretFile(target, contents);
       }
-      throw error;
     }
     this.logger.log('Configuration saved', { envPath });
+  }
+
+  // The file a save replaces: the overlay itself, or what a symlink at its path points to. Undefined for a link
+  // that points nowhere, which only an in-place write through it can create.
+  private overlayTarget(envPath: string): string | undefined {
+    let isLink: boolean;
+    try {
+      isLink = fs.lstatSync(envPath).isSymbolicLink();
+    } catch {
+      return envPath;
+    }
+    if (!isLink) return envPath;
+    try {
+      return fs.realpathSync(envPath);
+    } catch {
+      return undefined;
+    }
   }
 
   private auditConfigSaved(config: SaveConfigDto, profiles: string[]): void {

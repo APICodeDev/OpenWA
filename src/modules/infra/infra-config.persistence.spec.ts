@@ -132,6 +132,41 @@ it('preserves the old overlay and removes staging after a replacement failure', 
   expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
 });
 
+it.each(['EBUSY', 'EXDEV'])('writes in place when the filesystem refuses the replacement with %s', async code => {
+  seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+  jest.mocked(fs.renameSync).mockImplementationOnce(() => {
+    throw Object.assign(new Error('the file cannot be replaced'), { code });
+  });
+  expect((await save({ engine: { headless: false } })).saved).toBe(true);
+  expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('false');
+  expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+});
+
+describe('an overlay that is a symbolic link', () => {
+  const managed = () => path.join(directory, 'managed', 'overlay.env');
+
+  it('is written through to its target and stays a link', async () => {
+    actualFs.mkdirSync(path.dirname(managed()));
+    actualFs.renameSync(file, managed());
+    actualFs.symlinkSync(managed(), file);
+    expect((await save({ engine: { headless: false } })).saved).toBe(true);
+    expect(actualFs.lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(managed())).PUPPETEER_HEADLESS).toBe('false');
+    expect(actualFs.readdirSync(path.dirname(file)).sort()).toEqual(['.env.generated']);
+    expect(actualFs.readdirSync(path.dirname(managed()))).toEqual(['overlay.env']);
+  });
+
+  it('is created at its target when the link points nowhere', async () => {
+    actualFs.unlinkSync(file);
+    actualFs.symlinkSync(path.join(directory, 'data', 'created.env'), file);
+    expect((await save({ engine: { headless: false } })).saved).toBe(true);
+    expect(actualFs.lstatSync(file).isSymbolicLink()).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(path.join(directory, 'data', 'created.env'))).PUPPETEER_HEADLESS).toBe(
+      'false',
+    );
+  });
+});
+
 it('creates and replaces the overlay owner-only', async () => {
   actualFs.unlinkSync(file);
   expect((await save({ engine: { headless: false } })).saved).toBe(true);
