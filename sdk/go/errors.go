@@ -97,7 +97,9 @@ type APIError struct {
 	Code string
 	// RetryAfter is how long to wait before retrying: the body's
 	// retryAfterSeconds when present, else the Retry-After header (seconds or
-	// an HTTP date). Zero when the response names no delay.
+	// an HTTP date). Zero when the response names no delay. A delay too long
+	// for a time.Duration is reported as the largest Duration (about 292
+	// years), a sentinel for "do not retry", not the delay the server named.
 	RetryAfter time.Duration
 	// Header is the response header.
 	Header http.Header
