@@ -412,3 +412,24 @@ describe('Redis username ownership', () => {
     expect(savedValues(existing, ctx).REDIS_USERNAME).toBe('worker');
   });
 });
+
+describe('PostgreSQL database name', () => {
+  const external = { host: 'db.example.invalid', username: 'app', password: 'DummyPassword123456' };
+
+  it.each([['sqlite'], [undefined]])('does not keep a SQLite file path as the name (stored type %s)', type => {
+    const existing = { ...(type ? { DATABASE_TYPE: type } : {}), DATABASE_NAME: './data/customer.sqlite' };
+    const ctx = context();
+    applyDatabaseSection({ type: 'postgres', builtIn: false, ...external }, existing, ctx);
+    expect(savedValues(existing, ctx)).not.toHaveProperty('DATABASE_NAME');
+  });
+
+  it('keeps the stored name of a PostgreSQL configuration and writes one that is sent', () => {
+    const existing = { DATABASE_TYPE: 'postgres', DATABASE_NAME: 'appdb' };
+    const kept = context();
+    applyDatabaseSection({ type: 'postgres', builtIn: false, ...external }, existing, kept);
+    expect(savedValues(existing, kept).DATABASE_NAME).toBe('appdb');
+    const sent = context();
+    applyDatabaseSection({ type: 'postgres', builtIn: false, ...external, database: 'other' }, existing, sent);
+    expect(savedValues(existing, sent).DATABASE_NAME).toBe('other');
+  });
+});

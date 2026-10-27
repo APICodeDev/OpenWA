@@ -130,14 +130,16 @@ export class InfraConfigController {
     // Secrets (passwords, S3 keys) are never returned; the form shows a "set" indicator
     // and an empty submission preserves the stored value (see saveConfig). This lets
     // the dashboard hydrate the form so a save no longer overwrites unseen fields (#226).
+    const databaseType = effective('DATABASE_TYPE') === 'postgres' ? 'postgres' : 'sqlite';
     return {
       database: {
-        type: effective('DATABASE_TYPE') === 'postgres' ? 'postgres' : 'sqlite',
+        type: databaseType,
         ...savedBuiltInMode('database', saved),
         host: effective('DATABASE_HOST') || '',
         port: effective('DATABASE_PORT') || '',
         username: effective('DATABASE_USERNAME') || '',
-        database: effective('DATABASE_NAME') || '',
+        // The form sends this back for a PostgreSQL save; under SQLite the key holds a file path, not a name.
+        database: databaseType === 'postgres' ? effective('DATABASE_NAME') || '' : '',
         schema: effective('POSTGRES_SCHEMA') || 'public',
         poolSize: Number(effective('DATABASE_POOL_SIZE')) || 10,
         sslEnabled: effective('DATABASE_SSL') === 'true',

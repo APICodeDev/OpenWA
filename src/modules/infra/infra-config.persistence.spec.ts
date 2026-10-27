@@ -94,6 +94,34 @@ it.each([true, false])('preserves the SQLite file path with an explicit type %s'
   expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_NAME).toBe('./data/customer.sqlite');
 });
 
+describe('a SQLite file path in DATABASE_NAME', () => {
+  const stored = { DATABASE_NAME: './data/customer.sqlite' };
+  const postgres = { database: { type: 'postgres' as const, host: 'db.example.invalid', username: 'app' } };
+  const passwordless = { ...postgres, database: { ...postgres.database, password: 'DummyPassword123456' } };
+
+  it.each([
+    ['sqlite', ''],
+    ['postgres', 'appdb'],
+  ])('is reported to the form as a name only under %s', (type, name) => {
+    seed({ ...stored, DATABASE_TYPE: type, ...(type === 'postgres' ? { ...database, DATABASE_NAME: 'appdb' } : {}) });
+    expect(build().controller.getConfig().database.database).toBe(name);
+  });
+
+  it('does not become the PostgreSQL database name on a direct switch', async () => {
+    seed(stored);
+    expect((await save(passwordless)).saved).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(file))).not.toHaveProperty('DATABASE_NAME');
+  });
+
+  it('does not become the PostgreSQL database name after a SQLite save', async () => {
+    seed(stored);
+    expect((await save({ database: { type: 'sqlite' } })).saved).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_NAME).toBe('./data/customer.sqlite');
+    expect((await save(passwordless)).saved).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(file))).not.toHaveProperty('DATABASE_NAME');
+  });
+});
+
 it('drops the PostgreSQL database name when leaving PostgreSQL for SQLite', () => {
   seed({ DATABASE_TYPE: 'postgres', DATABASE_HOST: 'db.example.invalid', DATABASE_NAME: 'openwa' });
   const result = build().controller.saveConfig({ database: { type: 'sqlite' } });
