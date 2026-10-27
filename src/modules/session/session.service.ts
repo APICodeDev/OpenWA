@@ -63,6 +63,7 @@ import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { chatKind } from '../../engine/identity/wa-id';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
+import { phoneKey } from './message-mutation-guard';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
@@ -1342,7 +1343,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     // On whatsapp-web.js a code requested for a number that is already linked can make WhatsApp revoke that
     // device. The number is the caller's to choose, so a session this key may not touch could be logged out
     // through this one; a number another session holds is refused. The session's own number is its to re-link.
-    if (await this.sessionRepository.exists({ where: { phone: phoneNumber, id: Not(id) } })) {
+    // Baileys adds a companion device and showed no such effect, so two of its sessions may share a number.
+    if (this.pairingMayRevoke() && (await this.otherSessionHoldsNumber(id, phoneNumber))) {
       throw new ConflictException(
         'That number is linked to another session. Log that session out or delete it before pairing this one.',
       );
@@ -1350,6 +1352,24 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
     const pairingCode = await engine.requestPairingCode(phoneNumber);
     return { pairingCode, status: session.status };
+  }
+
+  /** Whether the engine in use is whatsapp-web.js, where a pairing request can revoke a linked device. */
+  private pairingMayRevoke(): boolean {
+    return (this.configService?.get<string>('engine.type') ?? 'whatsapp-web.js') === 'whatsapp-web.js';
+  }
+
+  /**
+   * Whether another session stores this number as its phone, whichever way the country writes its mobile
+   * marker digit (the spellings the stored phone and the typed number can differ by).
+   */
+  private async otherSessionHoldsNumber(id: string, phoneNumber: string): Promise<boolean> {
+    const key = phoneKey(phoneNumber);
+    const others = await this.sessionRepository.find({
+      where: { id: Not(id), phone: Not(IsNull()) },
+      select: { phone: true },
+    });
+    return others.some(other => other.phone !== null && phoneKey(other.phone) === key);
   }
 
   getEngine(id: string): IWhatsAppEngine | undefined {
