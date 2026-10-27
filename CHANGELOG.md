@@ -311,6 +311,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run every `message:sending` handler, a moderation veto included, for a send that a hook handler schedules after its own call has ended; it was skipped as re-entrant.
 - Redrive only the dead letters written under an ingress instance's current session binding.
 - Drop a null optional field from plugin catalog entries instead of answering it.
+- Fix the JavaScript SDK raw requests with a fragment in the path dropping their query parameters.
+- Cap the JavaScript SDK `retryAfterSeconds` at 2147483 seconds, the longest delay `setTimeout` accepts once multiplied by 1000.
 
 ### Dependencies
 
