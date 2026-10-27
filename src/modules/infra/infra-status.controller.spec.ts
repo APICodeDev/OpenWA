@@ -318,6 +318,12 @@ describe('InfraStatusController.getStatus envPinned', () => {
     expect((await buildController().getStatus()).envPinned).toEqual(['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT']);
   });
 
+  it('reports a Redis TLS pin beside the built-in selection', async () => {
+    recordPinnedEnvKeys({ REDIS_TLS: 'true' });
+
+    expect((await buildController().getStatus()).envPinned).toEqual(['REDIS_TLS']);
+  });
+
   it('reports an empty list when nothing above data/.env.generated supplies a selection key', async () => {
     recordPinnedEnvKeys({});
 

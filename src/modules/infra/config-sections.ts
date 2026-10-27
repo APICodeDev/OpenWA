@@ -203,6 +203,12 @@ export function applyRedisSection(
     // would make the client AUTH against a passwordless server on the next boot.
     updates.REDIS_HOST = 'redis';
     updates.REDIS_PORT = '6379';
+    // It also listens in plaintext and defines no ACL user, so TLS and a username kept from an external
+    // server would fail the connection. Beside a host pinned elsewhere the stored values stay with that server.
+    if (!hostPinnedElsewhere('redis')) {
+      updates.REDIS_TLS = 'false';
+      staleKeys.add('REDIS_USERNAME');
+    }
     if (!redis.password) staleKeys.add('REDIS_PASSWORD');
   } else if (!redisBuiltIn) {
     // External Redis (explicit, or inherited when builtIn is absent)

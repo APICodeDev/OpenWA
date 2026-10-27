@@ -160,6 +160,7 @@ it.each(cases)(
         });
       else if (!(builtIn === undefined && pin === 'external')) {
         Object.assign(expected, { REDIS_HOST: 'redis', REDIS_PORT: '6379' });
+        if (pin !== 'external') expected.REDIS_TLS = 'false';
         delete expected.REDIS_PASSWORD;
       }
     } else {
@@ -375,4 +376,39 @@ it.each(['true', 'false'])('keeps external Redis credentials independently of st
   applyRedisSection({ enabled: true, builtIn: false, host: existing.REDIS_HOST, password: '' }, existing, ctx);
 
   expect(savedValues(existing, ctx).REDIS_PASSWORD).toBe('StoredRedis123456');
+});
+
+describe('Redis username ownership', () => {
+  const existing = {
+    REDIS_ENABLED: 'true',
+    REDIS_BUILTIN: 'true',
+    REDIS_HOST: 'redis',
+    REDIS_PORT: '6381',
+    REDIS_USERNAME: 'worker',
+    REDIS_PASSWORD: 'DummyRedisPassword123456',
+    REDIS_TLS: 'false',
+  };
+
+  it.each([true, undefined])('clears a generated username for the bundled preset %s', builtIn => {
+    const ctx = context();
+    applyRedisSection({ enabled: true, builtIn, password: '' }, existing, ctx);
+    expect(savedValues(existing, ctx).REDIS_USERNAME).toBeUndefined();
+  });
+
+  it('preserves the explicit preset tuple beside an external host pin', () => {
+    process.env.REDIS_HOST = 'cache.external.invalid';
+    recordPinnedEnvKeys({ REDIS_HOST: process.env.REDIS_HOST });
+    const ctx = context();
+    applyRedisSection({ enabled: true, builtIn: true, password: '' }, existing, ctx);
+    const saved = savedValues(existing, ctx);
+    expect(saved.REDIS_USERNAME).toBe('worker');
+    expect(saved.REDIS_PORT).toBe('6379');
+    expect(saved.REDIS_PASSWORD).toBeUndefined();
+  });
+
+  it('keeps a named external username when the choice stays external', () => {
+    const ctx = context();
+    applyRedisSection({ enabled: true, builtIn: false, host: 'cache.external.invalid', password: '' }, existing, ctx);
+    expect(savedValues(existing, ctx).REDIS_USERNAME).toBe('worker');
+  });
 });

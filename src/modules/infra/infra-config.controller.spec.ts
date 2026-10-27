@@ -43,6 +43,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { resolveStorageRoot } from '../../config/storage-root';
 import { validateEnv } from '../../config/env.validation';
+import { redisConnectionOptions } from '../../config/redis-options';
 import {
   EXPECTED_MODE,
   EXPECTED_MODE_FLAG_PINNED,
@@ -729,6 +730,7 @@ describe('InfraConfigController.saveConfig byte-identical regression (full dashb
         REDIS_ENABLED: 'true',
         REDIS_HOST: 'redis',
         REDIS_PORT: '6379',
+        REDIS_TLS: 'false',
         S3_ACCESS_KEY_ID: 'minioadmin',
         S3_BUCKET: 'openwa',
         S3_ENDPOINT: 'http://minio:9000',
@@ -3000,5 +3002,154 @@ describe('InfraConfigController audit trail (light-dependency handlers)', () => 
     const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: { profiles: string[] } }]>;
     expect(calls[0][0]).toBe(AuditAction.INFRA_RESTART_REQUESTED);
     expect(calls[0][1].metadata.profiles).toEqual(['postgres']);
+  });
+});
+
+describe('InfraConfigController built-in Redis transport', () => {
+  const external =
+    'DATABASE_TYPE=sqlite\nSTORAGE_TYPE=local\nREDIS_ENABLED=true\nREDIS_BUILTIN=false\n' +
+    'REDIS_HOST=cache.external.invalid\nREDIS_PORT=6379\nREDIS_TLS=true\n';
+  const keys = ['REDIS_TLS', 'REDIS_HOST', 'REDIS_ENABLED', 'REDIS_BUILTIN', 'QUEUE_ENABLED', 'CACHE_ENABLED'];
+  let saved: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    saved = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    recordOsEnvKeys({});
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(external);
+    (fs.writeFileSync as jest.Mock).mockClear();
+  });
+  afterEach(() => {
+    for (const key of keys) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    recordOsEnvKeys({});
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+  });
+
+  function write(redis: NonNullable<SaveConfigDto['redis']>): Record<string, string> {
+    const controller = new InfraConfigController({} as never, {} as never, {} as never);
+    expect(controller.saveConfig({ redis }).saved).toBe(true);
+    const content = jest.mocked(fs.writeFileSync).mock.calls.at(-1)![1] as string;
+    return jest.requireActual<typeof import('dotenv')>('dotenv').parse(content);
+  }
+
+  it('resets saved TLS when switching to the plaintext built-in Redis', () => {
+    const env = write({ enabled: true, builtIn: true });
+    expect(env.REDIS_HOST).toBe('redis');
+    expect(env.REDIS_BUILTIN).toBe('true');
+    Object.assign(process.env, { REDIS_HOST: env.REDIS_HOST, REDIS_TLS: env.REDIS_TLS ?? '' });
+    expect(redisConnectionOptions().tls).toBeUndefined();
+  });
+
+  it('keeps TLS for an external Redis configuration', () => {
+    const env = write({ enabled: true, builtIn: false, host: 'cache.external.invalid' });
+    Object.assign(process.env, { REDIS_HOST: env.REDIS_HOST, REDIS_TLS: env.REDIS_TLS });
+    expect(redisConnectionOptions()).toMatchObject({ host: 'cache.external.invalid', tls: {} });
+  });
+
+  it('keeps TLS when an external host pin overrides a saved built-in choice', () => {
+    process.env.REDIS_HOST = 'cache.external.invalid';
+    process.env.REDIS_TLS = 'true';
+    recordPinnedEnvKeys({ REDIS_HOST: 'cache.external.invalid', REDIS_TLS: 'true' });
+    const env = write({ enabled: true, builtIn: true });
+    expect(env.REDIS_TLS).toBe('true');
+    expect(redisConnectionOptions()).toMatchObject({ host: 'cache.external.invalid', tls: {} });
+  });
+});
+
+describe('InfraConfigController built-in Redis username', () => {
+  const keys = [
+    'REDIS_USERNAME',
+    'REDIS_PASSWORD',
+    'REDIS_HOST',
+    'REDIS_PORT',
+    'REDIS_TLS',
+    'REDIS_ENABLED',
+    'REDIS_BUILTIN',
+    'QUEUE_ENABLED',
+    'CACHE_ENABLED',
+  ];
+  let previous: Record<string, string | undefined>;
+  const stored = (values: Record<string, string> = {}) =>
+    Object.entries({
+      DATABASE_TYPE: 'sqlite',
+      STORAGE_TYPE: 'local',
+      REDIS_ENABLED: 'true',
+      REDIS_BUILTIN: 'false',
+      REDIS_HOST: 'cache.external.invalid',
+      REDIS_PORT: '6381',
+      REDIS_USERNAME: 'worker',
+      REDIS_PASSWORD: 'DummyRedisPassword123456',
+      REDIS_TLS: 'false',
+      QUEUE_ENABLED: 'false',
+      CACHE_ENABLED: 'false',
+      ...values,
+    })
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n') + '\n';
+
+  beforeEach(() => {
+    previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    recordOsEnvKeys({});
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(true);
+    (fs.readFileSync as jest.Mock).mockReturnValue(stored());
+    (fs.writeFileSync as jest.Mock).mockClear();
+  });
+  afterEach(() => {
+    for (const key of keys) {
+      if (previous[key] === undefined) delete process.env[key];
+      else process.env[key] = previous[key];
+    }
+    recordOsEnvKeys({});
+    recordPinnedEnvKeys({});
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (fs.readFileSync as jest.Mock).mockReturnValue('');
+  });
+
+  function write(redis: NonNullable<SaveConfigDto['redis']>): Record<string, string> {
+    const controller = new InfraConfigController({} as never, {} as never, {} as never);
+    expect(controller.saveConfig({ redis }).saved).toBe(true);
+    return jest
+      .requireActual<typeof import('dotenv')>('dotenv')
+      .parse(jest.mocked(fs.writeFileSync).mock.calls.at(-1)![1] as string);
+  }
+
+  it('clears an old generated username when selecting the bundled Redis', () => {
+    expect(write({ enabled: true, builtIn: true }).REDIS_USERNAME).toBeUndefined();
+  });
+
+  it.each(['host', 'project file'])('allows the default username from the %s', origin => {
+    process.env.REDIS_USERNAME = 'default';
+    recordOsEnvKeys(origin === 'host' ? { REDIS_USERNAME: 'default' } : {});
+    recordPinnedEnvKeys({ REDIS_USERNAME: 'default' });
+    expect(write({ enabled: true, builtIn: true }).REDIS_USERNAME).toBeUndefined();
+  });
+
+  it('keeps an external pinned username and the deliberate preset port/password behavior', () => {
+    process.env.REDIS_HOST = 'cache.external.invalid';
+    recordPinnedEnvKeys({ REDIS_HOST: process.env.REDIS_HOST });
+    const saved = write({ enabled: true, builtIn: true });
+    expect(saved.REDIS_USERNAME).toBe('worker');
+    expect(saved.REDIS_PORT).toBe('6379');
+    expect(saved.REDIS_PASSWORD).toBeUndefined();
+  });
+
+  it('accepts a named user for explicit external mode at the bundled host spelling', () => {
+    expect(write({ enabled: true, builtIn: false, host: 'redis' }).REDIS_USERNAME).toBe('worker');
+  });
+
+  it('permits an inactive named username pin', () => {
+    process.env.REDIS_USERNAME = 'worker';
+    recordPinnedEnvKeys({ REDIS_USERNAME: 'worker' });
+    (fs.readFileSync as jest.Mock).mockReturnValue(stored({ REDIS_ENABLED: 'false' }));
+    expect(() => write({ enabled: false, builtIn: true })).not.toThrow();
   });
 });
