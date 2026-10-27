@@ -184,7 +184,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep a reopened proxy editor open on the Sessions page when an earlier save of the same session answers late.
 - Keep a template draft and a newer delete confirmation on the Templates page when an earlier delete answers late.
 - Keep a new-session draft on the Sessions page when an earlier create answers late.
-- Keep a pasted phone number whole in the pairing field of the Sessions page; a native 15-character cap cut "+62 812-3456-7890" and could request a code for the wrong account.
+- Keep a pasted phone number whole in the pairing field of the Sessions page; a native 15-character cap cut "+62 812-3456-7890" and could request a code for the wrong account. A paste with more than 15 digits, or with text other than digits, a plus and phone separators, is refused with the field error instead of requesting a code.
+- Keep Shift+Tab inside a dashboard dialog when focus is on the dialog itself.
 - Announce a refused sign-in and a failed first load of the Dashboard to screen readers.
 - Count the sessions on the Dashboard from the session list while the statistics are unavailable, where the overview read "Showing 3 of 0 sessions" and the Connected Sessions card read 0.
 - Show a failed session read on the Chats page with a Retry button instead of "No connected sessions".
