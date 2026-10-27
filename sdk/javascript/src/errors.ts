@@ -183,7 +183,8 @@ function retryAfterSeconds(fromBody: unknown, header: string | null | undefined)
   if (typeof fromBody === 'number' && Number.isFinite(fromBody) && fromBody >= 0) return Math.ceil(fromBody);
   const value = header?.trim();
   if (!value) return undefined;
-  if (/^\d+$/.test(value)) return Number(value);
+  // A digit string past Number's range reads as Infinity, which setTimeout turns into an immediate retry.
+  if (/^\d+$/.test(value)) return Number.isFinite(Number(value)) ? Number(value) : undefined;
   // Date.parse also accepts '-5' or '1.5' as a past date, which would read as "retry now".
   if (!/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) return undefined;
   const at = Date.parse(value);

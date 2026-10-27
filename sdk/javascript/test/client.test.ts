@@ -321,7 +321,7 @@ describe('OpenWAClient', () => {
     expect(dated.retryAfterSeconds).toBeGreaterThanOrEqual(0);
     expect(dated.retryAfterSeconds).toBeLessThanOrEqual(3);
     // Only whole seconds or an HTTP date count; Date.parse would read '-5' or '1.5' as a past date.
-    for (const bad of ['soon', '-5', '1.5', 'Tue 5']) {
+    for (const bad of ['soon', '-5', '1.5', 'Tue 5', '9'.repeat(400)]) {
       expect((await fail({ status: 503, headers: { 'Retry-After': bad } })).retryAfterSeconds).toBeUndefined();
     }
 
