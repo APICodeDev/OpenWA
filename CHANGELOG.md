@@ -263,7 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update only the supplied fields on `PUT /api/sessions/{sessionId}/templates/{id}` and answer 404 for a template deleted meanwhile, where an overlapping edit was undone or the template came back.
 - Report a status whose row was removed while its media was written as not stored, and delete its file.
 - Accept an empty `url` next to `base64` in status posts and media conversion.
-- Write each patched dependency file to a temporary file and rename it over the original, so a write that fails part-way, such as on a full disk, leaves the file unchanged; a best-effort patch is then skipped, and any other install fails instead of keeping a truncated file.
+- Write each dependency file the postinstall scripts rewrite, except the whatsapp-web.js diff patch, to a temporary file and rename it over the original, so a write that fails part-way, such as on a full disk, leaves the file unchanged; a best-effort patch is then skipped, and any other install fails instead of keeping a truncated file.
 - Keep the `latest` and `X.Y` image tags from moving to an older release when an older tag is released or re-run.
 - Create the GitHub Release from a notes file, so a CHANGELOG section containing a line that is exactly `EOF` no longer breaks it.
 - Mirror the PHP SDK to `openwa-php` only from `main` and only while its content matches `main`, so a manual run from another branch or a re-run of an older push no longer replaces a newer mirror.

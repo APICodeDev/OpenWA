@@ -6735,7 +6735,7 @@ Generate a shareable WhatsApp call link.
 
 Reject a currently ringing incoming call. **Baileys only**: the whatsapp-web.js engine answers `501`. Only a live call can be rejected: the id is valid while the call rings (a short server-side cache); afterwards it expires.
 
-A failed rejection can be retried only while the same call is still ringing; a call that ends or rings again during the attempt is not restored. If the call is accepted, rejected or missed while a rejection is pending, that outcome is reported once as the call's `call.accepted`, `call.rejected` or `call.missed` event, even when the rejection then fails or times out. A completed rejection that no longer belongs to the current call, because it ended or the connection was cleared meanwhile, reports nothing.
+A failed rejection can be retried only while the same call is still ringing; a call that ends or rings again during the attempt is not restored. If the call is accepted, rejected or missed while a rejection is pending, that outcome is reported once as the call's `call.accepted`, `call.rejected` or `call.missed` event, even when the rejection then fails or times out. A rejection that completes after a `terminate` for the same call still reports `call.rejected`. One that no longer belongs to the current call, because the connection was cleared or another caller took the call id meanwhile, reports nothing.
 
 **Auth:** API key (OPERATOR)
 
