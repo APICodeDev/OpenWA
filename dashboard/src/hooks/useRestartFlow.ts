@@ -4,6 +4,13 @@ import { restartPollAttempts } from '../utils/restartPoll';
 
 // 'unknown': a proxy answered in the gateway's place (a 504, a Cloudflare 52x, or a 502 with no gateway
 // code), so whether the restart went through cannot be told.
+// One readiness request is given this long before it counts as a failed attempt and the next one is made; the
+// elapsed deadline of the whole wait is still what ends it.
+const READINESS_ATTEMPT_TIMEOUT_MS = 5000;
+// The restart request can take a while (a first-time enable pulls an image before it answers), but not forever:
+// the restarting view has no close button.
+const RESTART_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
 export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'error' | 'unknown';
 
 export interface RestartOpenRequest {
@@ -145,8 +152,14 @@ export function useRestartFlow(): RestartFlow {
 
     const check = async () => {
       if (!isCurrent()) return;
+      // Each attempt has its own signal, so one that hangs is given up on and counted, and the wait goes on.
+      const attempt = new AbortController();
+      const abortAttempt = () => attempt.abort();
+      controller.signal.addEventListener('abort', abortAttempt, { once: true });
+      const timer = setTimeout(abortAttempt, READINESS_ATTEMPT_TIMEOUT_MS);
+      pollTimeoutsRef.current.add(timer);
       try {
-        await infraApi.healthCheck(controller.signal);
+        await infraApi.healthCheck(attempt.signal);
         if (!settle('success')) return;
         // With warnings on screen the operator reloads by hand, after reading them.
         if (!hasWarnings) {
@@ -159,6 +172,10 @@ export function useRestartFlow(): RestartFlow {
         attempts++;
         if (attempts < maxAttempts) schedulePollTimeout(check, 1000);
         else settle('error');
+      } finally {
+        clearTimeout(timer);
+        pollTimeoutsRef.current.delete(timer);
+        controller.signal.removeEventListener('abort', abortAttempt);
       }
     };
 
@@ -184,8 +201,13 @@ export function useRestartFlow(): RestartFlow {
     // fail sometimes (the server may go down before it answers).
     let estimatedTime: number | undefined;
     let warnings: string[] = [];
+    const request = new AbortController();
+    const abortRequest = () => request.abort();
+    controller.signal.addEventListener('abort', abortRequest, { once: true });
+    const requestTimer = setTimeout(abortRequest, RESTART_REQUEST_TIMEOUT_MS);
+    pollTimeoutsRef.current.add(requestTimer);
     try {
-      const response = await infraApi.restart(profiles.pending, profilesToRemove);
+      const response = await infraApi.restart(profiles.pending, profilesToRemove, request.signal);
       if (!isCurrent()) return;
       estimatedTime = response.estimatedTime;
       if (response.estimatedTime) {
@@ -196,6 +218,13 @@ export function useRestartFlow(): RestartFlow {
       setRestartWarnings(warnings);
     } catch (err) {
       if (!isCurrent()) return;
+      // Given up on after its bound: the server never answered, which the poll below could only misread.
+      if (request.signal.aborted) {
+        stopCountdown();
+        setRestartCountdown(0);
+        setRestartStatus('error');
+        return;
+      }
       // An HTTP status (a proxy 503 included) means no shutdown was confirmed and the old
       // process may still be serving, so a readiness poll would report a restart that never happened.
       // Only a status-less network failure is the expected sign of the server going down mid-answer.
@@ -217,6 +246,10 @@ export function useRestartFlow(): RestartFlow {
         setRestartStatus('error');
         return;
       }
+    } finally {
+      clearTimeout(requestTimer);
+      pollTimeoutsRef.current.delete(requestTimer);
+      controller.signal.removeEventListener('abort', abortRequest);
     }
     if (!isCurrent()) return;
 

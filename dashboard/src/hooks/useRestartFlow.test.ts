@@ -306,3 +306,72 @@ test('a successful readiness response retires its deadline', async () => {
   assert.equal(result.current.restartStatus, 'success');
   assert.equal(readySignals.length, 1);
 });
+
+test('a readiness attempt that hangs is given up on and the next one is made before the deadline', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1800000000000 });
+  // A warning keeps the success view open instead of scheduling a page reload.
+  restartAnswer = () =>
+    Promise.resolve(
+      jsonResponse({
+        message: 'Restarting',
+        restarting: true,
+        estimatedTime: 5,
+        orchestration: { errors: ['A service needs attention'] },
+      }),
+    );
+  const hung = deferred();
+  let attempt = 0;
+  readyAnswer = signal =>
+    ++attempt === 1 ? abortReady(hung.promise, signal) : Promise.resolve(jsonResponse({ status: 'ok', details: {} }));
+  const { result } = rtl.renderHook(() => useRestartFlow());
+  await rtl.act(async () => {
+    void result.current.start();
+    await settleRestartReply();
+  });
+  await rtl.act(async () => {
+    mock.timers.tick(3000);
+    await settleRestartReply();
+  });
+  assert.equal(readySignals.length, 1);
+  assert.equal(result.current.restartStatus, 'waiting');
+  await rtl.act(async () => {
+    mock.timers.tick(5000);
+    await settleRestartReply();
+  });
+  assert.equal(readySignals[0]?.aborted, true);
+  assert.equal(result.current.restartStatus, 'waiting');
+  await rtl.act(async () => {
+    mock.timers.tick(1000);
+    await settleRestartReply();
+  });
+  assert.equal(readySignals.length, 2);
+  assert.equal(result.current.restartStatus, 'success');
+});
+
+test('a restart request that never answers ends in the error view at its bound, with no readiness poll', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1800000000000 });
+  restartAnswer = signal => abortReady(deferred().promise, signal);
+  const { result } = rtl.renderHook(() => useRestartFlow());
+  await rtl.act(async () => {
+    void result.current.start();
+    await settleRestartReply();
+  });
+  assert.equal(result.current.restartStatus, 'restarting');
+  await rtl.act(async () => {
+    mock.timers.tick(4 * 60 * 1000);
+    await settleRestartReply();
+  });
+  assert.equal(result.current.restartStatus, 'restarting');
+  await rtl.act(async () => {
+    mock.timers.tick(61 * 1000);
+    await settleRestartReply();
+  });
+  assert.equal(result.current.restartStatus, 'error');
+  assert.equal(result.current.restartError, null);
+  assert.equal(result.current.restartCountdown, 0);
+  await rtl.act(async () => {
+    mock.timers.tick(120000);
+    await settleRestartReply();
+  });
+  assert.equal(readySignals.length, 0);
+});
