@@ -68,8 +68,9 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
   return parts.join(' · ');
 }
 
+// The most digits a phone number has. A longer paste is kept whole and refused, never cut to a number nobody typed.
 const PAIRING_PHONE_MAX_DIGITS = 15;
-const pairingDigits = (text: string) => normalizePhoneText(text).replace(/\D/g, '').slice(0, PAIRING_PHONE_MAX_DIGITS);
+const pairingDigits = (text: string) => normalizePhoneText(text).replace(/\D/g, '');
 
 export function Sessions() {
   const { t } = useTranslation();
@@ -649,6 +650,7 @@ export function Sessions() {
     }
   };
 
+  const pairingPhoneTooLong = pairingDigits(phoneNumber).length > PAIRING_PHONE_MAX_DIGITS;
   const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
   // A failed read says nothing about how many sessions there are: with none held, the banner is the only message.
   const listUnknown = listFailed && sessions.length === 0;
@@ -897,16 +899,23 @@ export function Sessions() {
                       value={phoneNumber}
                       // A composition in progress is left as typed, since rewriting it garbles what the IME commits;
                       // it is read when the composition ends. Pasted and directly typed text is read at once.
-                      // The cap is on the digits, not a native maxLength: that counts the separators of a pasted
-                      // "+62 812-3456-7890" and cuts the number short.
+                      // No native maxLength: it counts the separators of a pasted "+62 812-3456-7890" and cuts it
+                      // short. A paste of more than 15 digits is kept and refused below, with no request.
+                      aria-invalid={pairingPhoneTooLong || undefined}
+                      aria-describedby={pairingPhoneTooLong ? 'pairing-phone-error' : undefined}
                       onChange={e =>
                         setPhoneNumber(
                           (e.nativeEvent as InputEvent).isComposing ? e.target.value : pairingDigits(e.target.value),
                         )
                       }
                       onCompositionEnd={e => setPhoneNumber(pairingDigits(e.currentTarget.value))}
-                      onKeyDown={e => e.key === 'Enter' && handleGeneratePairingCode()}
+                      onKeyDown={e => e.key === 'Enter' && !pairingPhoneTooLong && handleGeneratePairingCode()}
                     />
+                    {pairingPhoneTooLong && (
+                      <p id="pairing-phone-error" className="input-error" role="alert">
+                        {t('sessions.pairing.invalidPhone')}
+                      </p>
+                    )}
                     <p className="input-hint" style={{ marginBottom: '1.5rem' }}>
                       {t('sessions.pairing.phoneHint')}
                     </p>

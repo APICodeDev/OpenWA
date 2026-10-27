@@ -757,8 +757,9 @@ test('the pairing phone field leaves a composition in progress alone and reads i
 });
 
 // A native maxLength counts the separators of a pasted number and cuts it before the page reads it: "+62 812-3456-7890"
-// is 17 characters but 12 digits. The digits are capped instead, at the 15 a number can have.
-test('the pairing phone field caps the digits it keeps, not the characters a paste may carry', async () => {
+// is 17 characters but 12 digits. And cutting a number of more than 15 digits would leave a valid-looking one nobody
+// typed, so it is kept whole, refused in the field, and no pairing code is requested for it.
+test('the pairing phone field keeps a formatted paste whole and refuses one of more than 15 digits', async () => {
   const { screen, fireEvent, within } = rtl;
   resetFetchCalls();
   renderSessions();
@@ -769,12 +770,34 @@ test('the pairing phone field caps the digits it keeps, not the characters a pas
   await screen.findByAltText('QR');
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
   const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
+  const generate = screen.getByRole('button', { name: 'Generate Pairing Code' }) as HTMLButtonElement;
 
   assert.equal(phoneInput.hasAttribute('maxlength'), false, 'a native maxLength cuts a pasted formatted number');
   fireEvent.change(phoneInput, { target: { value: '+62 812-3456-7890' } });
   assert.equal(phoneInput.value, '6281234567890');
-  fireEvent.change(phoneInput, { target: { value: '1234567890123456789' } });
-  assert.equal(phoneInput.value, '123456789012345');
+  assert.equal(generate.disabled, false);
+  assert.equal(phoneInput.getAttribute('aria-invalid'), null);
+  assert.equal(screen.queryByText(/Enter a valid phone number/) === null, true);
+
+  const tooLong = '1234567890123456789';
+  fireEvent.change(phoneInput, { target: { value: tooLong } });
+  assert.equal(phoneInput.value, tooLong, 'the paste was cut to a number nobody typed');
+  assert.equal(phoneInput.getAttribute('aria-invalid'), 'true');
+  const error = screen.getByText(/Enter a valid phone number/);
+  assert.equal(phoneInput.getAttribute('aria-describedby'), error.id);
+  assert.equal(generate.disabled, true);
+
+  fireEvent.keyDown(phoneInput, { key: 'Enter' });
+  assert.equal(
+    fetchCalls.some(c => c.path.endsWith('/pairing-code')),
+    false,
+    'a pairing code was requested for a number of more than 15 digits',
+  );
+
+  fireEvent.change(phoneInput, { target: { value: '6281234567890' } });
+  assert.equal(phoneInput.getAttribute('aria-invalid'), null);
+  assert.equal(screen.queryByText(/Enter a valid phone number/) === null, true);
+  assert.equal(generate.disabled, false);
 });
 
 // Nothing server-side refuses a pairing code for a number linked elsewhere, so the panel has to say
