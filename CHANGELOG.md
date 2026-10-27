@@ -263,7 +263,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update only the supplied fields on `PUT /api/sessions/{sessionId}/templates/{id}` and answer 404 for a template deleted meanwhile, where an overlapping edit was undone or the template came back.
 - Report a status whose row was removed while its media was written as not stored, and delete its file.
 - Accept an empty `url` next to `base64` in status posts and media conversion.
-- Fail `npm install` when a dependency patch breaks off part-way while writing, such as on a full disk, instead of skipping it under `--best-effort` and leaving a truncated file.
+- Write each patched dependency file to a temporary file and rename it over the original, so a write that fails part-way, such as on a full disk, leaves the file unchanged; a best-effort patch is then skipped, and any other install fails instead of keeping a truncated file.
 - Keep the `latest` and `X.Y` image tags from moving to an older release when an older tag is released or re-run.
 - Create the GitHub Release from a notes file, so a CHANGELOG section containing a line that is exactly `EOF` no longer breaks it.
 - Mirror the PHP SDK to `openwa-php` only from `main` and only while its content matches `main`, so a manual run from another branch or a re-run of an older push no longer replaces a newer mirror.
@@ -317,6 +317,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The message list no longer answers an empty page when its `after` row is deleted while the page is being read.
 - The message list reads its page rows by primary key on SQLite, which cuts a 100 row read of a 300k row session from about 70 ms to 5 ms.
 - Fix the PHP SDK reading a `Retry-After` header of 309 or more digits as 0 seconds; it is now capped like a smaller oversized value.
+- Do not mark a patch release on an older line as the GitHub Latest release, which the update check reads.
 
 ### Dependencies
 
