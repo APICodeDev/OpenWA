@@ -240,7 +240,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Record a `session_stopped` audit log entry for each session an import with `stopOrphans` stops, including when the import does not commit.
 - Fix the Python SDK raising `ValueError` instead of the API error when a response carries an oversized numeric `Retry-After`, from SDK 0.7.0.
 - Fix the Python SDK API and timeout errors failing to unpickle or copy, so they survive a worker process boundary, from SDK 0.7.0.
-- Cap an oversized `Retry-After` in the JavaScript, Go and PHP SDKs instead of reading it as Infinity or wrapping to a short or negative wait, from SDK 0.7.0.
+- Ignore a `Retry-After` beyond the number range in the JavaScript SDK, which read it as Infinity seconds, from SDK 0.7.0.
+- Cap an oversized `Retry-After` in the Go and PHP SDKs instead of wrapping to a short or negative wait, from SDK 0.7.0.
 - Keep the API error in the Java SDK when a `Retry-After` date is out of range, where an `ArithmeticException` replaced it, from SDK 0.7.0.
 - Treat a final 1xx response as an error in the Python, Go and PHP SDKs instead of returning it as a success, from SDK 0.7.0.
 - Keep the query values of a raw path that carries a fragment in the Go, Java and PHP SDKs, where they were sent inside the fragment, from SDK 0.7.0.
