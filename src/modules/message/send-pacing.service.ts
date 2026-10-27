@@ -12,6 +12,7 @@ import { EngineNotSupportedError } from '../../common/errors/engine-not-supporte
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
+import { toParticipantWid } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 
@@ -410,7 +411,7 @@ export class SendPacingService {
     // The same id twice in one request is one contact, and must cost one. Each contact is probed
     // under both user-id dialects (see dialectVariants) — a contact known under the other spelling
     // is not a stranger.
-    const unique = [...new Set(contactIds)];
+    const unique = [...new Set(contactIds.map(toParticipantWid))];
     const variantsByContact = new Map(unique.map(id => [id, dialectVariants(id)]));
     const knownRows = await this.messageRepository
       .createQueryBuilder('m')
