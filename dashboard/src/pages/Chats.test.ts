@@ -3656,3 +3656,19 @@ test('a failed session list says so and offers the read again, not the no-sessio
   await screen.findByText('Alice');
   assert.equal(screen.queryByRole('alert') === null, true);
 });
+
+// A chat list that could not be read is not an empty one: the sidebar alone would read "No chats".
+test('a failed chat list says so and offers the read again, then clears once a read lands', async () => {
+  const { screen, fireEvent, within } = rtl;
+  chatsResponder = () => Promise.resolve(jsonResponse({ message: 'gateway timeout' }, 504));
+  renderChats();
+
+  const alert = await screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Failed to load chats/);
+  assert.match(alert.textContent ?? '', /gateway timeout/);
+
+  chatsResponder = null;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByText('Alice');
+  assert.equal(screen.queryByRole('alert') === null, true, 'the failure stayed after the list was read');
+});

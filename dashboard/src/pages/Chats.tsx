@@ -179,6 +179,9 @@ export function Chats() {
   // Chats list
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
+  // Why the list on screen is not the session's: its last foreground read failed. A list that could not be read
+  // is told apart from one that is empty, which the sidebar alone would render the same way.
+  const [chatsFailure, setChatsFailure] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [chatFilter, setChatFilter] = useState<ChatListFilter>('all');
 
@@ -452,10 +455,14 @@ export function Chats() {
       // so this session's list on screen is as fresh as this call's would have been.
       const overtaken = () => !controller.signal.aborted && sessionId === chatsSessionRef.current;
       try {
-        if (!background) setLoadingChats(true);
+        if (!background) {
+          setLoadingChats(true);
+          setChatsFailure(null);
+        }
         const data = await sessionApi.getChats(sessionId, controller.signal);
         if (stale()) return overtaken();
         chatsAppliedRef.current = request;
+        setChatsFailure(null);
         // A live frame can move a row past the snapshot a background refetch was built from while it is
         // out. That row is kept, or its preview and unread badge would roll back until the next message.
         const moved = (id: string) => (liveRowsRef.current.get(id) ?? 0) >= request;
@@ -492,7 +499,7 @@ export function Chats() {
         if (stale()) return overtaken();
         // A background refetch only refreshes summaries: keep the list it would have replaced.
         if (background) return false;
-        showLoadError('chats.errors.loadChats', err);
+        setChatsFailure(err instanceof Error ? err.message : '');
         listedSessionRef.current = sessionId;
         setChats([]);
         return false;
@@ -504,7 +511,7 @@ export function Chats() {
         if (!background && !controller.signal.aborted && sessionId === chatsSessionRef.current) setLoadingChats(false);
       }
     },
-    [showLoadError],
+    [],
   );
 
   // A reload walks every page of the list, and each live event the sidebar cannot apply locally asks for
@@ -1669,6 +1676,19 @@ export function Chats() {
           <span>{t('common.disconnected')}</span>
           <button className="btn-secondary" onClick={reconnect}>
             {t('common.refresh')}
+          </button>
+        </div>
+      )}
+
+      {chatsFailure !== null && !loadingChats && (
+        <div className="chats-reconnect-banner" role="alert">
+          <AlertCircle size={16} />
+          <span>
+            {t('chats.errors.loadChats')}
+            {chatsFailure && ` (${chatsFailure})`}
+          </span>
+          <button className="btn-secondary" onClick={() => void loadChats(selectedSessionId)}>
+            {t('common.retry')}
           </button>
         </div>
       )}
