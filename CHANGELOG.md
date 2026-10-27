@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Report poll votes as a `poll.vote` webhook and WebSocket event on whatsapp-web.js: the poll, chat, voter, the option texts now selected (`[]` when the vote is cleared), the poll question when WhatsApp Web still holds the poll, and the time of the change; the JavaScript, Python, Go and Java SDKs list the event name. Until now a vote reached no consumer, so a poll sent with `send-poll` could not be read back.
 - Add Number Checker page in dashboard for single and bulk WhatsApp recipient pre-validation, in every dashboard language (#1865). Thanks @Purushotham-Prajapati-24.
 - Add the opt-in `message.receipt` event for per-recipient group and status receipts on Baileys, sent to the webhooks and `/events` subscribers that name it (#1748); the JavaScript, Python, Go and Java SDKs list the event name from SDK 0.7.0. Receipts are bounded per webhook: a quarter of `WEBHOOK_DISPATCH_CONCURRENCY` deliveries run at once, shared by a session's receipt webhooks, three quarters of `WEBHOOK_DISPATCH_MAX_QUEUED` events wait for each, and further receipts are dropped and counted in `openwa_webhook_delivery_failures_total`. Thanks @KGMA74, and @berodcdev for the request.
 - Record plugin install, update, uninstall, enable, disable, configuration and session activation changes in the audit log.

@@ -843,7 +843,7 @@ OpenWA consumes events by normalizing them into `EngineEventCallbacks`; anything
 | `message_ciphertext`        | ✅           |     | `media_uploaded`       | ❌                                                                              |
 | `message_ciphertext_failed` | ❌           |     | `remote_session_saved` | ❌                                                                              |
 | `call`                      | ✅           |     | `unread_count`         | ❌ candidate                                                                    |
-| `qr`                        | ✅           |     | `vote_update`          | ❌ candidate (poll-vote webhook)                                                |
+| `qr`                        | ✅           |     | `vote_update`          | ✅                                                                              |
 | `ready`                     | ✅           |     | `authenticated`        | ✅                                                                              |
 | `auth_failure`              | ✅           |     | `code`                 | ❌ — the pairing code is the return value of `requestPairingCode`, not an event |
 | `disconnected`              | ✅           |     | `group_join`           | ✅                                                                              |
@@ -1051,7 +1051,7 @@ adapter sources — re-derive the same way when anything changes:
   4 internal wiring, 1 class plumbing, **35 ❌ not exposed** (27 real capabilities + 8
   session/transport settings that are not WhatsApp capabilities). The backlog is the ❌ rows minus
   those 8 settings; 🔩 plumbing is correctly never exposed.
-- Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (17 consumed / 14 dropped).
+- Events: Baileys **34** (18 consumed / 16 dropped), wwjs **31** (18 consumed / 13 dropped).
 - **0** capabilities in 29.5.3: every capability with first-class symbols on both libraries is
   either wired or classified with evidence. Some are Baileys-only despite typed whatsapp-web.js
   symbols: `createGroup`, whose injected evaluate reaches a page internal without `findImpl`;

@@ -6,6 +6,7 @@ import {
   type RevokedMessage,
   type ReactionEvent,
   type EditedMessage,
+  type PollVoteEvent,
 } from '../interfaces/whatsapp-engine.interface';
 import { readWid, type SerializedWid } from '../types/whatsapp-web-js.types';
 import { buildEditedMessage, buildIncomingMessageBase, mapContactFields } from './message-mapper';
@@ -52,7 +53,7 @@ interface Change {
 const NOT_KEPT: Processing = { handOver: () => true, end: () => undefined };
 
 /**
- * Message-domain client events (message, message_create, ack, revoke, reaction, edit) extracted
+ * Message-domain client events (message, message_create, ack, revoke, reaction, edit, vote) extracted
  * from the adapter's event wiring: pure mapping from wwebjs payloads to neutral events fired
  * through the engine callbacks. Connection-state events (qr/authenticated/ready/disconnected/
  * auth_failure) stay in the lifecycle module (./wwebjs-lifecycle) — they drive the lifecycle
@@ -367,6 +368,38 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       afterMessage(event.messageId, () => host.getCallbacks().onMessageReaction?.(event));
     } catch (error) {
       host.logger.error('Error processing message_reaction', String(error));
+    }
+  });
+
+  client.on('vote_update', vote => {
+    try {
+      // `PollVote` assigns its keys straight through, like `Reaction`: `voter` is the raw sender Wid
+      // (typed as a string upstream) and `parentMsgKey` (untyped upstream) the raw MsgKey of the poll,
+      // so both are read with `readWid` (#747). `parentMessage` is built from the poll creation message
+      // when WhatsApp Web holds it, and from nothing otherwise, so its fields may all be undefined; the
+      // poll id and chat then come from `parentMsgKey`.
+      const raw = vote as typeof vote & {
+        voter: SerializedWid | string;
+        parentMsgKey?: SerializedWid & { remote?: SerializedWid | string };
+      };
+      const poll = vote.parentMessage as Partial<Message> | undefined;
+      const pollId = poll?.id as unknown as SerializedWid | undefined;
+      const event: PollVoteEvent = {
+        pollMessageId: readWid(pollId) ?? readWid(raw.parentMsgKey) ?? '',
+        // Direction flag, as Message._getChatId (see message_revoke_everyone).
+        chatId: (poll?.from ? (poll.fromMe ? poll.to : poll.from) : readWid(raw.parentMsgKey?.remote)) ?? '',
+        voterId: readWid(raw.voter) ?? '',
+        // Without the creation message whatsapp-web.js keeps only the local option ids, which no route
+        // of this API takes, so an option it could not name is left out.
+        selectedOptions: (vote.selectedOptions ?? [])
+          .map(option => option.name)
+          .filter((name): name is string => typeof name === 'string'),
+        ...(poll?.pollName ? { pollName: poll.pollName } : {}),
+        timestamp: Math.floor((Number(vote.interractedAtTs) || Date.now()) / 1000),
+      };
+      host.getCallbacks().onPollVote?.(event);
+    } catch (error) {
+      host.logger.error('Error processing vote_update', String(error));
     }
   });
 

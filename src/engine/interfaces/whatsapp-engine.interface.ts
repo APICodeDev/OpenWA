@@ -699,6 +699,29 @@ export interface ReactionEvent {
 }
 
 /**
+ * A voter's current selection on a poll (the native poll sent with `send-poll` or from the phone).
+ * WhatsApp sends the whole selection each time a voter changes it, so the latest `timestamp` per
+ * `voterId` is the current state, and an empty `selectedOptions` means the voter cleared their vote.
+ */
+export interface PollVoteEvent {
+  /** Id of the poll creation message the vote belongs to. */
+  pollMessageId: string;
+  /** Neutral id of the chat the poll was posted in. */
+  chatId: string;
+  /** Neutral id of the voter (the account itself when it voted from its phone). */
+  voterId: string;
+  /**
+   * The option texts now selected, exactly as they appear on the poll (the same strings `vote-poll`
+   * takes). An option the engine could not name is left out.
+   */
+  selectedOptions: string[];
+  /** The poll's question, when the creation message is available to read it from. */
+  pollName?: string;
+  /** Unix seconds the voter changed the selection (sender clock). */
+  timestamp: number;
+}
+
+/**
  * A group membership or metadata change, mapped at the adapter boundary to this neutral
  * shape so consumers never see engine-specific payloads:
  *  - whatsapp-web.js: `group_join` / `group_leave` / `group_update` /
@@ -961,6 +984,11 @@ export interface EngineEventCallbacks {
    * decrypts the RSVP itself from the stored event creation message. whatsapp-web.js never fires it.
    */
   onEventResponse?: (event: EventResponseEvent) => void;
+  /**
+   * Fired each time a voter changes their selection on a poll (consumers emit `poll.vote`).
+   * whatsapp-web.js only: Baileys never fires it.
+   */
+  onPollVote?: (event: PollVoteEvent) => void;
   /**
    * Fired on group membership changes (join/leave), group metadata updates
    * (subject/description/announce/locked), and pending join requests. The `kind` selects the

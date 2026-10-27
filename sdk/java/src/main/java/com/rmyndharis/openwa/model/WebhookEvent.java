@@ -40,6 +40,8 @@ public enum WebhookEvent {
     PRESENCE_UPDATE,
     @SerializedName("event.response")
     EVENT_RESPONSE,
+    @SerializedName("poll.vote")
+    POLL_VOTE,
     @SerializedName("call.accepted")
     CALL_ACCEPTED,
     @SerializedName("call.rejected")

@@ -69,7 +69,7 @@ WebhookEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.receipt", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
     "session.disconnected", "session.reconnect_loop", "session.restriction", "presence.update",
-    "event.response", "group.join", "group.leave", "group.update", "group.join_request",
+    "event.response", "poll.vote", "group.join", "group.leave", "group.update", "group.join_request",
     "call.received", "status.received",
     "call.accepted", "call.rejected", "call.missed",
     "*",
@@ -79,7 +79,7 @@ WebhookDeliveryEvent = Literal[
     "message.received", "message.sent", "message.ack", "message.receipt", "message.failed", "message.revoked",
     "message.reaction", "message.edited", "session.status", "session.qr", "session.authenticated",
     "session.disconnected", "session.reconnect_loop", "session.restriction", "presence.update",
-    "event.response", "group.join", "group.leave", "group.update", "group.join_request",
+    "event.response", "poll.vote", "group.join", "group.leave", "group.update", "group.join_request",
     "call.received", "status.received",
     "call.accepted", "call.rejected", "call.missed",
 ]

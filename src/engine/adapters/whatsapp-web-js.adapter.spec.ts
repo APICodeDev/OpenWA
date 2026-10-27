@@ -3979,6 +3979,105 @@ describe('WhatsAppWebJsAdapter inbound media (MEDIA_DOWNLOAD_ENABLED=false)', ()
   });
 });
 
+describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
+  const wireVoteHandler = (): { onPollVote: jest.Mock; client: EventEmitter } => {
+    const adapter = new WhatsAppWebJsAdapter({
+      sessionId: 'sess-vote-test',
+      sessionDataPath: './data/sessions',
+      puppeteer: {},
+    });
+    const client = Object.assign(new EventEmitter(), {
+      info: { wid: { _serialized: 'me@c.us', user: '628123' }, pushname: 'Tester' },
+      getState: jest.fn().mockResolvedValue(WAState.CONNECTED),
+      pupPage: { evaluate: jest.fn().mockResolvedValue(true) },
+    });
+    (adapter as unknown as { client: unknown }).client = client;
+    const onPollVote = jest.fn();
+    (adapter as unknown as { callbacks: unknown }).callbacks = { onPollVote };
+    (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle.setupEventHandlers();
+    return { onPollVote, client };
+  };
+
+  // The shape `PollVote` builds: `voter` and `parentMsgKey` are raw page-context Wids, and
+  // `parentMessage` a Message built from the poll creation message (or from nothing).
+  const ownPoll = {
+    id: { _serialized: 'true_peer@c.us_POLL1' },
+    from: 'me@c.us',
+    to: 'peer@c.us',
+    fromMe: true,
+    pollName: 'Did you finish the report?',
+  };
+  const vote = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    voter: { _serialized: 'peer@c.us' },
+    selectedOptions: [{ name: 'Done', localId: 0 }],
+    interractedAtTs: 1786000000123,
+    parentMessage: ownPoll,
+    parentMsgKey: { _serialized: 'true_peer@c.us_POLL1', remote: { _serialized: 'peer@c.us' } },
+    ...overrides,
+  });
+
+  it('maps a vote on a poll the account sent to the neutral event', () => {
+    const { onPollVote, client } = wireVoteHandler();
+
+    client.emit('vote_update', vote());
+
+    expect(onPollVote).toHaveBeenCalledWith({
+      pollMessageId: 'true_peer@c.us_POLL1',
+      chatId: 'peer@c.us',
+      voterId: 'peer@c.us',
+      selectedOptions: ['Done'],
+      pollName: 'Did you finish the report?',
+      timestamp: 1786000000,
+    });
+  });
+
+  it('takes the chat from the sender of a poll the account received in a group', () => {
+    const { onPollVote, client } = wireVoteHandler();
+    const groupPoll = { ...ownPoll, from: '120363000000000001@g.us', to: 'me@c.us', fromMe: false };
+
+    client.emit('vote_update', vote({ parentMessage: groupPoll, voter: { _serialized: 'member@lid' } }));
+
+    expect(onPollVote).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: '120363000000000001@g.us', voterId: 'member@lid' }),
+    );
+  });
+
+  it('reports a cleared vote as an empty selection', () => {
+    const { onPollVote, client } = wireVoteHandler();
+
+    client.emit('vote_update', vote({ selectedOptions: [] }));
+
+    expect(onPollVote).toHaveBeenCalledWith(expect.objectContaining({ selectedOptions: [] }));
+  });
+
+  it('falls back to the poll key when WhatsApp Web no longer holds the poll, leaving unnamed options out', () => {
+    const { onPollVote, client } = wireVoteHandler();
+
+    // Without the creation message, PollVote builds an empty Message and keeps only local option ids.
+    client.emit(
+      'vote_update',
+      vote({ parentMessage: {}, selectedOptions: [{ name: undefined, localId: 1 }], voter: { $1: 'peer@c.us' } }),
+    );
+
+    const event = (onPollVote.mock.calls as Array<[Record<string, unknown>]>)[0][0];
+    expect(event).toEqual({
+      pollMessageId: 'true_peer@c.us_POLL1',
+      chatId: 'peer@c.us',
+      voterId: 'peer@c.us',
+      selectedOptions: [],
+      timestamp: 1786000000,
+    });
+    expect(event).not.toHaveProperty('pollName');
+  });
+
+  it('logs and drops a malformed vote instead of throwing into the client', () => {
+    const { onPollVote, client } = wireVoteHandler();
+
+    expect(() => client.emit('vote_update', null)).not.toThrow();
+    expect(onPollVote).not.toHaveBeenCalled();
+  });
+});
+
 describe('WhatsAppWebJsAdapter message_reaction (id resolution across WA Web builds)', () => {
   const wireReactionHandler = (): { onMessageReaction: jest.Mock; client: EventEmitter } => {
     const adapter = new WhatsAppWebJsAdapter({

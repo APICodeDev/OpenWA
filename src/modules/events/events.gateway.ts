@@ -82,6 +82,7 @@ const CHAT_EVENTS = new Set([
   'group.update',
   'presence.update',
   'event.response',
+  'poll.vote',
 ]);
 
 /**
@@ -936,6 +937,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   /** Emit an RSVP to a WhatsApp event (Baileys only). Payload mirrors the `event.response` webhook. */
   emitEventResponse(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'event.response', data);
+  }
+
+  /** Emit a voter's new selection on a poll (whatsapp-web.js only). Payload mirrors the `poll.vote` webhook. */
+  emitPollVote(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'poll.vote', data);
   }
 
   /**
