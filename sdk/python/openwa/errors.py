@@ -187,7 +187,11 @@ def _retry_after_seconds(from_body: Any, header: str | None) -> int | None:
     if not value:
         return None
     if value.isascii() and value.isdigit():
-        return int(value)
+        try:
+            return int(value)
+        except ValueError:
+            # Past the interpreter's integer string limit: unparseable, like a malformed date below.
+            return None
     try:
         at = parsedate_to_datetime(value)
     except (TypeError, ValueError, OverflowError):

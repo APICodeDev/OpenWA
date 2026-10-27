@@ -170,6 +170,23 @@ class TestClientCore:
                     call()
                 assert caught.value.status == status
 
+    @pytest.mark.parametrize("binary", [False, True])
+    def test_a_retry_after_too_long_to_parse_keeps_the_api_error(self, binary: bool) -> None:
+        import sys
+
+        limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if limit == 0:
+            pytest.skip("this interpreter has no limit on integer string conversion")
+        headers = {"Retry-After": "9" * (limit + 1)}
+        transport = httpx.MockTransport(
+            lambda _: httpx.Response(429, json={"statusCode": 429, "message": "slow down"}, headers=headers)
+        )
+        with OpenWAClient(base_url="http://localhost", api_key="k", transport=transport) as client:
+            with pytest.raises(OpenWARateLimitError) as caught:
+                client.messages.media("s", "c", "m") if binary else client.health.check()
+        assert caught.value.status == 429
+        assert caught.value.retry_after_seconds is None
+
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])
         client = OpenWAClient(base_url="http://localhost:2785/", api_key="k", transport=backend.as_transport())
