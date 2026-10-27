@@ -22305,7 +22305,7 @@
           },
           "database": {
             "type": "string",
-            "description": "Database name, or the SQLite file path.",
+            "description": "Database name under PostgreSQL; empty under SQLite.",
             "example": "openwa"
           },
           "schema": {
