@@ -91,8 +91,8 @@ export class StatsService {
    * dashboard polling would otherwise re-run them on every request. TTL-only invalidation:
    * entries expire after stats.cacheTtlMs; there is no write-path hook. Session-scoped entries
    * are additionally re-validated on serve (getSessionStats), so a deleted session is not
-   * resurrected from the memo. Key cardinality is
-   * bounded (4 global shapes + one per session), so no size eviction is needed. Concurrent misses
+   * resurrected from the memo. Every finished computation also drops the entries that have expired, so
+   * the entries of deleted sessions nobody asks for again do not accumulate. Concurrent misses
    * on one key share a single computation (`inflight`), so an expired entry costs one scan, not one
    * per waiting request; a rejection is handed to every waiter and never stored.
    */
@@ -134,7 +134,9 @@ export class StatsService {
       value => {
         if (this.inflight.get(key) === flight) {
           this.inflight.delete(key);
-          this.memo.set(key, { expiresAt: Date.now() + ttl, value });
+          const now = Date.now();
+          for (const [memoKey, entry] of this.memo) if (entry.expiresAt <= now) this.memo.delete(memoKey);
+          this.memo.set(key, { expiresAt: now + ttl, value });
         }
         return value;
       },
