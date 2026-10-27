@@ -75,7 +75,6 @@ export class PluginUninstaller {
     // plugin can still take a chat over again, and before the registry entry goes: a store that cannot
     // take the release fails the uninstall, and a repeat finds no runtime and goes straight to it.
     await this.releaseTakeovers?.(pluginId);
-    this.pluginStorage.deletePluginEntry(pluginId);
 
     // A recorded directory came from the boot scan and is already contained. Without one the id is
     // the only input, so it stays behind the traversal guard against the configured root.
@@ -98,8 +97,13 @@ export class PluginUninstaller {
     // Drop the plugin's ctx.storage data dir. Under shipped defaults it lives INSIDE the package
     // dir (already gone above), but a split-dir deployment (PLUGINS_DIR outside the data dir) would
     // otherwise leak <dataDir>/plugins/<id> — persisted secrets included — on every uninstall.
-    // Best-effort, and strictly that one plugin's directory.
+    // Strictly that one plugin's directory.
     this.pluginStorage.deletePluginData(pluginId);
+
+    // Last, so a removal that failed above leaves the entry in place: the service answers a repeat only
+    // for an id it still knows, and without the entry a half-removed package would load again on the
+    // next boot as a new plugin with no way left to uninstall it.
+    this.pluginStorage.deletePluginEntry(pluginId);
 
     this.unloadedDirs.delete(pluginId);
     this.logger.log(`Plugin uninstalled: ${pluginId}`, { pluginId, action: 'plugin_uninstalled' });

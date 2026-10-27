@@ -244,7 +244,7 @@ export class PluginStorageService {
    * Remove a plugin's entire data-storage directory (<dataDir>/plugins/<id>). Called on uninstall.
    * Containment-guarded exactly like the package-dir delete in the loader: an id that resolves
    * outside the storage root is refused, so only the named plugin's directory can ever be touched.
-   * Best-effort — a removal failure is logged, never thrown, so the uninstall still completes.
+   * A removal failure is logged and thrown, so the uninstall fails with its registry entry intact.
    */
   deletePluginData(pluginId: string): void {
     const root = path.resolve(this.dataDir, 'plugins');
@@ -266,6 +266,7 @@ export class PluginStorageService {
         action: 'plugin_storage_delete_failed',
         error: error instanceof Error ? error.message : String(error),
       });
+      throw error;
     }
   }
 

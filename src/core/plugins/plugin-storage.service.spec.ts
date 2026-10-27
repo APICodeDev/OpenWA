@@ -227,6 +227,18 @@ describe('PluginStorageService.deletePluginData (uninstall storage cleanup)', ()
     expect(() => service.deletePluginData('never-stored')).not.toThrow();
   });
 
+  it('throws when the storage dir cannot be removed, so the caller does not report it gone', async () => {
+    await service.createPluginStorage('stuck-plg').set('token', { secret: 'abc' });
+    const rm = jest.spyOn(fs, 'rmSync').mockImplementationOnce(() => {
+      throw Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY' });
+    });
+
+    expect(() => service.deletePluginData('stuck-plg')).toThrow('EBUSY');
+
+    rm.mockRestore();
+    expect(fs.existsSync(path.join(dataDir, 'plugins', 'stuck-plg'))).toBe(true);
+  });
+
   it('refuses a traversal id that resolves outside the storage root', () => {
     // A real directory the escaping id would resolve to — it must survive the call.
     const outside = path.join(dataDir, 'not-plugin-storage');
