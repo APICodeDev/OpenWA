@@ -312,6 +312,8 @@ class LiveCallMap<V> extends Map<string, V> {
 interface CallRejection {
   entry: LiveCallHandle;
   clears: number;
+  /** A `terminate` for the call arrived meanwhile: the call is over, whatever the attempt turns out to be. */
+  ended: boolean;
 }
 
 export class BaileysEvents {
@@ -326,8 +328,10 @@ export class BaileysEvents {
 
   /**
    * Calls whose rejection is pending. The handle is out of liveCalls meanwhile, so it cannot be rejected
-   * twice, yet a signal that ends the call still finds it here and publishes its outcome. Whatever ends
-   * the call (a signal, another ring under the id, a teardown) makes the rejection stale.
+   * twice, yet a signal that ends the call still finds it here and publishes its outcome. A signal that
+   * publishes an outcome of its own (accept, reject, timeout), a ring of another call under the id and a
+   * teardown make the rejection stale. A `terminate`, or another tag of the same call, does not: WhatsApp may
+   * send the terminate that follows our own rejection before it acknowledges it.
    */
   private readonly rejections = new Map<string, CallRejection>();
 
@@ -2037,6 +2041,12 @@ export class BaileysEvents {
         isVideo: call.isVideo === true,
         isGroup: call.isGroup === true,
       };
+      // Offer and offer_notice carry one call id, so another tag of the call being rejected is neither a new
+      // ring nor another call: it must not put the handle back or announce the call a second time.
+      const rejection = this.rejections.get(call.id);
+      if (this.isPending(call.id, rejection) && rejection?.entry.callFrom === call.from) {
+        continue;
+      }
       if (!this.cacheLiveCall(call.id, call.from, published)) {
         continue;
       }
@@ -2072,11 +2082,13 @@ export class BaileysEvents {
    */
   private reportCallOutcome(call: WACallEvent): void {
     // `terminate` publishes no outcome (see above) but DOES end the call — drop the handle so a
-    // rejectCall arriving afterwards reports not-found instead of acting on a dead call. The other
+    // rejectCall arriving afterwards reports not-found instead of acting on a dead call. A rejection
+    // already pending keeps its right to report its own success (see rejectCall). The other
     // unmapped statuses (ringing/preaccept/transport/relaylatency) are chatter on a call that is
     // still live and must stay rejectable.
     if (call.status === 'terminate') {
-      this.rejections.delete(call.id);
+      const rejection = this.rejections.get(call.id);
+      if (rejection) rejection.ended = true;
       this.liveCalls.delete(call.id);
       return;
     }
@@ -2190,9 +2202,10 @@ export class BaileysEvents {
 
   /**
    * Reject a currently-ringing call. The entry is evicted before the attempt, so a rejected call does not
-   * become rejectable again, and a signal that ends the call meanwhile publishes its own outcome and makes
-   * this attempt stale. Only an attempt that is not stale publishes its success. A failed one leaves the
-   * call ringing, so its entry is put back for a retry, again unless something ended the call meanwhile.
+   * become rejectable again. A signal that publishes its own outcome meanwhile makes this attempt stale; a
+   * stale attempt publishes nothing. Otherwise a success publishes `rejected`, a `terminate` that arrived
+   * first included. A failed attempt leaves the call ringing, so its entry is put back for a retry, unless
+   * something ended the call meanwhile (any signal, a `terminate`, another call under the id, a teardown).
    * An unknown id or an expired entry maps to CallNotFoundError (HTTP 404).
    * A failure of the library's rejectCall() itself propagates as-is.
    */
@@ -2207,7 +2220,7 @@ export class BaileysEvents {
       throw new EngineNotReadyError('Cannot reject a call before the engine is initialized.');
     }
     this.liveCalls.delete(callId);
-    const rejection: CallRejection = { entry, clears: this.liveCalls.clears };
+    const rejection: CallRejection = { entry, clears: this.liveCalls.clears, ended: false };
     this.rejections.set(callId, rejection);
     let current: boolean;
     try {
@@ -2218,7 +2231,12 @@ export class BaileysEvents {
       );
       current = this.isPending(callId, rejection);
     } catch (err) {
-      if (this.isPending(callId, rejection) && !this.liveCalls.has(callId) && entry.expiresAt > Date.now()) {
+      if (
+        !rejection.ended &&
+        this.isPending(callId, rejection) &&
+        !this.liveCalls.has(callId) &&
+        entry.expiresAt > Date.now()
+      ) {
         this.liveCalls.set(callId, entry);
       }
       throw err;
