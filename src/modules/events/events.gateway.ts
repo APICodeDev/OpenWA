@@ -397,7 +397,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // Pre-auth, per-IP handshake throttle. This must run BEFORE any credential handling: an
     // unauthenticated handshake flood otherwise reaches the DB validateApiKey below on every
     // attempt (same gap the MCP pre-auth IP throttle covers for the /mcp mount).
-    if (!this.handshakeLimiter.allow(handshakeKey)) {
+    const handshakeReservation = {};
+    if (!this.handshakeLimiter.allow(handshakeKey, handshakeReservation)) {
       this.logger.warn(`Client ${client.id} rejected: handshake rate limit exceeded (ip: ${clientIp})`);
       this.noteRateLimitViolation('handshake', { ipAddress: clientIp });
       client.emit('message', this.createError('RATE_LIMITED', 'Too many connection attempts, retry later'));
@@ -459,7 +460,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // handshakes, and authenticated connections stay bounded by maxSocketsPerKey above. Without
       // this, every client behind one NAT/proxy IP shares a 10/min budget and normal dashboard
       // re-mounts lock each other out.
-      this.handshakeLimiter.refund(handshakeKey);
+      this.handshakeLimiter.refund(handshakeKey, handshakeReservation);
       // The transport can close while validateApiKey is in flight, and Nest runs the disconnect
       // handler before this one returns. That untrack found no key on client.data yet and did
       // nothing, so the socket just tracked would stay in the per-key set for the life of the

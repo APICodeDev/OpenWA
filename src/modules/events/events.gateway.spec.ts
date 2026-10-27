@@ -11,6 +11,7 @@ import { AuditAction } from '../audit/entities/audit-log.entity';
 import { SUBSCRIBABLE_EVENTS, buildRoomName } from './dto/ws-messages.dto';
 import type { WSClientMessage, WSErrorResponse, WSSubscribedResponse, WSEventMessage } from './dto/ws-messages.dto';
 import { WEBHOOK_RESERVED_EVENTS } from '../webhook/dto/webhook.dto';
+import { SlidingWindowLimiter } from './ws-rate-limit';
 
 describe('isSessionSubscriptionAllowed (WS session-scope enforcement)', () => {
   it('allows an unrestricted key (null allowedSessions) to subscribe to anything, including *', () => {
@@ -1204,6 +1205,40 @@ describe('EventsGateway rate limiting', () => {
       }
       expect(authService.validateApiKey).toHaveBeenCalledTimes(6);
     });
+
+    it.each([false, true])(
+      'keeps newer failures charged after a delayed valid handshake (pruned: %s)',
+      async pruned => {
+        let now = 0;
+        let finish!: (key: unknown) => void;
+        const validation = new Promise(resolve => (finish = resolve));
+        authService.validateApiKey.mockImplementation((raw: string) =>
+          raw === 'good' ? validation : Promise.reject(new UnauthorizedException('Invalid API key')),
+        );
+        const gw = buildGateway();
+        (gw as unknown as { handshakeLimiter: SlidingWindowLimiter }).handshakeLimiter = new SlidingWindowLimiter(
+          2,
+          1000,
+          () => now,
+        );
+        const good = makeSock('good', { apiKey: 'good' });
+        const connecting = gw.handleConnection(asSocket(good));
+        now = pruned ? 1001 : 500;
+        await gw.handleConnection(asSocket(makeSock('bad-1', { apiKey: 'bad' })));
+        now = pruned ? 1002 : 600;
+        finish({ id: 'k1', name: 'k', allowedSessions: null });
+        await connecting;
+        expect(good.disconnect).not.toHaveBeenCalled();
+        expect(authService.validateApiKey).toHaveBeenCalledWith('good', '203.0.113.5');
+        now = pruned ? 1003 : 1001;
+        await gw.handleConnection(asSocket(makeSock('bad-2', { apiKey: 'bad' })));
+        const blocked = makeSock('bad-3', { apiKey: 'bad' });
+        await gw.handleConnection(asSocket(blocked));
+        expect(blocked.emit).toHaveBeenCalledWith('message', expect.objectContaining({ code: 'RATE_LIMITED' }));
+        expect(authService.validateApiKey).toHaveBeenCalledTimes(3);
+        gw.handleDisconnect(asSocket(good));
+      },
+    );
 
     it('throttles an unauthenticated handshake flood before any credential/audit work', async () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '2';
