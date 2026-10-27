@@ -216,7 +216,7 @@ export class InfraConfigController {
       this.assertNoLineBreakValues(updates);
       const merged = this.mergeWithExisting(existing, ctx);
       this.assertProductionBootable(merged);
-      this.assertBootValidates(updates, merged);
+      this.assertBootValidates(existing, merged);
       this.assertStorageRootWritable(updates, merged);
       this.persistGeneratedEnv(envPath, merged);
       this.auditConfigSaved(config, profiles);
@@ -355,14 +355,19 @@ export class InfraConfigController {
   // The environment validation the next boot runs (env.validation.ts), applied to the same view of the merged result.
   // Without it a save the dashboard accepts, a PostgreSQL selection with no host or a pool size that is not a plain
   // integer, crash-loops the instance and the dashboard that could undo it.
-  // The boot only reports an S3 endpoint the client cannot use, so a deployment on its local fallback keeps starting
-  // and keeps saving other settings; a save that names the storage type or the endpoint is refused instead.
-  private assertBootValidates(updates: Record<string, string>, merged: Record<string, string>): void {
+  // The boot only reports an S3 endpoint the client cannot use, so an instance that stored one keeps starting and keeps
+  // saving. The dashboard sends the storage type and endpoint with every save, so the endpoint is refused only when this
+  // save changes what the boot reads for it or newly selects S3; resubmitting it, an environment pin the page cannot
+  // change, or a switch to local storage goes through.
+  private assertBootValidates(existing: Record<string, string>, merged: Record<string, string>): void {
     const bootValue = this.bootValueReader(merged);
+    const before = this.bootValueReader(existing);
     try {
       const env = Object.fromEntries(Object.keys({ ...process.env, ...merged }).map(key => [key, bootValue(key)]));
       validateEnv(env);
-      const s3Problem = 'STORAGE_TYPE' in updates || 'S3_ENDPOINT' in updates ? s3EndpointError(env) : null;
+      const endpointChanged = (before('S3_ENDPOINT') ?? '').trim() !== (bootValue('S3_ENDPOINT') ?? '').trim();
+      const newlyS3 = before('STORAGE_TYPE') !== 's3' && bootValue('STORAGE_TYPE') === 's3';
+      const s3Problem = endpointChanged || newlyS3 ? s3EndpointError(env) : null;
       if (s3Problem) throw new Error(s3Problem);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);

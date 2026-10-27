@@ -199,36 +199,86 @@ describe('InfraConfigController.saveConfig values the next boot refuses', () => 
     expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 
-  // The boot only reports an S3 endpoint the client cannot use, so a deployment running on its local fallback must
-  // still be able to save other settings; only a save that names the storage type or the endpoint is refused.
-  describe('an S3 endpoint without a scheme already stored', () => {
-    const STORED =
-      'STORAGE_TYPE=s3\nS3_ENDPOINT=minio:9000\nS3_ACCESS_KEY_ID=AccessKey1234\nS3_SECRET_ACCESS_KEY=SecretKey1234567\n';
-    beforeEach(() => {
+  // The boot only reports an S3 endpoint the client cannot use, so an instance that stored one keeps starting, and the
+  // dashboard, which sends the storage type and endpoint with every save, must keep saving. The endpoint is refused
+  // only when the save changes what the boot reads for it or newly selects S3.
+  describe('an S3 endpoint without a scheme', () => {
+    const KEYS = 'S3_ACCESS_KEY_ID=AccessKey1234\nS3_SECRET_ACCESS_KEY=SecretKey1234567\n';
+    const S3_STORED = `STORAGE_TYPE=s3\nS3_ENDPOINT=minio:9000\n${KEYS}`;
+    const NEW_KEYS = { s3AccessKey: 'AccessKey1234', s3SecretKey: 'SecretKey1234567' };
+    const LOCAL_STORED = `STORAGE_TYPE=local\nS3_ENDPOINT=minio:9000\n${KEYS}`;
+    const store = (text: string) => {
       (fs.existsSync as jest.Mock).mockReturnValue(true);
-      (fs.readFileSync as jest.Mock).mockReturnValue(STORED);
+      (fs.readFileSync as jest.Mock).mockReturnValue(text);
       (fs.writeFileSync as jest.Mock).mockClear();
-    });
+    };
+    // What the dashboard sends after a reload: the storage section is always present, with the stored endpoint.
+    const dashboardSave = (storage: object) =>
+      ({
+        engine: { headless: false },
+        storage: { type: 's3', s3Bucket: 'media', s3Endpoint: 'minio:9000', ...storage },
+      }) as never;
     afterEach(() => {
       (fs.existsSync as jest.Mock).mockReturnValue(false);
       (fs.readFileSync as jest.Mock).mockReturnValue('');
+      delete process.env.S3_ENDPOINT;
+      delete process.env.STORAGE_TYPE;
+      recordPinnedEnvKeys({});
     });
 
     it('does not stop a save of another section', () => {
+      store(S3_STORED);
       expect(newController().saveConfig({ engine: { headless: false } }).saved).toBe(true);
     });
 
-    it('refuses a save that names the storage type again, with the boot text', () => {
-      expect(() => newController().saveConfig({ storage: { type: 's3', s3Bucket: 'media' } } as never)).toThrow(
+    it('does not stop a dashboard save that resubmits the stored endpoint', () => {
+      store(S3_STORED);
+      expect(newController().saveConfig(dashboardSave({})).saved).toBe(true);
+    });
+
+    it('refuses a save that changes it to another unusable value, with the boot text', () => {
+      store(S3_STORED);
+      expect(() => newController().saveConfig(dashboardSave({ s3Endpoint: 'other:9000' }))).toThrow(
         /fails boot validation\. S3_ENDPOINT must be an absolute http\(s\) URL/,
       );
       expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
 
+    it('refuses a save that newly selects S3 beside it', () => {
+      store(LOCAL_STORED);
+      expect(() =>
+        newController().saveConfig({ storage: { type: 's3', s3Endpoint: 'minio:9000', ...NEW_KEYS } } as never),
+      ).toThrow(/S3_ENDPOINT must be an absolute http\(s\) URL/);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('refuses newly selecting S3 while the environment pins it', () => {
+      store(LOCAL_STORED);
+      process.env.S3_ENDPOINT = 'minio:9000';
+      recordPinnedEnvKeys({ S3_ENDPOINT: 'minio:9000' });
+      expect(() => newController().saveConfig({ storage: { type: 's3', ...NEW_KEYS } } as never)).toThrow(
+        /S3_ENDPOINT must be an absolute http\(s\) URL/,
+      );
+    });
+
+    it('saves a switch to local storage', () => {
+      store(S3_STORED);
+      expect(newController().saveConfig({ storage: { type: 'local', localPath: './data/media' } } as never).saved).toBe(
+        true,
+      );
+    });
+
     it('accepts the endpoint once it carries the scheme', () => {
-      expect(
-        newController().saveConfig({ storage: { type: 's3', s3Endpoint: 'http://minio:9000' } } as never).saved,
-      ).toBe(true);
+      store(S3_STORED);
+      expect(newController().saveConfig(dashboardSave({ s3Endpoint: 'http://minio:9000' })).saved).toBe(true);
+    });
+
+    it('does not block a save while the environment pins it, which the page cannot change', () => {
+      store(S3_STORED);
+      Object.assign(process.env, { S3_ENDPOINT: 'minio:9000', STORAGE_TYPE: 's3' });
+      recordPinnedEnvKeys({ S3_ENDPOINT: 'minio:9000', STORAGE_TYPE: 's3' });
+      expect(newController().saveConfig(dashboardSave({})).saved).toBe(true);
+      expect(newController().saveConfig(dashboardSave({ s3Endpoint: 'http://minio:9000' })).saved).toBe(true);
     });
   });
 
