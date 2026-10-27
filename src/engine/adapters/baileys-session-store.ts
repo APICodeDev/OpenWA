@@ -614,7 +614,8 @@ export class BaileysSessionStore {
           ? userPart(c.id)
           : '';
       const lid = c.lid ? userPart(c.lid) : c.id.endsWith('@lid') ? userPart(c.id) : '';
-      if (phone !== want && lid !== want) continue;
+      // Digits are only comparable within one kind: a lid and a phone number can read the same.
+      if ((parsed.kind === 'user' ? phone : lid) !== want) continue;
       if (c.name) return this.toNeutralContact(c);
       unnamed ??= c;
     }
