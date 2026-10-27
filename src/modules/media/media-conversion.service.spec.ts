@@ -270,6 +270,36 @@ describe('MediaConversionService', () => {
       expect((runFfmpeg.mock.calls[0] as [Buffer])[0]).toEqual(Buffer.from('inline'));
     });
 
+    it.each(['convertToVoice', 'convertToVideo'] as const)(
+      '%s uses the URL when a data URI carries no base64 bytes',
+      async method => {
+        const load = jest
+          .spyOn(loadRemoteMedia, 'loadRemoteMediaBuffer')
+          .mockResolvedValue({ data: Buffer.from('remote-media'), mimetype: 'audio/mpeg' });
+        const service = makeService(config(), { registry: registryWith('socks5://live.invalid:1080') });
+
+        await service[method](SESSION, {
+          base64: 'data:audio/mpeg;base64,',
+          url: 'https://example.com/media',
+        });
+
+        expect((runFfmpeg.mock.calls[0] as [Buffer])[0]).toEqual(Buffer.from('remote-media'));
+        expect(load).toHaveBeenCalledWith('https://example.com/media', 'socks5://live.invalid:1080');
+      },
+    );
+
+    it('keeps nonempty base64 ahead of a stale URL', async () => {
+      const load = jest.spyOn(loadRemoteMedia, 'loadRemoteMediaBuffer');
+
+      await makeService().convertToVoice(SESSION, {
+        base64: 'data:audio/mpeg;base64,aW5saW5l',
+        url: 'https://example.com/ignored',
+      });
+
+      expect((runFfmpeg.mock.calls[0] as [Buffer])[0]).toEqual(Buffer.from('inline'));
+      expect(load).not.toHaveBeenCalled();
+    });
+
     it('rejects base64 above the media cap with 413, before any conversion', async () => {
       const service = makeService(config());
       const oversized = Buffer.alloc(51 * 1024 * 1024).toString('base64');

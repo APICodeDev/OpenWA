@@ -170,10 +170,12 @@ export class MediaConversionService implements OnApplicationShutdown {
 
   /** Read the caller's media into memory, honouring the same caps and SSRF guard as a send. */
   private async resolveInput(sessionId: string, dto: ConvertMediaDto): Promise<Buffer> {
-    if (dto.base64) {
+    // Stripped first: a bare `data:...;base64,` prefix holds no bytes, so a url beside it is used.
+    const base64 = stripBase64DataUri(dto.base64);
+    if (base64) {
       // Checked before decoding, so an oversized payload is refused without allocating it.
-      assertBase64WithinMediaCap(dto.base64);
-      const data = Buffer.from(stripBase64DataUri(dto.base64) ?? '', 'base64');
+      assertBase64WithinMediaCap(base64);
+      const data = Buffer.from(base64, 'base64');
       if (data.length === 0) throw new BadRequestException('base64 did not decode to any bytes');
       return data;
     }
