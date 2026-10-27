@@ -2,15 +2,27 @@ import { DataSource, In, QueryDeepPartialEntity } from 'typeorm';
 import { BatchStatus, MessageBatch } from './entities/message-batch.entity';
 
 /**
+ * The names a template body asks for, in the renderer's own syntax: canonical `{{ name }}` and the
+ * legacy `{name}` (see PLACEHOLDER_PATTERN in common/utils/template-render.ts, which a spec keeps in step).
+ */
+export function templateVariableNames(body: string): string[] {
+  return Array.from(body.matchAll(/\{\{\s*([\w.-]+)\s*\}\}|\{(\w+)\}/g), match => match[1] ?? match[2]);
+}
+
+/**
  * Drop base64 payloads from a finished batch's stored message list. A completed/cancelled batch is
  * terminal (never resumed), so the (often multi-MB) base64 in `message_batches.messages` is dead
- * weight; the descriptive fields (mimetype/filename/caption/url) are kept.
+ * weight; the descriptive fields (mimetype/filename/caption/url) are kept. An item that takes its
+ * media from a variable (`base64: '{{pic}}'`) keeps the bytes in `variables`, so those go too.
  */
 export function stripBatchMediaPayloads(messages: MessageBatch['messages']): void {
   for (const m of messages ?? []) {
     for (const key of ['image', 'video', 'audio', 'document']) {
       const media = m.content[key] as { base64?: unknown } | undefined;
       if (media && typeof media === 'object' && 'base64' in media) {
+        if (typeof media.base64 === 'string' && m.variables && typeof m.variables === 'object') {
+          for (const name of templateVariableNames(media.base64)) delete m.variables[name];
+        }
         delete media.base64;
       }
     }
