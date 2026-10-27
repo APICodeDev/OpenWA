@@ -4,8 +4,8 @@ import { contactApi } from '../services/api';
 // Signed CDN URLs rotate: a held picture is reused for an hour, then asked for again.
 const PICTURE_TTL_MS = 60 * 60 * 1000;
 // The batch route answers null for a hidden or missing picture and also for a lookup that failed (throttled, past
-// its per-id deadline), and the two look alike. A null is held for a minute only: a failure heals on the next
-// change of ids after that, and a real null costs one more lookup then.
+// its per-id deadline, or skipped after another lookup timed out), and the two look alike. A null is held for
+// a minute only: a failure heals on the next change of ids after that, and a real null costs one more lookup then.
 const NULL_TTL_MS = 60 * 1000;
 
 interface ResolvedPicture {
