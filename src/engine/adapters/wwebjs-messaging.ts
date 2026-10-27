@@ -399,6 +399,9 @@ export class WwebjsMessaging {
   // Unbounded Map, bounded in practice by distinct recipients per session; add an LRU only if a
   // session ever addresses a truly unbounded set of fresh numbers.
   private readonly resolvedSendIds = new Map<string, string>();
+  // The `<phone>@c.us` keys of the cache above whose `@lid` the mapping store has not taken (its write failed):
+  // the next send reports the pair again, so a failed write costs one more write, not a fresh probe.
+  private readonly unreportedLids = new Set<string>();
 
   /**
    * Resolve an individual (`@c.us`) recipient to the id whatsapp-web.js will accept. WhatsApp has
@@ -416,26 +419,37 @@ export class WwebjsMessaging {
     }
     const cached = this.resolvedSendIds.get(chatId);
     if (cached) {
+      if (this.unreportedLids.delete(chatId)) this.reportLid(chatId, cached);
       return cached;
     }
     try {
       const wid = await this.host.getNumberId(chatId);
       if (wid) {
         this.resolvedSendIds.set(chatId, wid);
-        if (wid.endsWith('@lid')) {
-          // Persist the learned phone -> lid so the message read-path (resolveJidCandidates) can
-          // bridge this contact's `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment
-          // (#583 R3). Fire-and-forget: resolution (and the send) must never block/fail on the write.
-          void this.host.config.lidMappingStore
-            ?.remember(userPart(wid), userPart(chatId), this.host.config.sessionId)
-            ?.catch(() => {});
-        }
+        if (wid.endsWith('@lid')) this.reportLid(chatId, wid);
         return wid;
       }
       return chatId;
     } catch {
       return chatId;
     }
+  }
+
+  /**
+   * Persist a learned phone -> lid so the message read-path (resolveJidCandidates) can bridge this contact's
+   * `@c.us` and `@lid` rows on a pure whatsapp-web.js deployment (#583 R3). Fire-and-forget: resolution (and
+   * the send) must never block/fail on the write. A write the store reports failed (it resolves false, or
+   * rejects) is marked for the next send, unless a newer resolution has replaced this one meanwhile.
+   */
+  private reportLid(chatId: string, wid: string): void {
+    const failed = (): void => {
+      if (this.resolvedSendIds.get(chatId) === wid) this.unreportedLids.add(chatId);
+    };
+    void this.host.config.lidMappingStore
+      ?.remember(userPart(wid), userPart(chatId), this.host.config.sessionId)
+      ?.then(stored => {
+        if (stored === false) failed();
+      }, failed);
   }
 
   /**
@@ -500,6 +514,7 @@ export class WwebjsMessaging {
         throw toCapturedPageError(err);
       }
       this.resolvedSendIds.delete(chatId);
+      this.unreportedLids.delete(chatId);
       const fresh = await this.resolveSendId(chatId);
       // Same gap as above, and before the comparison: a lookup that failed because the session went away
       // answers the unresolved id, which would read as an unreachable recipient.

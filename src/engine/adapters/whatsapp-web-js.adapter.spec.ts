@@ -5695,6 +5695,50 @@ describe('LID mapping persistence to LidMappingStore (#583 R3)', () => {
       readyWithStore({ getNumberId, sendMessage }, makeStore(remember)).sendTextMessage('529934031058@c.us', 'hi'),
     ).resolves.toBeDefined();
   });
+
+  it.each(['resolves false', 'rejects'])(
+    'reports the pair again with the next send when the mapping write %s, without probing again',
+    async failure => {
+      const remember = jest.fn().mockResolvedValue(true);
+      if (failure === 'rejects') remember.mockRejectedValueOnce(new Error('db down'));
+      else remember.mockResolvedValueOnce(false);
+      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '555000111@lid' });
+      const sendMessage = jest.fn<Promise<typeof sentMessage>, [string, ...unknown[]]>().mockResolvedValue(sentMessage);
+      const adapter = readyWithStore({ getNumberId, sendMessage }, makeStore(remember));
+
+      await adapter.sendTextMessage('628111@c.us', 'first');
+      await adapter.sendTextMessage('628111@c.us', 'second');
+      await adapter.sendTextMessage('628111@c.us', 'third');
+
+      expect(getNumberId).toHaveBeenCalledTimes(1);
+      expect(remember).toHaveBeenCalledTimes(2);
+      expect(remember).toHaveBeenNthCalledWith(2, '555000111', '628111', 's1');
+      expect(sendMessage.mock.calls.map(call => call[0])).toEqual(['555000111@lid', '555000111@lid', '555000111@lid']);
+    },
+  );
+
+  it('does not report a newer resolution again when an older mapping write fails late', async () => {
+    let settleOlder!: (stored: boolean) => void;
+    const getNumberId = jest
+      .fn()
+      .mockResolvedValueOnce({ _serialized: '555000111@lid' })
+      .mockResolvedValueOnce({ _serialized: '555000222@lid' });
+    const remember = jest
+      .fn()
+      .mockReturnValueOnce(new Promise<boolean>(resolve => (settleOlder = resolve)))
+      .mockResolvedValue(true);
+    const sendMessage = jest.fn<Promise<typeof sentMessage>, [string, ...unknown[]]>().mockResolvedValue(sentMessage);
+    const adapter = readyWithStore({ getNumberId, sendMessage }, makeStore(remember));
+
+    await Promise.all([adapter.sendTextMessage('628111@c.us', 'a'), adapter.sendTextMessage('628111@c.us', 'b')]);
+    settleOlder(false);
+    await new Promise(resolve => setImmediate(resolve));
+    await adapter.sendTextMessage('628111@c.us', 'c');
+
+    expect(getNumberId).toHaveBeenCalledTimes(2);
+    expect(remember).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[2][0]).toBe('555000222@lid');
+  });
 });
 
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {
