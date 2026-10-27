@@ -289,6 +289,14 @@ interface BaileysEventResponse {
   } | null;
 }
 
+interface LiveCallHandle {
+  callFrom: string;
+  expiresAt: number;
+  from: string;
+  isVideo: boolean;
+  isGroup: boolean;
+}
+
 /** Every teardown clears the live-call map; counting those clears lets a reject in flight tell that its
  *  connection was torn down meanwhile. */
 class LiveCallMap<V> extends Map<string, V> {
@@ -300,6 +308,12 @@ class LiveCallMap<V> extends Map<string, V> {
   }
 }
 
+/** A rejection awaiting WhatsApp: the handle it took out of the live calls, and the teardowns seen when it began. */
+interface CallRejection {
+  entry: LiveCallHandle;
+  clears: number;
+}
+
 export class BaileysEvents {
   /** How long a received call's handle stays rejectable. Calls ring for roughly a minute, so
    *  two minutes covers the ringing window with margin without pinning dead calls for long. */
@@ -308,13 +322,14 @@ export class BaileysEvents {
   /** Live incoming calls by call id, holding the raw `from` JID sock.rejectCall() needs — the
    *  call event is long gone by the time a reject arrives, so it must be cached at event time.
    *  Readonly reference, owned here; the adapter's lifecycle clears it on teardown. */
-  readonly liveCalls = new LiveCallMap<{
-    callFrom: string;
-    expiresAt: number;
-    from: string;
-    isVideo: boolean;
-    isGroup: boolean;
-  }>();
+  readonly liveCalls = new LiveCallMap<LiveCallHandle>();
+
+  /**
+   * Calls whose rejection is pending. The handle is out of liveCalls meanwhile, so it cannot be rejected
+   * twice, yet a signal that ends the call still finds it here and publishes its outcome. Whatever ends
+   * the call (a signal, another ring under the id, a teardown) makes the rejection stale.
+   */
+  private readonly rejections = new Map<string, CallRejection>();
 
   /** How many ids the record of deletes for everyone keeps before it forgets the oldest. */
   static readonly DELETED_FOR_EVERYONE_LIMIT = 5_000;
@@ -2061,13 +2076,16 @@ export class BaileysEvents {
     // unmapped statuses (ringing/preaccept/transport/relaylatency) are chatter on a call that is
     // still live and must stay rejectable.
     if (call.status === 'terminate') {
+      this.rejections.delete(call.id);
       this.liveCalls.delete(call.id);
       return;
     }
     const outcome = CALL_OUTCOMES[call.status];
     if (!outcome) return;
 
-    const live = this.liveCalls.get(call.id);
+    const rejection = this.rejections.get(call.id);
+    const live = this.liveCalls.get(call.id) ?? (this.isPending(call.id, rejection) ? rejection?.entry : undefined);
+    this.rejections.delete(call.id);
     this.liveCalls.delete(call.id);
 
     // Offline replay is the same hazard as on the offer path: WhatsApp resends the signalling for
@@ -2155,6 +2173,7 @@ export class BaileysEvents {
       }
     }
     const isNewCall = !this.liveCalls.has(callId);
+    this.rejections.delete(callId);
     // The published identity is cached alongside the raw JID so a rejection issued through the API
     // can report the same shape the engine-observed outcomes do — the call event itself is long
     // gone by then.
@@ -2162,11 +2181,19 @@ export class BaileysEvents {
     return isNewCall;
   }
 
+  /** Whether `rejection` is still the pending one for the call: nothing has ended the call since it began. */
+  private isPending(callId: string, rejection: CallRejection | undefined): boolean {
+    return (
+      rejection !== undefined && this.rejections.get(callId) === rejection && this.liveCalls.clears === rejection.clears
+    );
+  }
+
   /**
-   * Reject a currently-ringing call. The entry is evicted before the attempt, so an outcome that
-   * arrives meanwhile cannot publish a second one, and a rejected call does not become rejectable
-   * again. A failed attempt leaves the call ringing, so its entry is put back for a retry unless the
-   * id rang again or the connection was torn down meanwhile. An unknown id or an expired entry maps to CallNotFoundError (HTTP 404).
+   * Reject a currently-ringing call. The entry is evicted before the attempt, so a rejected call does not
+   * become rejectable again, and a signal that ends the call meanwhile publishes its own outcome and makes
+   * this attempt stale. Only an attempt that is not stale publishes its success. A failed one leaves the
+   * call ringing, so its entry is put back for a retry, again unless something ended the call meanwhile.
+   * An unknown id or an expired entry maps to CallNotFoundError (HTTP 404).
    * A failure of the library's rejectCall() itself propagates as-is.
    */
   async rejectCall(callId: string): Promise<void> {
@@ -2180,22 +2207,25 @@ export class BaileysEvents {
       throw new EngineNotReadyError('Cannot reject a call before the engine is initialized.');
     }
     this.liveCalls.delete(callId);
-    const clears = this.liveCalls.clears;
+    const rejection: CallRejection = { entry, clears: this.liveCalls.clears };
+    this.rejections.set(callId, rejection);
+    let current: boolean;
     try {
       await withQueryDeadline(
         sock.rejectCall(callId, entry.callFrom),
         BAILEYS_QUERY_BUDGET_MS,
         'WhatsApp did not confirm the call rejection in time',
       );
+      current = this.isPending(callId, rejection);
     } catch (err) {
-      // A teardown meanwhile ended the connection and its call handles, so the handle stays gone.
-      // Known limit: an outcome that ended the call during the attempt found no entry and left no
-      // trace, so the handle comes back even then, until its TTL runs out.
-      if (this.liveCalls.clears === clears && !this.liveCalls.has(callId) && entry.expiresAt > Date.now()) {
+      if (this.isPending(callId, rejection) && !this.liveCalls.has(callId) && entry.expiresAt > Date.now()) {
         this.liveCalls.set(callId, entry);
       }
       throw err;
+    } finally {
+      if (this.rejections.get(callId) === rejection) this.rejections.delete(callId);
     }
+    if (!current) return;
     // A rejection made HERE produces no inbound `reject` signal to observe, so without this the
     // one outcome the caller definitely knows about — the one they asked for — was the only one
     // never published. Emitted only after the socket accepted it, and the entry is already evicted,
