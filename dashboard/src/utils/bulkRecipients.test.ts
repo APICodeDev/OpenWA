@@ -168,7 +168,7 @@ test('a quote that never closes does not drop the recipients around it', () => {
     '628111111111@c.us',
     '628222222222@c.us',
   ]);
-  // One stray quote and a later one used to pair up and swallow the lines between them.
+  // Quotes are not paired across lines, so a stray one and a later one leave the lines between them alone.
   assert.deepEqual(
     parseBulkRecipients('628111222333\n"628222333444\n628333444555\n628444555666\n628555666777\n"628666777888'),
     [

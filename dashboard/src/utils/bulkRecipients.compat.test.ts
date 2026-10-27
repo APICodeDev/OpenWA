@@ -1,6 +1,7 @@
-// The recipients parser reads a chat id wrapped in CSV quotes and nothing else differently from the one that
-// shipped before quotes were considered: every recipient that parser found, this one finds too, and a quote that
-// never closes cannot take a later line with it. The reference below is that parser, kept verbatim.
+// The recipients parser differs from the one before quote handling was added only in reading a chat id wrapped in
+// CSV quotes: every recipient that parser found, this one finds too, and each line is read on its own, so an
+// unmatched quote cannot take other lines with it. The reference below is the pre-quote-handling parser, kept
+// verbatim.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBulkRecipients } from './bulkRecipients.ts';
@@ -10,7 +11,7 @@ const FIELD_SEPARATORS = /[,;\t،؛]/;
 const MIN_PHONE_DIGITS = 6;
 const CHAT_ID = /^[0-9][0-9:-]*@(c\.us|g\.us|s\.whatsapp\.net|lid|newsletter|broadcast)$/i;
 
-function shippedParse(text: string): string[] {
+function plainParse(text: string): string[] {
   const seen = new Set<string>();
   for (const rawLine of normalizePhoneText(text).split(/\r\n?|\n/)) {
     for (const rawField of rawLine.split(FIELD_SEPARATORS)) {
@@ -85,26 +86,35 @@ function build(rand: () => number): string {
   return text;
 }
 
-test('every recipient the shipped parser found is still found, whatever the quoting', () => {
+test('every recipient the plain parser found is still found, whatever the quoting', () => {
   const rand = random(20261027);
   for (let n = 0; n < 5000; n++) {
     const input = build(rand);
     const found = new Set(parseBulkRecipients(input));
-    for (const id of shippedParse(input)) assert.ok(found.has(id), `${id} lost from ${JSON.stringify(input)}`);
+    for (const id of plainParse(input)) assert.ok(found.has(id), `${id} lost from ${JSON.stringify(input)}`);
   }
 });
 
-test('the only recipients added are chat ids a CSV quote had been hiding, and a stray quote costs no later line', () => {
+test('the only recipients added are chat ids a CSV quote had been hiding, and every line reads as it does alone', () => {
   const rand = random(7);
   for (let n = 0; n < 5000; n++) {
     const input = build(rand);
-    const before = new Set(shippedParse(input));
+    const before = new Set(plainParse(input));
     for (const id of parseBulkRecipients(input)) {
       if (before.has(id)) continue;
       assert.match(id, CHAT_ID, JSON.stringify(input));
       assert.ok(input.includes(id) && input.includes('"'), `${id} added to ${JSON.stringify(input)}`);
     }
-    const tail = parseBulkRecipients(`${input}\n628999888777`);
-    assert.ok(tail.includes('628999888777@c.us'), `a later line was swallowed after ${JSON.stringify(input)}`);
+    // A parser that pairs quotes across lines loses recipients the line alone would give.
+    const whole = new Set(parseBulkRecipients(input));
+    for (const line of input.split(/\r\n?|\n/)) {
+      for (const id of parseBulkRecipients(line)) assert.ok(whole.has(id), `${id} lost from ${JSON.stringify(input)}`);
+    }
   }
+});
+
+test('a chat id in CSV quotes is kept, which the plain parser dropped', () => {
+  assert.deepEqual(plainParse('"1203630000@g.us"'), []);
+  assert.deepEqual(parseBulkRecipients('"1203630000@g.us"'), ['1203630000@g.us']);
+  assert.deepEqual(parseBulkRecipients('Alice,"628123456789@c.us"'), ['628123456789@c.us']);
 });
