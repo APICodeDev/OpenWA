@@ -1339,6 +1339,14 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (session.status === SessionStatus.READY) {
       throw new BadRequestException('Session is already authenticated, no pairing needed');
     }
+    // On whatsapp-web.js a code requested for a number that is already linked can make WhatsApp revoke that
+    // device. The number is the caller's to choose, so a session this key may not touch could be logged out
+    // through this one; a number another session holds is refused. The session's own number is its to re-link.
+    if (await this.sessionRepository.exists({ where: { phone: phoneNumber, id: Not(id) } })) {
+      throw new ConflictException(
+        'That number is linked to another session. Log that session out or delete it before pairing this one.',
+      );
+    }
 
     const pairingCode = await engine.requestPairingCode(phoneNumber);
     return { pairingCode, status: session.status };
