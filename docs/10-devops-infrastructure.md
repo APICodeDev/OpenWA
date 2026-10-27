@@ -436,7 +436,8 @@ LOG_FORMAT=json
 # REDIS_ENABLED=false
 # REDIS_HOST=localhost
 # REDIS_PORT=6379
-# REDIS_TLS=false      # true for a Redis that requires TLS (not the built-in container); every client
+# REDIS_TLS=false      # true for a Redis that requires TLS (not the built-in container: the boot refuses REDIS_TLS=true
+#                      # and a named REDIS_USERNAME beside it, as it serves plain TCP and only the default user); every client
 #                      # (cache, rate limits, queue, WebSocket fan-out) uses it. Private CA: NODE_EXTRA_CA_CERTS in the launch
 #                      # environment (shell, systemd, compose environment:), not in .env
 # REDIS_CACHE_DB=1     # logical database for the cache
@@ -506,13 +507,12 @@ WEBHOOK_DISPATCH_MAX_QUEUED=1000
 # quarter of WEBHOOK_DISPATCH_MAX_QUEUED behind that limit and sheds the rest, so other sessions
 # keep room. Opt-in events such as message.receipt are bounded per receiving webhook instead: a
 # quarter of WEBHOOK_DISPATCH_CONCURRENCY deliveries run at once, divided among the session's
-# webhooks that name the event and one at least for each, and three quarters of
+# webhooks that name the event, and three quarters of
 # WEBHOOK_DISPATCH_MAX_QUEUED events wait; further ones are dropped, not replayed, and counted in
 # openwa_webhook_delivery_failures_total. A webhook whose receiver never answers holds only its own
-# places, but the pool is shared: a session holds up to four at once (one per webhook past four), and
-# another session's events wait for a slot once such sessions together hold all of them, which
-# is four sessions at the defaults. A webhook's share is fixed when its queue is created and kept while
-# it has events, so receipt webhooks added meanwhile can briefly raise a session above four. There is
+# places, but the pool is shared: a session holds at most a quarter of it at once (four at the
+# defaults) however many of its webhooks name the event, and another session's events wait for a slot
+# once such sessions together hold all of them, which is four sessions at the defaults. There is
 # no process-wide cap on the events waiting.
 # Each running, parked or backoff-waiting inline delivery holds its event's inline media
 # (up to 4/3 x WEBHOOK_MEDIA_INLINE_MAX_BYTES as base64), about 1.3 GiB per process at the defaults
@@ -930,6 +930,12 @@ aggregate overview from `StatsService` plus `process.memoryUsage()`, memoizes th
 short TTL (~5s, so back-to-back scrapes don't repeat the DB scan), and exposes it at
 `GET /api/metrics`.
 
+A scrape waits at most 2 seconds for that overview. When the read fails or is still pending after that,
+the database-derived series are left out and `openwa_stats_available` reads 0, while the process, HTTP,
+webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
+meanwhile, so they answer without waiting again and add no query of their own, whatever
+`STATS_CACHE_TTL_MS` is. The 2 seconds bound the wait, not the query: nothing cancels it in the database.
+
 Access is **disabled by default**: the endpoint returns **404** unless `METRICS_TOKEN` is set. When
 set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSafeEqual`); a missing or
 wrong token returns 401. After 10 failed attempts from one client IP within a minute, that client is
@@ -950,7 +956,7 @@ export class MetricsService {
 
   async render(): Promise<string> {
     // Guarded: an unreachable data database must cost the DB-derived series, not the whole scrape.
-    // `overview` is null on failure, which is what openwa_stats_available reports.
+    // `overview` is null on failure or after the 2-second wait, which is what openwa_stats_available reports.
     const overview = await this.readOverviewOrNull();
     const mem = process.memoryUsage();
     const lines: string[] = [];
@@ -987,7 +993,7 @@ export class MetricsService {
 | `openwa_event_loop_delay_max_seconds`        | gauge     | none                                | Maximum event-loop delay since the previous uncached scrape                                                                 |
 | `openwa_unhandled_rejections_total`          | counter   | `kind`                              | Unhandled promise rejections since process start (`other` or `page_context_lost`)                                           |
 | `openwa_queue_jobs`                          | gauge     | `queue`, `state`                    | BullMQ jobs per queue in `wait`/`active`/`delayed`/`failed` (cluster-wide, from Redis)                                      |
-| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded, 0 if it failed                                |
+| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded, 0 if it failed or took over 2 s               |
 | `openwa_sessions_total`                      | gauge     | —                                   | Configured sessions                                                                                                         |
 | `openwa_sessions_active`                     | gauge     | —                                   | READY (active) sessions                                                                                                     |
 | `openwa_sessions`                            | gauge     | `status`                            | Session count per status                                                                                                    |
@@ -1007,7 +1013,7 @@ without knowing anything about OpenWA. They come from `src/common/metrics/reques
 
 Not every row appears on every scrape, and the difference matters when you write alerts. The
 database-derived series (`openwa_sessions*`, `openwa_messages*`) are **omitted entirely** when the
-overview cannot be read — `openwa_stats_available` is what tells the two cases apart, so alert on it
+overview cannot be read within 2 seconds — `openwa_stats_available` is what tells the two cases apart, so alert on it
 rather than reading a missing series as zero. `openwa_send_pacing_refusals_total` appears only once
 the governor has refused something. `openwa_queue_jobs` appears only with `QUEUE_ENABLED=true`, and a
 queue whose counts cannot be read within 2 s is left out of that scrape. For these, `absent()` is the
@@ -1027,9 +1033,9 @@ seen, so keep new renderers on that composition.
 
 > **The database-derived series can be absent.** `openwa_sessions_*`, `openwa_messages_*` and the per-status
 > breakdown come from `StatsService.getOverview()`, which is memoized for `STATS_CACHE_TTL_MS` (default 30 s,
-> shared with `GET /api/stats/overview`) behind the 5 s render cache. If that read fails — an outage, a statement
-> timeout, pool exhaustion, a `SQLITE_BUSY` under load — they are OMITTED rather than reported as zero, and
-> `openwa_stats_available` goes to 0. The process, HTTP and webhook series keep being served, so `up` stays 1
+> shared with `GET /api/stats/overview`) behind the 5 s render cache. If that read fails or takes over 2 s — an
+> outage, a statement timeout, pool exhaustion, a `SQLITE_BUSY` under load — they are OMITTED rather than reported
+> as zero, and `openwa_stats_available` goes to 0. The process, HTTP and webhook series keep being served, so `up` stays 1
 > and still means "the process is alive". Alert on `openwa_stats_available == 0` for the degradation itself;
 > an alert written as `openwa_sessions_active == 0` would never fire for it, and one written with `absent()`
 > would. Because of the two caches, `openwa_stats_available` can keep reporting 1, and the series their last
