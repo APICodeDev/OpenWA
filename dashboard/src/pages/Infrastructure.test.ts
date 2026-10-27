@@ -1741,7 +1741,7 @@ const DETAIL_PINS = {
     'DATABASE_SSL',
     'DATABASE_SSL_REJECT_UNAUTHORIZED',
   ],
-  redis: ['REDIS_BUILTIN', 'REDIS_PORT', 'REDIS_PASSWORD', 'QUEUE_ENABLED'],
+  redis: ['REDIS_BUILTIN', 'REDIS_TLS', 'REDIS_USERNAME', 'REDIS_PORT', 'REDIS_PASSWORD', 'QUEUE_ENABLED'],
   storage: ['MINIO_BUILTIN', 'S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'],
 };
 
@@ -1808,7 +1808,7 @@ test('every setting a save writes names its variable beside its field when the e
       dbSchemaRow: ['POSTGRES_SCHEMA'],
       dbSsl: ['DATABASE_SSL'],
       dbSslVerify: ['DATABASE_SSL_REJECT_UNAUTHORIZED'],
-      redisBuiltIn: ['REDIS_BUILTIN'],
+      redisBuiltIn: ['REDIS_BUILTIN', 'REDIS_TLS', 'REDIS_USERNAME'],
       redisRow: ['REDIS_PORT', 'REDIS_PASSWORD'],
       queue: ['QUEUE_ENABLED'],
       storageBuiltIn: ['MINIO_BUILTIN'],

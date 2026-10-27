@@ -738,6 +738,8 @@ export function Infrastructure() {
               )}
               {pinNote('REDIS_HOST')}
               {flagPinNote('REDIS_BUILTIN', 'redis')}
+              {pinNote('REDIS_TLS')}
+              {pinNote('REDIS_USERNAME')}
               {configForm.redisConfig.builtIn && builtInDetailNotes('redis')}
 
               {!configForm.redisConfig.builtIn && (
