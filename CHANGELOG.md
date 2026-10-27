@@ -200,7 +200,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix an old QR reply replacing a newer code or closing a reopened pairing dialog.
 - Fix the reading position jumping after a chat switch while images were still loading.
 - Fix quoted chat ids in an uploaded recipients CSV being dropped from a bulk send.
-- Retry a hung readiness check during a restart and give up on a restart request that never answers after five minutes.
+- Retry a hung readiness check during a restart and report a restart request that never answers within five minutes as outcome unknown.
 - Check the plugin instance secret in the dashboard against the 16 to 512 character bounds of the API, counting characters rather than UTF-16 units.
 - Fix a backup restore continuing under a different API key after sign-out.
 - Show the Portuguese dashboard to browsers set to European or generic Portuguese.
