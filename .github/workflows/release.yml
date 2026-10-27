@@ -461,6 +461,7 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
+      version: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -696,10 +697,111 @@ jobs:
           # justification and a condition for removing it.
           trivyignores: .trivyignore
 
+  # Picks the tags promote may move. The X.Y and latest channels only ever move forward: a stable
+  # release older than what a channel already serves (a re-run of an old tag, a patch to an earlier
+  # line) leaves that channel alone and is published under the channels it still leads. A channel
+  # whose state cannot be read fails the release instead of being treated as absent; only the
+  # registry's own "manifest unknown" answer counts as absent. The lookups are anonymous pulls,
+  # made here so that the job holding the push, id-token and attestation grants issues none.
+  release-tags:
+    name: Resolve release image channels
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: read
+    needs: [docker]
+    outputs:
+      tags: ${{ steps.select.outputs.tags }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Select release tags without moving newer channels
+        id: select
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.docker.outputs.version }}
+          TAGS: ${{ needs.docker.outputs.tags }}
+        run: |
+          set -euo pipefail
+          stable='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          channel_version() {
+            local ref="$1" image config version token_url manifest_url token status
+            image="${ref%:*}"
+            if config="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>"$work/inspect.err")"; then
+              # Both published architectures must identify the same stable application version.
+              version="$(jq -er '[.["linux/amd64"].config.Labels["org.opencontainers.image.version"], ((.["linux/arm64"] // .["linux/arm64/v8"]).config.Labels["org.opencontainers.image.version"])] | if all(.[]; type == "string") and (unique | length) == 1 then .[0] else error("missing or inconsistent platform versions") end' <<< "$config")" || return 1
+              if [[ ! "$version" =~ $stable ]]; then
+                echo "::error::$ref has no stable release version identity" >&2
+                return 1
+              fi
+              printf '%s\n' "$version"
+              return 0
+            fi
+            # A failed inspect is not evidence of absence. Only a registry 404 carrying its
+            # structured manifest/repository-not-found code permits creating a missing channel.
+            case "$image" in
+              ghcr.io/*)
+                token_url="https://ghcr.io/token?service=ghcr.io&scope=repository:${image#ghcr.io/}:pull"
+                manifest_url="https://ghcr.io/v2/${image#ghcr.io/}/manifests/${ref##*:}"
+                ;;
+              docker.io/*)
+                token_url="https://auth.docker.io/token?service=registry.docker.io&scope=repository:${image#docker.io/}:pull"
+                manifest_url="https://registry-1.docker.io/v2/${image#docker.io/}/manifests/${ref##*:}"
+                ;;
+              *) echo "::error::Unsupported release registry for $ref" >&2; return 1 ;;
+            esac
+            token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$token_url" | jq -er '.token // .access_token | select(type == "string" and length > 0)')" || return 1
+            status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output "$work/manifest.json" --write-out '%{http_code}' --header "Authorization: Bearer $token" --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$manifest_url")" || return 1
+            if [ "$status" = 404 ] && jq -e '.errors | type == "array" and length > 0 and all(.[]; .code == "MANIFEST_UNKNOWN" or .code == "NAME_UNKNOWN")' "$work/manifest.json" >/dev/null; then
+              printf 'absent\n'
+              return 0
+            fi
+            echo "::error::Cannot determine the existing release identity for $ref (registry HTTP $status)" >&2
+            cat "$work/inspect.err" >&2
+            return 1
+          }
+          selected=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            channel="${tag##*:}"
+            if [[ "$channel" = latest || "$channel" =~ ^[0-9]+\.[0-9]+$ ]]; then
+              if [[ "$REF_NAME" == *-* ]]; then
+                echo "Skipping stable channel $tag for a prerelease"
+                continue
+              fi
+              if [[ ! "$VERSION" =~ $stable ]]; then
+                echo "::error::Cannot order non-stable release version $VERSION"
+                exit 1
+              fi
+              current="$(channel_version "$tag")"
+              if [ "$current" != absent ] && [ "$(printf '%s\n' "$VERSION" "$current" | LC_ALL=C sort -V | tail -n 1)" != "$VERSION" ]; then
+                echo "Keeping $tag at newer release $current"
+                continue
+              fi
+            elif [ "$channel" != "$VERSION" ]; then
+              echo "::error::Unexpected release tag $tag for version $VERSION"
+              exit 1
+            fi
+            selected+=("$tag")
+          done <<< "$TAGS"
+          if [ "${#selected[@]}" -eq 0 ]; then
+            echo "::error::No release tags were selected"
+            exit 1
+          fi
+          {
+            echo 'tags<<RELEASE_TAGS'
+            printf '%s\n' "${selected[@]}"
+            echo 'RELEASE_TAGS'
+          } >> "$GITHUB_OUTPUT"
+
   # Applies the release tags (X.Y.Z — plus X.Y and latest for non-prereleases) to the image
   # boot-smoke just proved can start, on BOTH registries (GHCR + Docker Hub — the tag set computed
-  # once by the docker job's metadata-action covers both, and arrives here via job outputs, so the
-  # promoted set is by construction the build's own tag set, never a re-derived pattern).
+  # once by the docker job's metadata-action covers both. release-tags drops the channels that would
+  # move backwards and hands the rest here via job outputs, so the promoted set is by construction
+  # a subset of the build's own tag set, never a re-derived pattern).
   # `imagetools create` re-points tags at the existing manifest list without rebuilding, so the
   # promoted image is bit-identical to the one tested on both registries, and its provenance and
   # SBOM attestations travel with it. Before re-pointing anything, the job records a signed
@@ -715,7 +817,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    needs: [docker, boot-smoke, image-scan]
+    needs: [docker, boot-smoke, image-scan, release-tags]
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
@@ -756,7 +858,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           REF_NAME: ${{ github.ref_name }}
-          TAGS: ${{ needs.docker.outputs.tags }}
+          TAGS: ${{ needs.release-tags.outputs.tags }}
           EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           set -euo pipefail
@@ -878,10 +980,10 @@ jobs:
   # This job fixes both blind spots. It runs after promote (so it sees the final state, cleanup
   # included) and it never logs in, so it fails on a tag that exists but is not publicly readable —
   # which is indistinguishable from a missing tag to everyone downstream. The checked set is the
-  # docker job's own tag output (both registries), so it matches whatever was actually promoted —
-  # for a prerelease that is only the exact X.Y.Z-pre tag, with no stale expectation that `latest`
-  # or X.Y moved. Every tag must also resolve to the build's digest, so a re-pointed channel can
-  # never silently serve content other than the tested image.
+  # release-tags selection (both registries), so it matches what promote was told to move: for a
+  # prerelease that is only the exact X.Y.Z-pre tag, and a channel that already served a newer
+  # release is not expected to have moved. Every tag must also resolve to the build's digest, so a
+  # re-pointed channel can never silently serve content other than the tested image.
   verify-published:
     name: Verify published tags (anonymous)
     runs-on: ubuntu-latest
@@ -889,7 +991,7 @@ jobs:
     # After cleanup-staging, not beside it: that job deletes registry versions, so this check has to
     # see the registry after it, and run last. It is a best-effort job, so gate on promote rather
     # than on its result.
-    needs: [docker, promote, cleanup-staging]
+    needs: [docker, release-tags, promote, cleanup-staging]
     if: always() && needs.promote.result == 'success'
     # attestations: read for `gh attestation verify` below. GH_TOKEN is an API credential for the
     # attestation lookup, not a registry login: every pull here stays anonymous.
@@ -903,7 +1005,7 @@ jobs:
       # Deliberately NO docker/login-action here. Authenticating would defeat the purpose.
       - name: Resolve every promoted tag without credentials
         env:
-          TAGS: ${{ needs.docker.outputs.tags }}
+          TAGS: ${{ needs.release-tags.outputs.tags }}
           EXPECTED_DIGEST: ${{ needs.docker.outputs.digest }}
           GH_TOKEN: ${{ github.token }}
         run: |
