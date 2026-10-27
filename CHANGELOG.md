@@ -308,6 +308,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Carry a plugin's stored data into the new tree before an update swaps it in.
 - Refuse a plugin catalog entry whose id, name, version or text fields are not text, and accept null in its optional fields.
 - Log once each `SSRF_ALLOWED_HOSTS` entry that carries a scheme, port, path or wildcard, which never matches a host.
+- Run every `message:sending` handler, a moderation veto included, for a send that a hook handler schedules after its own call has ended; it was skipped as re-entrant.
 
 ### Dependencies
 
@@ -348,6 +349,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On SQLite the first boot checks the message search index against all stored text and rebuilds it when they differ, so a large database starts more slowly while the port is closed.
 - The idempotency key of recurring webhook events ends in a random id minted per dispatch instead of an ISO timestamp; a receiver that reads its last segment as a time must dedupe on the whole key.
 - An ingress route's `conversationId` JSON pointer is read by RFC 6901 tokens, so a trailing or doubled slash names an empty key; a delivery such a pointer no longer resolves takes the per-instance lane.
+- A boot with `DATABASE_SSL=true` beside the built-in PostgreSQL (`POSTGRES_BUILTIN=true` with the bundled host) is refused; set `DATABASE_SSL=false`, or use an external PostgreSQL.
+- `GET /api/sessions/{sessionId}/contacts/profile-pictures` leaves out an id it skipped after another lookup timed out, where an id without a picture or with a failed lookup stays `null`; a client that indexes the answer by every requested id must handle a missing key.
+- A plugin catalog with an entry whose `id`, `name`, `version` or text field is not text is refused with `400`, naming the entry; the default catalog is unaffected, and a private `PLUGIN_CATALOG_URL` catalog must correct the entry.
 
 ### Security
 
@@ -356,11 +360,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Socket.IO connections to the root namespace `/` are refused, where an unauthenticated client stayed connected outside the handshake and per-key socket limits; only `/events` accepts clients.
 - An object sent for `allowedChats`, `allowedSessions` or `allowedIps` when an API key is created or updated answers `400`; it was stored as an empty list, which means no restriction, so the key reached every chat, session or address.
 - The secrets of a wildcard integration instance are removed from the plugin config when the instance is deleted, disabled, moved to one session or saved without them; they stayed in use after that.
-- A pairing code request on whatsapp-web.js for a number that is the stored phone of another session answers `409`; a key restricted to one session could have WhatsApp revoke the login of another through it.
+- A pairing code request on whatsapp-web.js for a number that is the stored phone of another session answers `409`; a key restricted to one session could have WhatsApp revoke the login of another through it. The refusal also tells such a key that a number it tries is held by another session.
 - A session-restricted ADMIN key that creates, moves, disables or deletes an integration instance no longer retires the plugin's all-sessions activation, which silenced the plugin on sessions the key cannot see.
 - A queued or replayed ingress delivery keeps the verified flag recorded when it was accepted, so a plugin update that makes an unsigned route sign no longer labels a payload nobody authenticated as verified.
 - An ingress delivery admitted for one session fails when its instance moved to another session while it waited, where it reached the handler with the other session's config.
-- Run every `message:sending` handler, a moderation veto included, for a send that a hook handler schedules after its own call has ended; it was skipped as re-entrant.
 - Disconnect a WebSocket whose API key's stored expiry stops parsing, as REST already refuses it.
 - The message list no longer returns a row that was replaced between page selection and read and no longer matches the requested chat, time window, direction or type; for a chat-restricted key it could be another chat's message.
 - `scripts/restore.sh` also refuses an archive configuration that puts the admin key file, `.env.generated` or `database.sql` on a directory the restore refills, where a link planted in the archive made the copy write outside the data directory.
