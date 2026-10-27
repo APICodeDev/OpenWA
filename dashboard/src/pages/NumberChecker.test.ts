@@ -392,6 +392,18 @@ test('NumberChecker: bulk parsing also splits on the Arabic comma and semicolon'
   assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b3 unique numbers parsed$/);
 });
 
+// A spreadsheet copied into the box separates its columns with tabs, so an index column stays a column of its own.
+test('NumberChecker: a bulk list copied from a spreadsheet keeps each column apart', async () => {
+  const lookups = stubLookups(registered);
+  renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '1\t+62 812 3456 7890\n2\t+62 813 4567 8901' } });
+  assert.match(rtl.screen.getByText(/unique numbers parsed/).textContent ?? '', /\b2 unique numbers parsed$/);
+  startBatch();
+  await rtl.screen.findByText('Completed checking 2 numbers.', {}, { timeout: 3000 });
+  assert.deepEqual(lookups, ['6281234567890', '6281345678901']);
+});
+
 test('NumberChecker: numbers and ids are isolated as left-to-right, so a right-to-left page keeps them in order', async () => {
   stubLookups(registered);
   const { container } = renderComponent();

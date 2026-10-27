@@ -126,7 +126,7 @@ export function NumberChecker() {
   // Batch parsing statistics
   const batchParsedStats = useMemo(() => {
     const lines = normalizePhoneText(batchInput)
-      .split(/[\n,;\u060C\u061B]+/)
+      .split(/[\n,;\t\u060C\u061B]+/)
       .map(n => n.trim())
       .filter(n => n.length > 0);
 
