@@ -30,12 +30,13 @@ export class HookManager {
   // NOTE: the context does not span the async engine `message_create` echo, so this guards
   // synchronous re-entry only (the async message:sent echo loop is documented, deferred).
   private readonly inFlightEvents = new AsyncLocalStorage<Set<HookEvent>>();
+  private nextHookId = 0;
 
   /**
    * Register a hook handler
    */
   register(pluginId: string, event: HookEvent, handler: HookHandler, priority = 100): string {
-    const id = `${pluginId}:${event}:${Date.now()}`;
+    const id = `${pluginId}:${event}:${this.nextHookId++}`;
     const registration: HookRegistration = {
       id,
       pluginId,
