@@ -50,13 +50,7 @@ export interface IngressDeps {
       pluginId: string;
       providerDeliveryId: string;
       route: string;
-      payload: {
-        headers: Record<string, string>;
-        query: Record<string, string>;
-        body: string;
-        rawBody: string;
-        method?: string;
-      };
+      payload: IngressJobData['payload'] & { method?: string };
       payloadHash: string;
       sessionId: string | null;
     }): Promise<boolean>;
@@ -238,6 +232,9 @@ export class IngressService {
     // A shared-secret route carries the instance secret itself in its declared header, and an hmac
     // route's declared header carries a signature that is only useful to re-send the same body.
     const payload = {
+      // Every authenticating scheme has passed by here; a `none` route authenticates nothing. Recorded now
+      // because a plugin update can change the scheme before a queued or replayed delivery runs.
+      admission: { verified: route.signature.scheme !== 'none' },
       headers: redactSensitiveHeaders(
         req.headers,
         route.signature.scheme === 'shared-secret' || route.signature.scheme === 'hmac-sha256'

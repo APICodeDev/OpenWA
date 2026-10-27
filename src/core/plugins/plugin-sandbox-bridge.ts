@@ -196,8 +196,10 @@ export class PluginSandboxBridge {
     const route = plugin?.manifest.ingress?.find(candidate => candidate.route === d.route);
     // Reaching dispatch means every authenticating scheme already passed host verification. A route
     // explicitly configured with scheme:none is unauthenticated and must never be labelled verified.
-    // Missing/hot-swapped route metadata fails closed.
-    const verified = route ? route.signature.scheme !== 'none' : false;
+    // The verdict is the one recorded at admission: a plugin update can change the route's scheme while
+    // a delivery waits, and it must not relabel a payload nobody authenticated. A delivery admitted before
+    // the verdict was recorded reads the route as it stands. Missing/hot-swapped route metadata fails closed.
+    const verified = !!route && (d.payload.admission?.verified ?? route.signature.scheme !== 'none');
     const instance = await this.hostServices.getPluginInstancePort().resolve(d.pluginId, d.instanceId);
     // The live door and the reconciler refuse an unknown or disabled instance; a queued job, a retry,
     // the inline fallback and a redrive all land here instead, so the same rule is enforced once more.

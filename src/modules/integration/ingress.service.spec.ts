@@ -172,6 +172,51 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
   });
 });
 
+describe('IngressService admission verdict', () => {
+  it.each([
+    {
+      label: 'an unauthenticated route',
+      signature: { scheme: 'none' },
+      headers: {} as Record<string, string>,
+      verified: false,
+    },
+    {
+      label: 'a shared-secret route',
+      signature: { scheme: 'shared-secret', header: 'X-Provider-Token' },
+      headers: { 'x-provider-token': 's' },
+      verified: true,
+    },
+  ])(
+    'records $label as verified: $verified in the stored and queued payload',
+    async ({ signature, headers, verified }) => {
+      const d = deps({
+        manifestRoute: jest.fn().mockReturnValue({
+          route: 'chatwoot',
+          mode: 'async',
+          verify: 'core',
+          maxBodyBytes: 1024,
+          signature,
+          dedupHeader: 'x-delivery',
+        }),
+      });
+      const res = await new IngressService(d).handle({
+        pluginId: 'chatwoot',
+        instanceId: 'acct1',
+        route: 'chatwoot',
+        method: 'POST',
+        headers: { 'x-delivery': 'd1', ...headers },
+        query: {},
+        rawBody: '{}',
+      });
+      expect(res.status).toBe(202);
+      const stored = (d.events.recordOrSkip.mock.calls as unknown as [[{ payload: { admission?: unknown } }]])[0][0];
+      const queued = (d.enqueue.mock.calls as unknown as [[{ payload: { admission?: unknown } }]])[0][0];
+      expect(stored.payload.admission).toEqual({ verified });
+      expect(queued.payload.admission).toEqual({ verified });
+    },
+  );
+});
+
 describe('IngressService.handle', () => {
   const req = {
     pluginId: 'chatwoot',

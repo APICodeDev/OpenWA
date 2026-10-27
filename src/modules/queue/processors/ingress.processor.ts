@@ -36,7 +36,14 @@ export interface IngressJobData {
   // pointer. Undefined when the route declares no pointer — the per-conversation ordering lock then
   // serializes per instance instead (see orderingKeyFor in ../../integration/ordering-lock).
   providerConversationId?: string;
-  payload: { headers: Record<string, string>; query: Record<string, string>; body: string; rawBody: string };
+  payload: {
+    headers: Record<string, string>;
+    query: Record<string, string>;
+    body: string;
+    rawBody: string;
+    // The host's verdict when it accepted the request; see IngressEvent.payload.
+    admission?: { verified: boolean };
+  };
 }
 
 // The KeyedAsyncLock wrapping dispatch below guarantees no two dispatches for the SAME conversation

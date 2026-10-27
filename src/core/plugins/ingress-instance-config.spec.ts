@@ -45,18 +45,24 @@ function instanceRow(instanceId: string, config: Record<string, unknown> | null,
   };
 }
 
-function job(instanceId: string): IngressJobData {
+/** A job as admission leaves it: the session is the one the instance was bound to. */
+function job(
+  instanceId: string,
+  sessionId: string | null = SHARED_SCOPE,
+  admission?: { verified: boolean },
+): IngressJobData {
   return {
     pluginId: PLUGIN_ID,
     instanceId,
     route: '/hook',
     deliveryId: 'delivery-' + instanceId,
-    payload: { headers: {}, query: {}, body: '{}', rawBody: '{}' },
+    sessionId: sessionId ?? undefined,
+    payload: { headers: {}, query: {}, body: '{}', rawBody: '{}', ...(admission ? { admission } : {}) },
   };
 }
 
-/** The one field of the worker payload these specs assert on. */
-type WebhookCall = { config?: Record<string, unknown> };
+/** The fields of the worker payload these specs assert on. */
+type WebhookCall = { config?: Record<string, unknown>; verified?: boolean; sessionId?: string };
 
 /** Builds a bridge whose dispatch path is real; only the worker host and the instance store are fakes. */
 function makeBridge(opts: {
@@ -255,7 +261,7 @@ describe('ingress dispatch resolves config per INSTANCE, not per session scope',
       manifestOverrides: { sessionScoped: false },
     });
 
-    await bridge.dispatchWebhookForInstance(job('acct-a'));
+    await bridge.dispatchWebhookForInstance(job('acct-a', null));
 
     expect(calls[0].config).toEqual({ apiToken: 'token-A' });
   });
@@ -278,9 +284,68 @@ describe('ingress dispatch refuses an instance that is disabled or deleted', () 
     const wildcard = instanceRow('acct-b', { apiToken: 'token-B' }, null);
     const { bridge, calls } = makeBridge({ rows: [wildcard], baseConfig: { apiToken: 'token-B' } });
 
-    await expect(bridge.dispatchWebhookForInstance(job('acct-a'))).rejects.toThrow(
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', null))).rejects.toThrow(
       'instance acct-a of plugin chat-adapter is disabled or deleted',
     );
     expect(calls).toHaveLength(0);
   });
+});
+
+const route = (scheme: 'none' | 'hmac-sha256') => ({
+  route: '/hook',
+  mode: 'async' as const,
+  verify: 'core' as const,
+  maxBodyBytes: 1024,
+  signature: scheme === 'none' ? { scheme: 'none' as const } : { scheme: 'hmac-sha256' as const, header: 'x-sig' },
+});
+
+describe('ingress dispatch keeps what was decided when the delivery was admitted', () => {
+  const row = () => instanceRow('acct-a', { apiToken: 'token-A' }, 'S1');
+
+  it('does not label an unauthenticated delivery verified after its route starts signing', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('hmac-sha256')] },
+    });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: false }));
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it('keeps an authenticated delivery verified after its route stops signing', async () => {
+    const { bridge, calls } = makeBridge({
+      rows: [row()],
+      manifestOverrides: { ingress: [route('none')] },
+    });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: true }));
+
+    expect(calls[0].verified).toBe(true);
+  });
+
+  it('still never labels a delivery verified when its route is gone', async () => {
+    const { bridge, calls } = makeBridge({ rows: [row()] });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', 'S1', { verified: true }));
+
+    expect(calls[0].verified).toBe(false);
+  });
+
+  it.each([
+    ['signing', 'hmac-sha256', true],
+    ['unsigned', 'none', false],
+  ] as const)(
+    'reads the route for a delivery admitted before the verdict was recorded (%s)',
+    async (_l, scheme, want) => {
+      const { bridge, calls } = makeBridge({
+        rows: [row()],
+        manifestOverrides: { ingress: [route(scheme)] },
+      });
+
+      await bridge.dispatchWebhookForInstance(job('acct-a', 'S1'));
+
+      expect(calls[0].verified).toBe(want);
+    },
+  );
 });
