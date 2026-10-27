@@ -193,6 +193,23 @@ describe('message list reads inline media within the budget', () => {
 
     expect(messages.map(m => m.id)).toEqual(['keep']);
   });
+  it('still serves the picked page when the cursor row is deleted before its rows are read', async () => {
+    await seed(Array.from({ length: 5 }, (_, i) => ({ id: `c${i}`, metadata: null })));
+    const getMany = Object.getOwnPropertyDescriptor(SelectQueryBuilder.prototype, 'getMany')!
+      .value as SelectQueryBuilder<Message>['getMany'];
+    jest.spyOn(SelectQueryBuilder.prototype, 'getMany').mockImplementationOnce(async function (
+      this: SelectQueryBuilder<Message>,
+    ) {
+      await repository.delete({ id: 'c4' });
+      return getMany.call(this);
+    });
+
+    const { messages, total } = await service.getMessages(SESSION, { after: 'c4' });
+
+    expect(total).toBe(5);
+    expect(messages.map(m => m.id)).toEqual(['c3', 'c2', 'c1', 'c0']);
+  });
+
   it.each([
     ['chat', { chatId: 'other@g.us' }],
     ['sender', { from: 'other@c.us' }],

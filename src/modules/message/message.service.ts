@@ -402,6 +402,9 @@ export class MessageService implements PluginMessagePort {
 
     // `total` keeps its documented meaning, rows matching the filters, so count before narrowing.
     const total = await query.clone().getCount();
+    // What the page's rows are re-read against. Taken before the cursor: the cursor is only a position the page
+    // ids already encode, and re-applying it would turn a cursor row deleted meanwhile into an empty page.
+    const rowSelection = query.clone();
 
     if (after !== undefined) {
       // A selection cursor must name a row inside this same selection, not merely a row from the
@@ -455,7 +458,7 @@ export class MessageService implements PluginMessagePort {
     // base64 in metadata.media.data. Spent newest-first in the selected order, so the
     // most recently viewed media still arrives inline and the rest keeps its omitted marker.
     return {
-      messages: await this.readPageSpendingBudget(query, page, inlineMediaBudget),
+      messages: await this.readPageSpendingBudget(rowSelection, page, inlineMediaBudget),
       total,
       ...(unknownTimestampTotal !== undefined ? { unknownTimestampTotal } : {}),
     };
