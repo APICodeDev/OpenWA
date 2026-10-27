@@ -1778,13 +1778,29 @@ func TestRequestLogRedactsBaseURLPassword(t *testing.T) {
 // A Do path that already carries a query string keeps it; the query values are appended with "&"
 // rather than a second "?", which the server would read as part of the first value.
 func TestDoPathWithQueryAppendsQueryValues(t *testing.T) {
-	rt := &recordTransport{status: 200, body: `[]`}
-	c := newTestClient(t, rt)
-	if err := c.Do(context.Background(), "GET", "/api/sessions?limit=5", url.Values{"name": {"x"}}, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := rt.lastReq.URL.RawQuery; got != "limit=5&name=x" {
-		t.Errorf("query = %q, want %q", got, "limit=5&name=x")
+	for _, tc := range []struct{ path, want string }{
+		{"/api/sessions", "name=x&tag=a&tag=b"},
+		{"/api/sessions?limit=5", "limit=5&name=x&tag=a&tag=b"},
+		{"/api/sessions#client", "name=x&tag=a&tag=b"},
+		{"/api/sessions?limit=5#client", "limit=5&name=x&tag=a&tag=b"},
+		{"/api/sessions#client?x=1", "name=x&tag=a&tag=b"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rt := &recordTransport{status: 200, body: `[]`}
+			c, err := New("https://api.example.com/prefix", "k", WithTransport(rt))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Do(context.Background(), "GET", tc.path, url.Values{"name": {"x"}, "tag": {"a", "b"}}, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if got := rt.lastReq.URL.RawQuery; got != tc.want {
+				t.Errorf("query = %q, want %q", got, tc.want)
+			}
+			if got := rt.lastReq.URL.EscapedPath(); got != "/prefix/api/sessions" {
+				t.Errorf("path = %q, want the base URL prefix preserved", got)
+			}
+		})
 	}
 }
 
@@ -2001,5 +2017,19 @@ func TestStatusFontConstants(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"font":10`) {
 		t.Errorf("font did not marshal as a bare number: %s", body)
+	}
+}
+
+func TestReservedCharactersStayInTypedPathSegment(t *testing.T) {
+	rt := &recordTransport{status: 200, body: `{}`}
+	c := newTestClient(t, rt)
+	if _, err := c.Contacts.Get(context.Background(), "s", "a/b?c#d"); err != nil {
+		t.Fatal(err)
+	}
+	if got := rt.lastReq.URL.EscapedPath(); got != "/api/sessions/s/contacts/a%2Fb%3Fc%23d" {
+		t.Errorf("escaped path = %q", got)
+	}
+	if rt.lastReq.URL.RawQuery != "" || rt.lastReq.URL.Fragment != "" {
+		t.Errorf("the ID moved into query or fragment: %s", rt.lastReq.URL)
 	}
 }

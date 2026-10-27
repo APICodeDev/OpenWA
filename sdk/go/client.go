@@ -296,18 +296,16 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		reader = bytes.NewReader(b)
 	}
 
-	rawURL := c.baseURL + path
-	if len(query) > 0 {
-		sep := "?"
-		if strings.Contains(path, "?") {
-			sep = "&"
-		}
-		rawURL += sep + query.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reader)
 	if err != nil {
 		return nil, "", fmt.Errorf("openwa: building request: %w", err)
+	}
+	// Merged into the parsed URL: appended to the string, the values would land inside a fragment.
+	if len(query) > 0 {
+		if req.URL.RawQuery != "" {
+			req.URL.RawQuery += "&"
+		}
+		req.URL.RawQuery += query.Encode()
 	}
 	// Read through the request: NewRequestWithContext has just refused a nil ctx, which ctx.Value would panic on.
 	if key, hasKey := req.Context().Value(idempotencyContextKey{}).(string); hasKey {
