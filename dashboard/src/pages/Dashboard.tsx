@@ -146,7 +146,7 @@ export function Dashboard() {
         <div className="section-header">
           <h2>{t('dashboard.sessionsOverview')}</h2>
           <span className="section-subtitle">
-            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.total ?? 0 })}
+            {t('dashboard.showingSessions', { shown: sessions.length, total: stats?.total ?? sessions.length })}
           </span>
         </div>
 

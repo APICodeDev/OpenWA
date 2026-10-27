@@ -173,6 +173,15 @@ test('a session last active a few hours ago reads in hours, not as a date', asyn
   assert.equal(document.querySelector('.last-active')?.textContent, '5 hours ago');
 });
 
+// The harness refuses the session statistics, as the gateway does a failed or unsent read: the count of sessions is
+// then the list's own, not a total of zero beside the rows on screen.
+test('a session list without statistics is counted by its own length', async () => {
+  sessionList = [READY_SESSION];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(document.querySelector('.section-subtitle')?.textContent, 'Showing 1 of 1 sessions');
+});
+
 test('a read-only key is offered no Disconnect', async () => {
   webhooksStatus = 403;
   sessionList = [READY_SESSION];
