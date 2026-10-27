@@ -9,6 +9,7 @@ import {
   extractBaileysButtonReply,
   extractBaileysButtons,
   extractBaileysCommerce,
+  extractBaileysContext,
   extractBaileysPoll,
   isBaileysCatalogShare,
   keyParticipant,
@@ -315,6 +316,7 @@ export class BaileysHistory {
       return null;
     }
     const body = extractBaileysBody(content);
+    const context = extractBaileysContext(content);
     const commerce = extractBaileysCommerce(content, contentType);
     const button = extractBaileysButtonReply(content, contentType);
     const buttons = extractBaileysButtons(content, contentType);
@@ -336,6 +338,8 @@ export class BaileysHistory {
         poll: extractBaileysPoll(content),
         button,
         buttons,
+        quotedMessage: context.quotedMessage,
+        mentionedJids: context.mentionedJids,
         isCatalogShare: isBaileysCatalogShare(content),
         // Populate the disappearing-messages timer using the same extraction the live path and the
         // session-store cache share (`msg.ephemeralDuration` primary, `contextInfo.expiration` fallback),
