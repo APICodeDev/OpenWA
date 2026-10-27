@@ -2071,6 +2071,30 @@ describe('InfraDataController audit trail — import emits only on a committed r
     expect(actions).toContain(AuditAction.INFRA_DATA_IMPORTED);
   });
 
+  it('records each orphan session it stops, even when the restore is then rolled back', async () => {
+    await seedSession('s1');
+    const audit = { logInfo: jest.fn().mockResolvedValue(null) };
+    const sessionService = {
+      getActiveSessionIds: () => ['ghost'],
+      stopOrphanEngines: jest.fn().mockResolvedValue({ stopped: ['ghost'], notRunning: [], failed: [] }),
+    };
+    const controller = new InfraDataController(
+      new InfraDataService(cfg as never, ds, audit as never, sessionService as never),
+    );
+    const dump = await controller.exportData();
+    // A repeated primary key fails its insert inside the transaction, which rolls the restore back.
+    dump.tables.sessions = [dump.tables.sessions[0], dump.tables.sessions[0]];
+
+    const res = await controller.importData({ tables: dump.tables, stopOrphans: true });
+
+    expect(res.imported).toBe(false);
+    const calls = audit.logInfo.mock.calls as Array<[AuditAction, { sessionId?: string; metadata?: unknown }]>;
+    expect(calls.filter(([action]) => action === AuditAction.INFRA_DATA_IMPORTED)).toEqual([]);
+    expect(calls.filter(([action]) => action === AuditAction.SESSION_STOPPED)).toEqual([
+      [AuditAction.SESSION_STOPPED, { sessionId: 'ghost', metadata: { via: 'infra_import_data' } }],
+    ]);
+  });
+
   it('does NOT emit INFRA_DATA_IMPORTED when an empty backup is refused (no data changed)', async () => {
     await seedSession('s1');
     const audit = { logInfo: jest.fn().mockResolvedValue(null) };

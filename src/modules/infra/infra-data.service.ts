@@ -643,6 +643,14 @@ export class InfraDataService {
       const result = await this.sessionService.stopOrphanEngines(orphanedEngines);
       stoppedOrphanEngines = result.stopped;
       failedOrphanEngines = result.failed;
+      // The teardown cannot be rolled back, and the import's own audit row is written only for a committed
+      // restore, so each stopped session is recorded here: a refused or failed restore would leave no trace.
+      for (const sessionId of result.stopped) {
+        await this.auditService?.logInfo(AuditAction.SESSION_STOPPED, {
+          sessionId,
+          metadata: { via: 'infra_import_data' },
+        });
+      }
       if (failedOrphanEngines.length > 0) {
         // Teardown failed for at least one orphan. The Map entry is removed regardless (see
         // stopOrphanEngines), so the engine no longer holds a concurrency slot — but its underlying
