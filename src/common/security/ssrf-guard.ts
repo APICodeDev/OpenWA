@@ -61,7 +61,14 @@ export function isSsrfProtectionEnabled(): boolean {
  * bypass the block. Matched case-insensitively against the URL hostname.
  */
 function getAllowedHosts(): Set<string> {
-  const hosts = new Set(
+  const entries = allowedHostEntries();
+  warnUnusableAllowedHosts(entries);
+  return new Set(entries.filter(Boolean));
+}
+
+/** The SSRF_ALLOWED_HOSTS entries in written order, blanks kept so an entry's position is the one the operator sees. */
+function allowedHostEntries(): string[] {
+  return (
     (process.env.SSRF_ALLOWED_HOSTS ?? '')
       .split(',')
       // Strip IPv6 brackets so an entry copied from a URL (e.g. "[::1]") matches the
@@ -72,30 +79,49 @@ function getAllowedHosts(): Set<string> {
           .replace(/^\[|\]$/g, '')
           .toLowerCase(),
       )
-      .filter(Boolean),
   );
-  warnUnusableAllowedHosts(hosts);
-  return hosts;
 }
 
-/** What `url.hostname` can equal: a host name, with underscores for a container name, or an IP literal. */
-const ALLOWED_HOST_PATTERN = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?\.?$/;
+/** What the URL parser makes of an entry used as a host, brackets stripped; undefined when it is no host at all. */
+function parsedHostname(entry: string): string | undefined {
+  try {
+    return new URL(`http://${entry.includes(':') ? `[${entry}]` : entry}/`).hostname.replace(/^\[|\]$/g, '');
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Why an entry can never equal the hostname of a URL, or undefined when it can. The reason is a shape and never the
+ * value, which may carry credentials. An IP address has to be written the way the URL parser prints it: `http://127.1/`
+ * is compared as `127.0.0.1`, so the entry `127.1` (or `0:0:0:0:0:0:0:1` for `::1`) is never equal.
+ */
+function unusableAllowedHostReason(entry: string): string | undefined {
+  if (entry.includes('@') || entry.includes('://')) return 'a scheme or credentials';
+  if (entry.includes('*')) return 'a wildcard';
+  if (/[/?#]/.test(entry)) return 'a path';
+  if (/^[^:]+:\d*$/.test(entry)) return 'a port';
+  return parsedHostname(entry) === entry ? undefined : 'a spelling the URL parser rewrites';
+}
 
 let warnedUnusableHosts = '';
 
 /**
- * An entry is compared with the hostname of the URL, so one with a scheme, port, path or wildcard never
- * matches, and the refusal it was meant to lift only says the destination is not allowed. Name such entries once.
+ * An entry is compared with the hostname of the URL, so one the check above names never matches, and the refusal it
+ * was meant to lift only says the destination is not allowed. Name such entries once, by position and reason.
  */
-function warnUnusableAllowedHosts(hosts: ReadonlySet<string>): void {
-  const unusable = [...hosts].filter(host => !isIPv4(host) && !isIPv6(host) && !ALLOWED_HOST_PATTERN.test(host));
-  const key = unusable.join(',');
+export function warnUnusableAllowedHosts(entries: readonly string[] = allowedHostEntries()): void {
+  const problems = entries.flatMap((entry, index) => {
+    const reason = entry ? unusableAllowedHostReason(entry) : undefined;
+    return reason ? [`entry ${index + 1} (${reason})`] : [];
+  });
+  const key = problems.join(', ');
   if (key === warnedUnusableHosts) return;
   warnedUnusableHosts = key;
-  if (unusable.length > 0) {
+  if (problems.length > 0) {
     logger.warn(
-      'SSRF_ALLOWED_HOSTS entries must be a bare host name or IP address, without a scheme, port, path or ' +
-        `wildcard; these never match and are ignored: ${unusable.join(', ')}`,
+      'SSRF_ALLOWED_HOSTS entries must be a bare host name or an IP address written as the URL parser prints it ' +
+        `(127.0.0.1, ::1); these never match and are ignored: ${key}`,
     );
   }
 }

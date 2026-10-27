@@ -18,6 +18,7 @@ import {
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
 import { s3EndpointError, validateEnv } from './config/env.validation';
+import { warnUnusableAllowedHosts } from './common/security/ssrf-guard';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
@@ -75,6 +76,9 @@ async function bootstrap() {
       `${s3EndpointProblem}. Until then S3 is unavailable and media is written to the local directory.`,
     );
   }
+
+  // Reported at boot, where the operator reads the log, rather than at the first outbound request.
+  warnUnusableAllowedHosts();
 
   // Advisory (not enforced): an unset/blank NODE_ENV is the deliberate local-dev default, but it
   // silently degrades four controls to their dev posture (the default-secret guard, wildcard CORS,
