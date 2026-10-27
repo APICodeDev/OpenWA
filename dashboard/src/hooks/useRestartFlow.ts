@@ -72,12 +72,14 @@ export function useRestartFlow(): RestartFlow {
   const pollTimeoutsRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(false);
+  const readinessControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     const pollTimeouts = pollTimeoutsRef.current;
     return () => {
       mountedRef.current = false;
+      readinessControllerRef.current?.abort();
       for (const handle of pollTimeouts) clearTimeout(handle);
       pollTimeouts.clear();
       if (countdownIntervalRef.current) {
@@ -122,22 +124,41 @@ export function useRestartFlow(): RestartFlow {
     if (restartStatus === 'idle') setShowRestartModal(false);
   };
 
-  const checkServerHealth = (estimatedTime: number | undefined, hasWarnings: boolean) => {
+  const checkServerHealth = (estimatedTime: number | undefined, hasWarnings: boolean, controller: AbortController) => {
     let attempts = 0;
     const maxAttempts = restartPollAttempts(estimatedTime);
+    const isCurrent = () =>
+      mountedRef.current && readinessControllerRef.current === controller && !controller.signal.aborted;
+    const settle = (status: 'success' | 'error') => {
+      if (!isCurrent()) return false;
+      controller.abort();
+      clearTimeout(deadline);
+      pollTimeoutsRef.current.delete(deadline);
+      stopCountdown();
+      setRestartCountdown(0);
+      setRestartStatus(status);
+      return true;
+    };
+    // Elapsed time also bounds a request or response body that never finishes.
+    const deadline = setTimeout(() => settle('error'), maxAttempts * 1000);
+    pollTimeoutsRef.current.add(deadline);
 
     const check = async () => {
+      if (!isCurrent()) return;
       try {
-        await infraApi.healthCheck();
-        stopCountdown();
-        setRestartCountdown(0);
-        setRestartStatus('success');
+        await infraApi.healthCheck(controller.signal);
+        if (!settle('success')) return;
         // With warnings on screen the operator reloads by hand, after reading them.
-        if (!hasWarnings) schedulePollTimeout(() => window.location.reload(), 2000);
+        if (!hasWarnings) {
+          schedulePollTimeout(() => {
+            if (readinessControllerRef.current === controller) window.location.reload();
+          }, 2000);
+        }
       } catch {
+        if (!isCurrent()) return;
         attempts++;
         if (attempts < maxAttempts) schedulePollTimeout(check, 1000);
-        else setRestartStatus('error');
+        else settle('error');
       }
     };
 
@@ -147,6 +168,14 @@ export function useRestartFlow(): RestartFlow {
   const profilesToRemove = profiles.running.filter(p => !profiles.pending.includes(p));
 
   const start = async () => {
+    readinessControllerRef.current?.abort();
+    const controller = new AbortController();
+    readinessControllerRef.current = controller;
+    const isCurrent = () =>
+      mountedRef.current && readinessControllerRef.current === controller && !controller.signal.aborted;
+    for (const handle of pollTimeoutsRef.current) clearTimeout(handle);
+    pollTimeoutsRef.current.clear();
+    stopCountdown();
     setRestartStatus('restarting');
     setRestartCountdown(30);
     setRestartTotal(30);
@@ -157,6 +186,7 @@ export function useRestartFlow(): RestartFlow {
     let warnings: string[] = [];
     try {
       const response = await infraApi.restart(profiles.pending, profilesToRemove);
+      if (!isCurrent()) return;
       estimatedTime = response.estimatedTime;
       if (response.estimatedTime) {
         setRestartCountdown(response.estimatedTime);
@@ -165,6 +195,7 @@ export function useRestartFlow(): RestartFlow {
       warnings = [...(response.orchestration?.errors ?? []), ...(response.removal?.errors ?? [])];
       setRestartWarnings(warnings);
     } catch (err) {
+      if (!isCurrent()) return;
       // An HTTP status (a proxy 503 included) means no shutdown was confirmed and the old
       // process may still be serving, so a readiness poll would report a restart that never happened.
       // Only a status-less network failure is the expected sign of the server going down mid-answer.
@@ -187,7 +218,7 @@ export function useRestartFlow(): RestartFlow {
         return;
       }
     }
-    if (!mountedRef.current) return;
+    if (!isCurrent()) return;
 
     setRestartStatus('waiting');
     stopCountdown();
@@ -201,7 +232,7 @@ export function useRestartFlow(): RestartFlow {
       });
     }, 1000);
 
-    checkServerHealth(estimatedTime, warnings.length > 0);
+    checkServerHealth(estimatedTime, warnings.length > 0, controller);
   };
 
   return {
