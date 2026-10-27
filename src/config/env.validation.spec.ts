@@ -914,6 +914,21 @@ describe('validateEnv built-in Redis connection settings', () => {
       );
     });
 
+    it('says where to fix it and names the external Redis way out', () => {
+      const message = () => {
+        try {
+          validateEnv({ ...builtin, REDIS_TLS: 'true' });
+        } catch (error) {
+          return (error as Error).message;
+        }
+        return '';
+      };
+      expect(message()).toMatch(/set REDIS_TLS=false in the environment, \.\/\.env or data\/\.env\.generated/);
+      expect(message()).toMatch(
+        /use an external Redis \(REDIS_BUILTIN=false with its REDIS_HOST, also on the Infrastructure page\)/,
+      );
+    });
+
     it('keeps TLS to an external host, and accepts plaintext or a Redis nothing uses', () => {
       expect(() => validateEnv({ ...builtin, REDIS_HOST: 'cache.example.com', REDIS_TLS: 'true' })).not.toThrow();
       expect(() => validateEnv({ ...builtin, REDIS_TLS: 'false' })).not.toThrow();
@@ -936,6 +951,12 @@ describe('validateEnv built-in Redis connection settings', () => {
 
     it.each([undefined, '', 'default'])('accepts the default user as %j', username => {
       expect(() => validateEnv({ ...builtin, REDIS_USERNAME: username })).not.toThrow();
+    });
+
+    it('says where to fix it and names the external Redis way out', () => {
+      expect(() => validateEnv({ ...builtin, REDIS_USERNAME: 'worker' })).toThrow(
+        /remove the named username in the environment, \.\/\.env or data\/\.env\.generated, or use an external Redis \(REDIS_BUILTIN=false with its REDIS_HOST, also on the Infrastructure page\)/,
+      );
     });
 
     it('keeps a named user for an external host, and accepts one when Redis is not the bundled one in use', () => {

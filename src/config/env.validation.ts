@@ -62,6 +62,10 @@ export function postgresSchemaError(schema: string): string | null {
 
 const REDIS_CONSUMER_FLAGS = ['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'];
 
+/** The one way to keep TLS or a named user: an external server, which the Infrastructure page selects too. */
+const EXTERNAL_REDIS_WAY_OUT =
+  'or use an external Redis (REDIS_BUILTIN=false with its REDIS_HOST, also on the Infrastructure page)';
+
 /** The bundled Redis is the one this deployment connects to: it is selected, in use, and named as the host. */
 function usesBundledRedis(config: EnvConfig): boolean {
   const host = typeof config.REDIS_HOST === 'string' ? config.REDIS_HOST : undefined;
@@ -76,8 +80,8 @@ function usesBundledRedis(config: EnvConfig): boolean {
 export function builtinRedisTlsError(config: EnvConfig): string | null {
   if (!usesBundledRedis(config) || config.REDIS_TLS !== 'true') return null;
   return (
-    'REDIS_TLS=true cannot reach the built-in Redis container, which runs without TLS; ' +
-    'set REDIS_TLS=false where it is configured'
+    'REDIS_TLS=true cannot reach the built-in Redis container, which runs without TLS; set REDIS_TLS=false in the ' +
+    `environment, ./.env or data/.env.generated, ${EXTERNAL_REDIS_WAY_OUT}`
   );
 }
 
@@ -86,8 +90,8 @@ export function builtinRedisUsernameError(config: EnvConfig): string | null {
   const username = typeof config.REDIS_USERNAME === 'string' ? config.REDIS_USERNAME : undefined;
   if (!usesBundledRedis(config) || !username || username === 'default') return null;
   return (
-    'REDIS_USERNAME must be unset or default for the built-in Redis container; ' +
-    'remove the named username where it is configured'
+    'REDIS_USERNAME must be unset or default for the built-in Redis container; remove the named username in the ' +
+    `environment, ./.env or data/.env.generated, ${EXTERNAL_REDIS_WAY_OUT}`
   );
 }
 
