@@ -68,6 +68,49 @@ describe('redactSensitiveHeaders (persisted ingress payloads)', () => {
     expect(recorded.payload.headers['x-delivery']).toBe('d1');
   });
 
+  it('redacts a Standard Webhooks signature after authenticating, before persistence and the queue', async () => {
+    const key = Buffer.from('dummy-standard-webhooks-secret');
+    const signature = 'v1,' + createHmac('sha256', key).update('delivery.1000.{}').digest('base64');
+    const recordOrSkip = jest.fn().mockResolvedValue(true);
+    const enqueue = jest.fn().mockResolvedValue(undefined);
+    const d = deps({
+      now: () => 1_000_000,
+      events: { recordOrSkip },
+      enqueue,
+      instances: {
+        resolve: jest.fn().mockResolvedValue({
+          id: 'chatwoot:acct1',
+          pluginId: 'chatwoot',
+          instanceId: 'acct1',
+          secret: `whsec_${key.toString('base64')}`,
+          enabled: true,
+          sessionScope: 'sess-1',
+          verifyToken: null,
+        }),
+      },
+      manifestRoute: jest.fn().mockReturnValue({
+        route: 'chatwoot',
+        maxBodyBytes: 1024,
+        signature: { scheme: 'standard-webhooks' },
+      }),
+    });
+    const res = await new IngressService(d).handle({
+      pluginId: 'chatwoot',
+      instanceId: 'acct1',
+      route: 'chatwoot',
+      method: 'POST',
+      query: {},
+      rawBody: '{}',
+      headers: { 'webhook-id': 'delivery', 'webhook-timestamp': '1000', 'webhook-signature': signature },
+    });
+    expect(res.status).toBe(202);
+    const expected = { 'webhook-id': 'delivery', 'webhook-timestamp': '1000', 'webhook-signature': '[redacted]' };
+    const recorded = recordOrSkip.mock.calls as unknown as [[{ payload: { headers: unknown } }]];
+    const queued = enqueue.mock.calls as unknown as [[{ payload: { headers: unknown } }]];
+    expect(recorded[0][0].payload.headers).toEqual(expected);
+    expect(queued[0][0].payload.headers).toEqual(expected);
+  });
+
   it("redacts an hmac route's declared signature header in the persisted and enqueued payload", async () => {
     const d = deps({
       manifestRoute: jest.fn().mockReturnValue({

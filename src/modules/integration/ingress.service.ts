@@ -379,6 +379,7 @@ const SENSITIVE_INGRESS_HEADERS = new Set([
   'x-signature',
   'x-signature-ed25519',
   'x-webhook-signature',
+  'webhook-signature',
 ]);
 
 export function redactSensitiveHeaders(
