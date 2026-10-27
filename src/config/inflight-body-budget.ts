@@ -329,8 +329,9 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     };
 
     // Exactly-once release: the first terminal event wins: normal completion (res 'finish'),
-    // client/socket abort (req/res 'close'), stream failure (req/res 'error'). An aborted upload
-    // typically fires several of these; the flag guarantees the aggregate is decremented once.
+    // client/socket abort (res 'close', or req 'close' before the body is complete), stream failure
+    // (req/res 'error'). An aborted upload typically fires several of these; the flag guarantees the
+    // aggregate is decremented once.
     const release = (): void => {
       if (released) return;
       released = true;
@@ -344,7 +345,11 @@ export function createInflightBodyBudget(budgetBytes: number, options?: Inflight
     res.on('finish', release);
     res.on('close', release);
     res.on('error', release);
-    req.on('close', release);
+    // Node also closes the request stream right after a body has been read in full, while the handler
+    // still holds the raw bytes and the parsed copy. That body stays charged until the response is done.
+    req.on('close', () => {
+      if (!req.complete) release();
+    });
     req.on('error', release);
 
     // Stall reaper (see STALL_TIMEOUT_MS above). Progress is measured on the SOCKET byte counter,
