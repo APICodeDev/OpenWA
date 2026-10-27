@@ -16,6 +16,7 @@ import com.rmyndharis.openwa.http.HttpMethod;
 import com.rmyndharis.openwa.model.AuthValidateResponse;
 import com.rmyndharis.openwa.model.SuccessResult;
 import com.rmyndharis.openwa.support.MockTransport;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -117,6 +118,41 @@ class ClientTest {
         assertEquals("http://h:2785/api/x", tx.lastRequest().url());
         assertEquals("owa_k1_x", tx.lastRequest().headers().get("X-API-Key"));
         assertEquals("application/json", tx.lastRequest().headers().get("Content-Type"));
+    }
+
+    @Test
+    void rawRequestsKeepQueryBeforeFragment() {
+        OpenWAClient prefixed = new OpenWAClient(ClientConfig.builder()
+            .baseUrl("https://h:2785/gateway").apiKey("owa_k1_x").transport(tx).build());
+        String[][] cases = {
+            {"/api/sessions#part", "limit=50", "part"},
+            {"/api/sessions?offset=2#part", "offset=2&limit=50", "part"},
+            {"/api/sessions#part?x=2", "limit=50", "part?x=2"},
+            {"/api/sessions?offset=2", "offset=2&limit=50", null}
+        };
+        for (String[] row : cases) {
+            tx.respond(200, "{\"success\":true}");
+            SuccessResult result = prefixed.request(HttpMethod.GET, row[0], Map.of("limit", 50), null, SuccessResult.class);
+            assertTrue(result.success());
+            URI uri = URI.create(tx.lastRequest().url());
+            assertEquals("https", uri.getScheme(), row[0]);
+            assertEquals("h:2785", uri.getRawAuthority(), row[0]);
+            assertEquals("/gateway/api/sessions", uri.getRawPath(), row[0]);
+            assertEquals(row[1], uri.getRawQuery(), row[0]);
+            assertEquals(row[2], uri.getRawFragment(), row[0]);
+            assertEquals(HttpMethod.GET, tx.lastRequest().method());
+            assertEquals("owa_k1_x", tx.lastRequest().headers().get("X-API-Key"));
+        }
+    }
+
+    @Test
+    void fragmentCharactersInTypedIdsStayInThePath() {
+        tx.respond(200, "{\"id\":\"s#part\",\"name\":\"n\",\"status\":\"ready\"}");
+        assertEquals("s#part", client.sessions.get("s#part").id());
+        URI uri = URI.create(tx.lastRequest().url());
+        assertEquals("/api/sessions/s%23part", uri.getRawPath());
+        assertNull(uri.getRawQuery());
+        assertNull(uri.getRawFragment());
     }
 
     @Test
