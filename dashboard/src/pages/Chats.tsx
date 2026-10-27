@@ -372,25 +372,28 @@ export function Chats() {
     current.showErrorToast(current.t(key), err instanceof Error ? err.message : undefined);
   }, []);
 
-  // 1. Fetch available connected sessions on mount
-  useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        setLoadingSessions(true);
-        const list = await sessionApi.list();
-        const readySessions = list.filter(s => s.status === 'ready');
-        setSessions(readySessions);
-        if (readySessions.length > 0) {
-          setSelectedSessionId(readySessions[0].id);
-        }
-      } catch (err) {
-        showLoadError('chats.errors.loadSessions', err);
-      } finally {
-        setLoadingSessions(false);
+  // 1. Fetch available connected sessions on mount. A failed read is not "no connected sessions": the gateway may
+  // simply be restarting, so the page says it could not read them and offers the read again.
+  const [sessionsFailure, setSessionsFailure] = useState<string | null>(null);
+  const loadSessions = useCallback(async () => {
+    try {
+      setLoadingSessions(true);
+      setSessionsFailure(null);
+      const list = await sessionApi.list();
+      const readySessions = list.filter(s => s.status === 'ready');
+      setSessions(readySessions);
+      if (readySessions.length > 0) {
+        setSelectedSessionId(readySessions[0].id);
       }
-    };
+    } catch (err) {
+      setSessionsFailure(err instanceof Error ? err.message : '');
+    } finally {
+      setLoadingSessions(false);
+    }
+  }, []);
+  useEffect(() => {
     void loadSessions();
-  }, [showLoadError]);
+  }, [loadSessions]);
 
   // 2. Fetch chats when active session changes. A session switch does not cancel the list still
   // loading for the session left behind, so an answer for any session but the latest call's is
@@ -1674,6 +1677,15 @@ export function Chats() {
         <div className="chats-loading-container">
           <Loader2 className="animate-spin" size={32} />
           <p>{t('common.loading')}</p>
+        </div>
+      ) : sessionsFailure !== null ? (
+        <div className="chats-error-state" role="alert">
+          <AlertCircle size={48} className="text-warn" />
+          <h3>{t('chats.errors.loadSessions')}</h3>
+          {sessionsFailure && <p>{sessionsFailure}</p>}
+          <button className="btn-secondary" onClick={() => void loadSessions()}>
+            {t('common.retry')}
+          </button>
         </div>
       ) : sessions.length === 0 ? (
         <div className="chats-error-state">
