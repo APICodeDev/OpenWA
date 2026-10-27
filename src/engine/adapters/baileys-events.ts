@@ -221,7 +221,9 @@ export interface BaileysEventsHost {
     key: Pick<WAMessageKey, 'remoteJid' | 'remoteJidAlt' | 'participant' | 'participantAlt' | 'fromMe'>,
   ): void;
   /** Seed the chat's last-message preview + sort time from an inbound message. */
-  recordMessage(msg: WAMessage, type?: MessageType): void;
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
+  /** Reserve a message's place in the observed order on arrival, ahead of any limiter, store or media wait. */
+  nextMessageOrder?(): number;
   /** Apply a message edit to the stored body. */
   recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void;
   findPersistedLidPhone?(jid: string): Promise<string | null>;
@@ -534,11 +536,12 @@ export class BaileysEvents {
       // a closed or bounded limiter, so the message is still emitted rather than lost to an unhandled
       // rejection.
       const generation = this.storeGeneration;
+      const order = this.host.nextMessageOrder?.();
       // Where the session holds a message until its row is written (PostgreSQL), admit it now, in
       // arrival order: its chat's order, and a slot of the session's room when it downloads media.
       const ticket = this.admitInbound(msg);
       const processed = this.host.inboundLimiter
-        .run(yieldSlot => this.processInboundMessage(msg, { generation, ticket, yieldSlot }))
+        .run(yieldSlot => this.processInboundMessage(msg, { generation, order, ticket, yieldSlot }))
         .catch((error: unknown) => {
           // Names the failure rather than calling it "saturated", which used to send operators to look
           // at concurrency settings for a problem that was never there. The retry below skips the
@@ -550,7 +553,7 @@ export class BaileysEvents {
               : 'Inbound media download failed; emitting message without media',
             { msgId: msg.key?.id ?? 'unknown', ...(closed ? {} : { error: String(error) }) },
           );
-          return this.processInboundMessage(msg, { generation, skipMedia: true, ticket });
+          return this.processInboundMessage(msg, { generation, order, skipMedia: true, ticket });
         });
       // The room stays held until the processing settles too, and a message never emitted drops its turn.
       ticket?.holdUntil(processed);
@@ -699,6 +702,7 @@ export class BaileysEvents {
     msg: WAMessage,
     opts: {
       generation: number;
+      order?: number;
       skipMedia?: boolean;
       ticket?: InboundTicket;
       yieldSlot?: <R>(fn: () => Promise<R>) => Promise<R>;
@@ -843,7 +847,7 @@ export class BaileysEvents {
         const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
         this.watchOutcome(msg.key, receipt);
       }
-      this.host.recordMessage(msg, incoming.type);
+      this.host.recordMessage(msg, incoming.type, opts.order);
       if (deleted) {
         this.host.recordMessageEdit(chatJid, storedId, '', 'revoked');
       } else if (editedBody !== undefined && storedId !== null) {

@@ -33,7 +33,7 @@ export interface BaileysHistoryHost {
   /** Lazily loaded @whiskeysockets/baileys module (ESM-only; loaded on first connect, not at boot). */
   loadLib(): Promise<typeof BaileysLib>;
   /** Seed the chat's last-message preview + sort time from a history/live message. */
-  recordMessage(msg: WAMessage, type?: MessageType): void;
+  recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
   recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void;
   applyHistoryRevoke(target: WAMessageKey, envelope: WAMessageKey): Promise<WAMessageKey | undefined>;
   upsertContacts(records: Partial<BaileysContact>[]): void;
@@ -159,7 +159,8 @@ export class BaileysHistory {
         if (incoming.type === 'revoked') continue;
         const original = targets.get(incoming.id)!;
         const deleted = revokedKeys.has(JSON.stringify([incoming.id, incoming.chatId, incoming.fromMe]));
-        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type);
+        // History has no observed order: equal-time messages keep the first one met, and give way to a live one.
+        this.host.recordMessage(original, deleted ? 'revoked' : incoming.type, 0);
       }
       for (const m of revoked) {
         this.host.recordMessageEdit(m.chatId, m.id, '', 'revoked');
