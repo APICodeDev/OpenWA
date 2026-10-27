@@ -20,6 +20,7 @@ import { IntegrationDeliveryFailure } from '../integration/entities/integration-
 import { StatusUpdate } from '../status-store/entities/status-update.entity';
 import { SendIdempotencyKey } from '../message/entities/send-idempotency-key.entity';
 import { AutomationRule } from '../automation/entities/automation-rule.entity';
+import * as templateRender from '../../common/utils/template-render';
 import { renderTemplate } from '../../common/utils/template-render';
 
 const entities = [
@@ -130,6 +131,19 @@ describe('bulk export budgets payload variables', () => {
     const result = stripped([entry('{{p}}', { p: 'QUJDREVGSElKS0w=' })], 8).items[0];
     expect(result.content.image.base64).toBeUndefined();
     expect(result.variables.p).toBeUndefined();
+  });
+  it('reads a template once however many variables the item carries', () => {
+    const variables = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`v${i}`, 'x']));
+    const render = jest.spyOn(templateRender, 'renderTemplate');
+    try {
+      const result = stripped([entry('{{v7}}{{v1999}}', variables)], 2);
+      expect(render.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(result.admitted).toEqual([2]);
+      expect(result.items[0].content.image.base64).toBe('{{v7}}{{v1999}}');
+      expect(Object.keys(result.items[0].variables)).toHaveLength(2001);
+    } finally {
+      render.mockRestore();
+    }
   });
   it('preserves unrelated descriptive variables without charging them', () => {
     const result = stripped([entry('{{p}}', { p: 'QUJD', unused: 'a descriptive value longer than the budget' })], 4);

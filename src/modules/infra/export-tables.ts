@@ -6,7 +6,7 @@ import type {
   MessageBatchRow,
   WebhookDeliveryFailureRow,
 } from './migration-tables.types';
-import { renderTemplate } from '../../common/utils/template-render';
+import { renderTemplate, templateVariableNames } from '../../common/utils/template-render';
 
 /**
  * A `data` value that is a POINTER rather than bytes. `metadata.media.data` holds `base64 || dto.url!`
@@ -161,12 +161,9 @@ function stripBatchInlineMedia(row: MessageBatchRow, exceedsBudget: (encodedByte
       const media = (content as Record<string, unknown>)[key] as { base64?: unknown } | null | undefined;
       if (!media || typeof media !== 'object' || typeof media.base64 !== 'string') continue;
       const template = media.base64;
-      // Asked of the renderer itself, so the placeholder grammar is the one the send path substitutes.
-      const named = template.includes('{')
-        ? Object.keys(variables).filter(
-            name => variables[name] != null && renderTemplate(template, { [name]: '' }) !== template,
-          )
-        : [];
+      // One pass over the template with the renderer's own grammar, whatever the number of variables.
+      const used = new Set(templateVariableNames(template));
+      const named = Object.keys(variables).filter(name => used.has(name) && variables[name] != null);
       const scaffolding = renderTemplate(template, Object.fromEntries(named.map(name => [name, ''])));
       const encodedBytes = named.reduce(
         (bytes, name) => {
