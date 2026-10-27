@@ -135,7 +135,10 @@ export function applyDatabaseSection(
       setSecret(updates, 'DATABASE_PASSWORD', database.password);
       if (database.database !== undefined) updates.DATABASE_NAME = database.database || 'openwa';
       // Left from SQLite, the key holds a file path, which the next boot would open as a PostgreSQL database name.
-      else if (existing.DATABASE_TYPE !== 'postgres') staleKeys.add('DATABASE_NAME');
+      // A file with no type beside a PostgreSQL pin holds a name the pinned server uses, so that one stays.
+      else if (existing.DATABASE_TYPE !== 'postgres' && nextBootValue('DATABASE_TYPE', existing) !== 'postgres') {
+        staleKeys.add('DATABASE_NAME');
+      }
       if (database.schema !== undefined) {
         // Refuse a schema the next boot would reject, or the saved file crash-loops the instance.
         const schemaError = database.schema ? postgresSchemaError(database.schema) : null;

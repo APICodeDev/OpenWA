@@ -423,6 +423,28 @@ describe('PostgreSQL database name', () => {
     expect(savedValues(existing, ctx)).not.toHaveProperty('DATABASE_NAME');
   });
 
+  it.each([
+    ['the host environment', true],
+    ['the project .env', false],
+  ])('keeps the stored name when %s alone sets the type to postgres', (_origin, host) => {
+    process.env.DATABASE_TYPE = 'postgres';
+    recordOsEnvKeys(host ? { DATABASE_TYPE: 'postgres' } : {});
+    recordPinnedEnvKeys({ DATABASE_TYPE: 'postgres' });
+    const existing = { DATABASE_NAME: 'appdb', DATABASE_HOST: 'db.example.invalid' };
+    const ctx = context();
+    applyDatabaseSection({ builtIn: false, ...external }, existing, ctx);
+    expect(savedValues(existing, ctx).DATABASE_NAME).toBe('appdb');
+  });
+
+  it('still drops a SQLite file path when the environment pins the type to sqlite', () => {
+    process.env.DATABASE_TYPE = 'sqlite';
+    recordPinnedEnvKeys({ DATABASE_TYPE: 'sqlite' });
+    const existing = { DATABASE_NAME: './data/customer.sqlite' };
+    const ctx = context();
+    applyDatabaseSection({ type: 'postgres', builtIn: false, ...external }, existing, ctx);
+    expect(savedValues(existing, ctx)).not.toHaveProperty('DATABASE_NAME');
+  });
+
   it('keeps the stored name of a PostgreSQL configuration and writes one that is sent', () => {
     const existing = { DATABASE_TYPE: 'postgres', DATABASE_NAME: 'appdb' };
     const kept = context();
