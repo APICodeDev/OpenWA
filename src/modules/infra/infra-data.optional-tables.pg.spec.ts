@@ -92,7 +92,8 @@ describePostgres('PostgreSQL restore tolerates absent optional archive tables', 
     ds = await new DataSource({
       ...options,
       schema,
-      extra: { ...postgresUtcExtra(), options: `-c search_path=${schema},public` },
+      // Only the scratch schema: a table dropped from it must read as absent, not resolve to one in public.
+      extra: { ...postgresUtcExtra(), options: `-c search_path=${schema}` },
       entities,
       synchronize: true,
     }).initialize();
