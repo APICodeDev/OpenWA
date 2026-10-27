@@ -152,6 +152,24 @@ class TestClientCore:
             client.sessions.list()
         assert len(calls) == 1  # the redirect target was never requested
 
+    @pytest.mark.parametrize("binary", [False, True])
+    @pytest.mark.parametrize(
+        ("status", "ok"), [(100, False), (101, False), (199, False), (200, True), (204, True), (299, True), (300, False)]
+    )
+    def test_only_a_2xx_response_is_a_success(self, binary: bool, status: int, ok: bool) -> None:
+        # A custom transport can hand back a final informational status; it is no more usable than a 3xx.
+        def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(status, content=b"" if status == 204 else b'{"status": "ok"}')
+
+        with OpenWAClient(base_url="http://localhost", api_key="k", transport=httpx.MockTransport(handler)) as client:
+            call = (lambda: client.messages.media("s", "c", "m")) if binary else client.health.check
+            if ok:
+                call()
+            else:
+                with pytest.raises(OpenWAApiError) as caught:
+                    call()
+                assert caught.value.status == status
+
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])
         client = OpenWAClient(base_url="http://localhost:2785/", api_key="k", transport=backend.as_transport())
