@@ -233,7 +233,8 @@ test('a failed first read of the sessions still shows the error', async () => {
   webhooksStatus = 200;
   sessionsStatus = 502;
   renderDashboard();
-  await rtl.screen.findByText(/Bad Gateway/);
+  const alert = await rtl.screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Bad Gateway/);
 });
 
 test('a non-admin key never loads the chart section', async () => {

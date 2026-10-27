@@ -96,6 +96,7 @@ export function Dashboard() {
     return (
       <div className="dashboard" style={{ padding: '2rem' }}>
         <div
+          role="alert"
           style={{
             background: 'rgba(239, 68, 68, 0.12)',
             padding: '1rem',
