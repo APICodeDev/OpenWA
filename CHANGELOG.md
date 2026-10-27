@@ -229,7 +229,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix creating a channel with a null description answering a null description on whatsapp-web.js.
 - Fix a group add or create charging a bare number and its `@c.us` form as two new contacts against the daily cold allowance.
 - Keep the SQLite database file path when the Infrastructure page saves SQLite.
-- Write `data/.env.generated` through a staged file and a rename, so a failed save keeps the previous configuration.
+- Write `data/.env.generated` through a staged file and a rename, so a failed save keeps the previous configuration; where a rename cannot replace the file, such as a single-file mount, it is written in place, and a symlink is written through to its target.
 - Refuse a configuration save that the next boot would reject, with the boot validation message, instead of persisting it.
 - Reset `REDIS_TLS` and clear `REDIS_USERNAME` when the Infrastructure page selects the built-in Redis.
 - Stop a bundled container on restart once its datastore is switched off, even when a pinned host still names it.
@@ -238,7 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Restore a data backup onto a PostgreSQL schema that lacks an optional table instead of failing with a 500.
 - Start the selected built-in containers once Docker answers after a failed first connection, and report an unreachable Docker inventory as unknown.
 - Bound the Docker image and container inspections with the deadline of the other short calls, and pull an image only when the daemon says it is absent.
-- Wait at most 2 s for the database statistics in a metrics scrape and omit their series when the read is late.
+- Wait at most 2 s for the database statistics in a metrics scrape; a late read is kept and served for up to 5 minutes, and the series are omitted only when a read failed or none is recent.
 - Record a `session_stopped` audit log entry for each session an import with `stopOrphans` stops, including when the import does not commit.
 - Fix the Python SDK raising `ValueError` instead of the API error when a response carries an oversized numeric `Retry-After`, from SDK 0.7.0.
 - Fix the Python SDK API and timeout errors failing to unpickle or copy, so they survive a worker process boundary, from SDK 0.7.0.
@@ -313,6 +313,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Drop a null optional field from plugin catalog entries instead of answering it.
 - Fix the JavaScript SDK raw requests with a fragment in the path dropping their query parameters.
 - Cap the JavaScript SDK `retryAfterSeconds` at 2147483 seconds, the longest delay `setTimeout` accepts once multiplied by 1000.
+- Report the database name to the Infrastructure form only under PostgreSQL, and drop a stored SQLite file path when a PostgreSQL save sends no name.
+- The message list no longer answers an empty page when its `after` row is deleted while the page is being read.
+- The message list reads its page rows by primary key on SQLite, which cuts a 100 row read of a 300k row session from about 70 ms to 5 ms.
 
 ### Dependencies
 

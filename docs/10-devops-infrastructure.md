@@ -930,9 +930,11 @@ aggregate overview from `StatsService` plus `process.memoryUsage()`, memoizes th
 short TTL (~5s, so back-to-back scrapes don't repeat the DB scan), and exposes it at
 `GET /api/metrics`.
 
-A scrape waits at most 2 seconds for that overview. When the read fails or is still pending after that,
-the database-derived series are left out and `openwa_stats_available` reads 0, while the process, HTTP,
-webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
+A scrape waits at most 2 seconds for that overview. When the read fails, the database-derived series are
+left out and `openwa_stats_available` reads 0. When it is still pending after that, the scrape serves the last
+result it kept, up to 5 minutes old, and `openwa_stats_available` stays 1; the late result fills the memo for the
+next scrape. With no result that recent, such as the first scrape after start, the series are left out and the
+gauge reads 0. The process, HTTP, webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
 meanwhile, so they answer without waiting again and add no query of their own, whatever
 `STATS_CACHE_TTL_MS` is. The 2 seconds bound the wait, not the query: nothing cancels it in the database.
 
@@ -983,29 +985,29 @@ export class MetricsService {
 
 **Exported metric names** (the complete set — nothing else is emitted):
 
-| Metric                                       | Type      | Labels                              | Meaning                                                                                                                     |
-| -------------------------------------------- | --------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `openwa_up`                                  | gauge     | —                                   | Always `1` when scraped                                                                                                     |
-| `openwa_process_uptime_seconds`              | gauge     | —                                   | Process uptime                                                                                                              |
-| `openwa_process_resident_memory_bytes`       | gauge     | —                                   | RSS                                                                                                                         |
-| `openwa_process_heap_used_bytes`             | gauge     | —                                   | V8 heap used                                                                                                                |
-| `openwa_event_loop_delay_p99_seconds`        | gauge     | none                                | p99 event-loop delay since the previous uncached scrape                                                                     |
-| `openwa_event_loop_delay_max_seconds`        | gauge     | none                                | Maximum event-loop delay since the previous uncached scrape                                                                 |
-| `openwa_unhandled_rejections_total`          | counter   | `kind`                              | Unhandled promise rejections since process start (`other` or `page_context_lost`)                                           |
-| `openwa_queue_jobs`                          | gauge     | `queue`, `state`                    | BullMQ jobs per queue in `wait`/`active`/`delayed`/`failed` (cluster-wide, from Redis)                                      |
-| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded, 0 if it failed or took over 2 s               |
-| `openwa_sessions_total`                      | gauge     | —                                   | Configured sessions                                                                                                         |
-| `openwa_sessions_active`                     | gauge     | —                                   | READY (active) sessions                                                                                                     |
-| `openwa_sessions`                            | gauge     | `status`                            | Session count per status                                                                                                    |
-| `openwa_messages_total`                      | gauge     | `direction` (`incoming`/`outgoing`) | Current stored messages by direction                                                                                        |
-| `openwa_messages_failed_total`               | gauge     | —                                   | Current messages in FAILED state                                                                                            |
-| `openwa_webhook_delivery_failures_total`     | counter   | —                                   | Webhook delivery failures since process start: retries exhausted, never sent, or stopped by shutdown between direct retries |
-| `openwa_session_reconnect_attempts_total`    | counter   | —                                   | Reconnect attempts scheduled across all sessions since process start                                                        |
-| `openwa_session_reconnect_loop_alerts_total` | counter   | —                                   | Reconnect-loop alerts emitted since process start                                                                           |
-| `openwa_sessions_restricted`                 | gauge     | —                                   | Sessions whose account WhatsApp is currently restricting                                                                    |
-| `openwa_send_pacing_refusals_total`          | counter   | `reason`                            | Sends refused by the pacing governor since process start                                                                    |
-| `http_requests_total`                        | counter   | `method`, `route`, `status`         | HTTP requests served, by method, route and status                                                                           |
-| `http_request_duration_seconds`              | histogram | `method`, `route`                   | HTTP request duration (`_bucket` / `_sum` / `_count`)                                                                       |
+| Metric                                       | Type      | Labels                              | Meaning                                                                                                                             |
+| -------------------------------------------- | --------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `openwa_up`                                  | gauge     | —                                   | Always `1` when scraped                                                                                                             |
+| `openwa_process_uptime_seconds`              | gauge     | —                                   | Process uptime                                                                                                                      |
+| `openwa_process_resident_memory_bytes`       | gauge     | —                                   | RSS                                                                                                                                 |
+| `openwa_process_heap_used_bytes`             | gauge     | —                                   | V8 heap used                                                                                                                        |
+| `openwa_event_loop_delay_p99_seconds`        | gauge     | none                                | p99 event-loop delay since the previous uncached scrape                                                                             |
+| `openwa_event_loop_delay_max_seconds`        | gauge     | none                                | Maximum event-loop delay since the previous uncached scrape                                                                         |
+| `openwa_unhandled_rejections_total`          | counter   | `kind`                              | Unhandled promise rejections since process start (`other` or `page_context_lost`)                                                   |
+| `openwa_queue_jobs`                          | gauge     | `queue`, `state`                    | BullMQ jobs per queue in `wait`/`active`/`delayed`/`failed` (cluster-wide, from Redis)                                              |
+| `openwa_stats_available`                     | gauge     | —                                   | 1 when the last overview read of the database-derived series below succeeded, or is served from a late read (5 min), 0 if it failed |
+| `openwa_sessions_total`                      | gauge     | —                                   | Configured sessions                                                                                                                 |
+| `openwa_sessions_active`                     | gauge     | —                                   | READY (active) sessions                                                                                                             |
+| `openwa_sessions`                            | gauge     | `status`                            | Session count per status                                                                                                            |
+| `openwa_messages_total`                      | gauge     | `direction` (`incoming`/`outgoing`) | Current stored messages by direction                                                                                                |
+| `openwa_messages_failed_total`               | gauge     | —                                   | Current messages in FAILED state                                                                                                    |
+| `openwa_webhook_delivery_failures_total`     | counter   | —                                   | Webhook delivery failures since process start: retries exhausted, never sent, or stopped by shutdown between direct retries         |
+| `openwa_session_reconnect_attempts_total`    | counter   | —                                   | Reconnect attempts scheduled across all sessions since process start                                                                |
+| `openwa_session_reconnect_loop_alerts_total` | counter   | —                                   | Reconnect-loop alerts emitted since process start                                                                                   |
+| `openwa_sessions_restricted`                 | gauge     | —                                   | Sessions whose account WhatsApp is currently restricting                                                                            |
+| `openwa_send_pacing_refusals_total`          | counter   | `reason`                            | Sends refused by the pacing governor since process start                                                                            |
+| `http_requests_total`                        | counter   | `method`, `route`, `status`         | HTTP requests served, by method, route and status                                                                                   |
+| `http_request_duration_seconds`              | histogram | `method`, `route`                   | HTTP request duration (`_bucket` / `_sum` / `_count`)                                                                               |
 
 The last two are deliberately **unprefixed** so a generic RED dashboard or alert rule matches them
 without knowing anything about OpenWA. They come from `src/common/metrics/request-metrics.ts`, which
@@ -1013,7 +1015,7 @@ without knowing anything about OpenWA. They come from `src/common/metrics/reques
 
 Not every row appears on every scrape, and the difference matters when you write alerts. The
 database-derived series (`openwa_sessions*`, `openwa_messages*`) are **omitted entirely** when the
-overview cannot be read within 2 seconds — `openwa_stats_available` is what tells the two cases apart, so alert on it
+overview read failed, or is late with no result from the last 5 minutes — `openwa_stats_available` is what tells the two cases apart, so alert on it
 rather than reading a missing series as zero. `openwa_send_pacing_refusals_total` appears only once
 the governor has refused something. `openwa_queue_jobs` appears only with `QUEUE_ENABLED=true`, and a
 queue whose counts cannot be read within 2 s is left out of that scrape. For these, `absent()` is the
@@ -1033,7 +1035,7 @@ seen, so keep new renderers on that composition.
 
 > **The database-derived series can be absent.** `openwa_sessions_*`, `openwa_messages_*` and the per-status
 > breakdown come from `StatsService.getOverview()`, which is memoized for `STATS_CACHE_TTL_MS` (default 30 s,
-> shared with `GET /api/stats/overview`) behind the 5 s render cache. If that read fails or takes over 2 s — an
+> shared with `GET /api/stats/overview`) behind the 5 s render cache. If that read fails, or takes over 2 s with no result from the last 5 minutes to serve — an
 > outage, a statement timeout, pool exhaustion, a `SQLITE_BUSY` under load — they are OMITTED rather than reported
 > as zero, and `openwa_stats_available` goes to 0. The process, HTTP and webhook series keep being served, so `up` stays 1
 > and still means "the process is alive". Alert on `openwa_stats_available == 0` for the degradation itself;

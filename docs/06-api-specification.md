@@ -5284,7 +5284,8 @@ When the data database cannot be read the database-derived series (`openwa_sessi
 `openwa_messages*`) are OMITTED rather than reported as zero — a zero would fire an alert
 claiming every session had dropped. `openwa_stats_available` is what tells the two cases apart,
 so alert on it rather than reading a missing series as zero. A scrape waits at most 2 seconds for
-that read and omits the series when it is late, so a database that stalls costs those series and not the
+that read and serves the last result it kept, up to 5 minutes old, when it is late; the series are omitted when
+the read failed or no result is that recent, so a database that stalls costs those series and not the
 rest of the scrape. `docs/10` lists every series.
 
 ```
