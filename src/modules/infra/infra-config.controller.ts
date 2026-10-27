@@ -187,8 +187,8 @@ export class InfraConfigController {
     status: 400,
     description:
       'Rejected before anything was written: an invalid or unknown field, an unknown engine type, a value with a ' +
-      'line break or one that cannot be stored, a configuration that would not boot in production, or a media ' +
-      'storage path the app cannot write to.',
+      'line break or one that cannot be stored, a configuration that would not boot in production or that the boot ' +
+      'environment validation rejects, or a media storage path the app cannot write to.',
   })
   @ApiBody({ description: 'Configuration to save', type: SaveConfigDto })
   saveConfig(@Body() config: SaveConfigDto): { message: string; saved: boolean; envPath: string; profiles: string[] } {
