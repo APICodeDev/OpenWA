@@ -98,8 +98,9 @@ function applyNewsletterCreatePatch(baileysDir = DEFAULT_BAILEYS) {
   try {
     fs.writeFileSync(file, source.replace(PARSE_FIND, PARSE_REPLACE), 'utf8');
   } catch (error) {
-    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
-    error.partial = true;
+    // The write truncates before it writes, so a failure after the open leaves a partial file, which
+    // --best-effort must not skip. A refused open leaves the tree as it was.
+    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
     throw error;
   }
   return { note: 'made the newsletter-create parse tolerate an absent picture, keeping the new channel id' };

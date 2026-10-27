@@ -179,8 +179,9 @@ function applyParticipantArityPatches(wwjsDir = DEFAULT_WWJS) {
     try {
       fs.writeFileSync(groupChatFile, source);
     } catch (error) {
-      // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
-      error.partial = true;
+      // The write truncates before it writes, so a failure after the open leaves a partial file, which
+      // --best-effort must not skip. A refused open leaves the tree as it was.
+      error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
       throw error;
     }
   }

@@ -69,8 +69,9 @@ function applyAppStatePatch(baileysDir = DEFAULT_BAILEYS) {
   try {
     fs.writeFileSync(file, source.replace(LOOP_FIND, LOOP_REPLACE), 'utf8');
   } catch (error) {
-    // The write may have truncated the file: a partial tree is never skipped, even under --best-effort.
-    error.partial = true;
+    // The write truncates before it writes, so a failure after the open leaves a partial file, which
+    // --best-effort must not skip. A refused open leaves the tree as it was.
+    error.partial = !['EACCES', 'EPERM', 'EROFS'].includes(error.code);
     throw error;
   }
   return { note: 'bounded the app-state resync loop on an empty decode' };

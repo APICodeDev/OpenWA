@@ -10,7 +10,8 @@ const { spawnSync } = require('node:child_process');
 /**
  * `--best-effort` lets a source install carry on without a patch it cannot place. A write that fails
  * part-way is not that case: fs.writeFileSync has already truncated the target, so the dependency is
- * left broken and no later run can tell. Each patcher must exit non-zero then, and only then.
+ * left broken and no later run can tell. Each patcher must exit non-zero then. An open that is refused
+ * writes nothing, and is skipped like any other tree the patcher cannot change.
  */
 
 // realpath: os.tmpdir() is a symlink on macOS and the patcher resolves its own location through it,
@@ -28,11 +29,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const write = fs.writeFileSync;
 const target = path.resolve(process.env.FIXTURE_WRITE_TARGET);
+const code = process.env.FIXTURE_WRITE_FAULT;
 fs.writeFileSync = function (file, data, ...args) {
   if (typeof file !== 'number' && path.resolve(String(file)) === target) {
-    write.call(fs, file, Buffer.from(String(data)).subarray(0, ${PREFIX_BYTES}));
+    // A refused open writes nothing; any other failure lands a prefix first, as a full disk does.
+    if (code !== 'EACCES') write.call(fs, file, Buffer.from(String(data)).subarray(0, ${PREFIX_BYTES}));
     process.stderr.write('${MARKER}\\n');
-    throw Object.assign(new Error('fixture write failure'), { code: 'ENOSPC' });
+    throw Object.assign(new Error('fixture write failure'), { code });
   }
   return write.call(fs, file, data, ...args);
 };
@@ -79,7 +82,7 @@ function fixture(name, relative, content) {
 function patch({ root, script, target }, fault) {
   const result = spawnSync(process.execPath, [...(fault ? ['--require', PRELOAD] : []), script, '--best-effort'], {
     cwd: root,
-    env: { PATH: process.env.PATH, FIXTURE_WRITE_TARGET: target },
+    env: { PATH: process.env.PATH, FIXTURE_WRITE_TARGET: target, FIXTURE_WRITE_FAULT: fault },
     encoding: 'utf8',
     timeout: 10000,
   });
@@ -104,9 +107,17 @@ for (const [name, relative, shapeOf] of PATCHERS) {
 
   test(`${name} fails when the write breaks part-way, even under --best-effort`, () => {
     const tree = fixture(name, relative, shape);
-    const result = patch(tree, true);
+    const result = patch(tree, 'ENOSPC');
     assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
     assert.equal(fs.statSync(tree.target).size, PREFIX_BYTES, 'the target keeps only the written prefix');
     assert.notEqual(result.status, 0);
+  });
+
+  test(`${name} skips a file it is not permitted to write under --best-effort`, () => {
+    const tree = fixture(name, relative, shape);
+    const result = patch(tree, 'EACCES');
+    assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+    assert.equal(fs.readFileSync(tree.target, 'utf8'), shape);
+    assert.equal(result.status, 0);
   });
 }
