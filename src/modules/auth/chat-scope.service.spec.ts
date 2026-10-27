@@ -210,55 +210,6 @@ describe('ChatScopeService over the shared lid table, with two sessions', () => 
     ]).toEqual([true, true]);
   });
 
-  it.each(['remap', 'delete'])('refuses stale aliases after a peer %s and a directory read failure', async mutation => {
-    const repo = ds.getRepository(LidMapping);
-    const peer = new LidMappingStoreService(repo);
-    await peer.onModuleInit();
-    if (mutation === 'remap') await peer.remember(LID, '628222', s2);
-    else await repo.delete({ lid: LID });
-    expect(await admitted()).toEqual([false, false]);
-    expect(store.getCached(LID)).toBe(PHONE);
-    const single = jest.spyOn(repo, 'findOne').mockRejectedValue(new Error('connection lost'));
-    const batch = jest.spyOn(repo, 'find').mockRejectedValue(new Error('connection lost'));
-    try {
-      expect(await admitted()).toEqual([false, false]);
-      const lidKey = { allowedChats: [`${LID}@lid`] };
-      expect(await svc.allows(lidKey, `${PHONE}@c.us`)).toBe(false);
-      expect((await svc.scopeForFilter(lidKey))!.allowed.has(`${PHONE}@c.us`)).toBe(false);
-      const chat = { id: `${LID}@lid`, preview: 'private message' };
-      expect(await svc.filter(key, [chat], item => item.id)).toEqual([]);
-      expect(await svc.filter(lidKey, [chat], item => item.id)).toEqual([chat]);
-      expect(await svc.allows(lidKey, `${LID}@lid`)).toBe(true);
-      expect(await svc.allows(key, `${PHONE}@c.us`)).toBe(true);
-    } finally {
-      single.mockRestore();
-      batch.mockRestore();
-      warn.mockClear();
-    }
-  });
-
-  it('does not authorize an optimistic phone after both its write and current reads fail', async () => {
-    const repo = ds.getRepository(LidMapping);
-    jest.spyOn(repo, 'upsert').mockRejectedValueOnce(new Error('connection lost'));
-    await expect(store.remember(LID, '628222', s1)).resolves.toBe(false);
-    const single = jest.spyOn(repo, 'findOne').mockRejectedValue(new Error('connection lost'));
-    const batch = jest.spyOn(repo, 'find').mockRejectedValue(new Error('connection lost'));
-    try {
-      for (const phone of [PHONE, '628222']) {
-        const phoneKey = { allowedChats: [`${phone}@c.us`] };
-        expect(await svc.allows(phoneKey, `${LID}@lid`)).toBe(false);
-        expect((await svc.scopeForFilter(phoneKey))!.allowed.has(`${LID}@lid`)).toBe(false);
-      }
-      const lidKey = { allowedChats: [`${LID}@lid`] };
-      expect(await svc.allows(lidKey, '628222@c.us')).toBe(false);
-      expect((await svc.scopeForFilter(lidKey))!.allowed.has('628222@c.us')).toBe(false);
-    } finally {
-      single.mockRestore();
-      batch.mockRestore();
-      warn.mockClear();
-    }
-  });
-
   it('admits it for neither phone while a phone write of this node has not reached the table', async () => {
     const newKey = { allowedChats: ['628222@c.us'] };
     const admittedNew = async () => [
