@@ -13,6 +13,8 @@ import {
   Min,
   Max,
   ArrayMaxSize,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Validate } from 'class-validator';
@@ -25,8 +27,24 @@ import {
   MENTION_WID_MAX_LENGTH,
   MESSAGE_TEXT_MAX_LENGTH,
 } from './send-message.dto';
-import { IsMentionWidConstraint } from './is-mention-wid.validator';
+import { isMentionWid } from './is-mention-wid.validator';
 import { BatchMessageStatus, BatchStatus } from '../entities/message-batch.entity';
+import { templateVariableNames } from '../batch-media.util';
+
+/**
+ * A bulk mention is a WID or a placeholder that the item's `variables` fill in, so one batch can tag a
+ * different participant per item. The rendered value is checked as a WID when the item runs.
+ */
+@ValidatorConstraint({ name: 'isBulkMentionWid', async: false })
+class IsBulkMentionWidConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    return typeof value === 'string' && (isMentionWid(value) || templateVariableNames(value).length > 0);
+  }
+
+  defaultMessage(): string {
+    return 'each mentions entry must be an individual WID or contain a template placeholder';
+  }
+}
 
 class BulkMediaDto {
   @ApiPropertyOptional({ description: 'Media URL (http/https)' })
@@ -122,7 +140,7 @@ export class BulkMessageContentDto {
   @ArrayMaxSize(MENTIONS_MAX)
   @IsString({ each: true })
   @MaxLength(MENTION_WID_MAX_LENGTH, { each: true })
-  @Validate(IsMentionWidConstraint, { each: true })
+  @Validate(IsBulkMentionWidConstraint, { each: true })
   mentions?: string[];
 }
 
