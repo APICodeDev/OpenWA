@@ -1230,6 +1230,23 @@ for (const status of [400, 409, 429, 502, 503]) {
   });
 }
 
+// The route is closed to the key as a whole (a key limited to chats reaches no number check), so every later number
+// would be refused alike and each refusal is a failed-authentication row in the gateway's audit log.
+test('NumberChecker: HTTP 403 on the first lookup stops the batch before the second', async () => {
+  const lookups = stubLookups(() => jsonResponse({ message: 'API key is restricted to selected chats' }, 403));
+  const { container } = renderComponent();
+  const textarea = await openBulkTab();
+  rtl.fireEvent.change(textarea, { target: { value: '911111111111\n912222222222' } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: /Start Batch Check/i }));
+
+  await rtl.screen.findByText('Batch stopped', { selector: 'strong' });
+  const notice = container.querySelector('.nc-batch-stopped')?.textContent ?? '';
+  assert.match(notice, /The gateway refused a lookup \(HTTP 403\)/);
+  assert.match(notice, /Stopped at number 1 of 2; 1 number was not sent/);
+  assert.deepEqual(lookups, ['911111111111']);
+  assert.equal(rtl.screen.queryByText(/Completed checking/), null);
+});
+
 test('NumberChecker: a lookup that gets no answer at all stops the batch before the second', async () => {
   const lookups: string[] = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {
