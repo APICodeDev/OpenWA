@@ -134,6 +134,69 @@ describe('ContactService', () => {
     }
   });
 
+  it.each(['resolve', 'reject'] as const)(
+    'stops later avatar chunks after a timeout and handles a late %s',
+    async outcome => {
+      jest.useFakeTimers();
+      let active = 0;
+      let peak = 0;
+      let calls = 0;
+      const getProfilePicture = jest.fn().mockImplementation(() => {
+        active += 1;
+        peak = Math.max(peak, active);
+        const call = ++calls;
+        if (call > 5) return Promise.resolve(null).finally(() => active--);
+        return new Promise<string | null>((resolve, reject) => {
+          setTimeout(() => {
+            if (outcome === 'reject' && call === 1) reject(new Error('lookup failed'));
+            else resolve('https://pps/picture.jpg');
+          }, 9000);
+        }).finally(() => active--);
+      });
+      const ids = Array.from({ length: 6 }, (_, i) => String(628100000000 + i) + '@c.us');
+      try {
+        const result = makeService({ getProfilePicture }).getProfilePictures('s1', ids);
+        await jest.advanceTimersByTimeAsync(8000);
+        await expect(result).resolves.toEqual(Object.fromEntries(ids.slice(0, 5).map(id => [id, null])));
+        expect(active).toBe(5);
+        await jest.advanceTimersByTimeAsync(1000);
+        expect(active).toBe(0);
+        expect(getProfilePicture).toHaveBeenCalledTimes(5);
+        expect(peak).toBeLessThanOrEqual(5);
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        await jest.advanceTimersByTimeAsync(30000);
+        jest.clearAllTimers();
+        jest.useRealTimers();
+      }
+    },
+  );
+
+  it('preserves not-ready when other lookups in the chunk time out', async () => {
+    jest.useFakeTimers();
+    const getProfilePicture = jest
+      .fn()
+      .mockRejectedValueOnce(new EngineNotReadyError())
+      .mockImplementation(() => new Promise(resolve => setTimeout(() => resolve(null), 9000)));
+    try {
+      const result = makeService({ getProfilePicture })
+        .getProfilePictures(
+          's1',
+          Array.from({ length: 6 }, (_, i) => String(628100000000 + i) + '@c.us'),
+        )
+        .catch((error: unknown) => error);
+      await jest.advanceTimersByTimeAsync(8000);
+      expect(await result).toBeInstanceOf(EngineNotReadyError);
+      expect(getProfilePicture).toHaveBeenCalledTimes(5);
+      await jest.advanceTimersByTimeAsync(1000);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      await jest.advanceTimersByTimeAsync(30000);
+      jest.clearAllTimers();
+      jest.useRealTimers();
+    }
+  });
+
   describe('block/unblock reject ids that do not name a person', () => {
     // whatsapp-web.js's Contact.block()/unblock() return false for a group id (nothing blocked,
     // answered 200 "blocked"). Both engines share this 400 guard.
