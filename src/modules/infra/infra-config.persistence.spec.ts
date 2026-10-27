@@ -159,6 +159,12 @@ const invalidBootCases: Array<{
     body: { database: { type: 'postgres', builtIn: true } },
   },
   { name: 'an exponent-form pool size', stored: database, pins: {}, body: { database: { poolSize: 1e21 } } },
+  {
+    name: 'a true TLS pin for bundled PostgreSQL',
+    stored: { ...database, POSTGRES_BUILTIN: 'true', DATABASE_HOST: 'postgres' },
+    pins: { DATABASE_SSL: 'true' },
+    body: { database: { type: 'postgres', builtIn: true } },
+  },
 ];
 for (const example of invalidBootCases) {
   it(`refuses ${example.name} before persisting`, async () => {
