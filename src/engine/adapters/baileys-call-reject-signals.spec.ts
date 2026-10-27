@@ -1,6 +1,7 @@
 import type { WACallEvent, WASocket } from '@whiskeysockets/baileys';
 import type { CallOutcomeEvent } from '../interfaces/whatsapp-engine.interface';
 import { CallNotFoundError } from '../../common/errors/call-not-found.error';
+import { toNeutralJid } from '../identity/wa-id';
 import { BaileysEvents, BaileysEventsHost } from './baileys-events';
 
 const CALL_ID = 'CALL1';
@@ -195,8 +196,9 @@ describe('another tag of the call being rejected, spelled with the other identit
   const resolved = (jid: string): string => (jid === LID || jid === PHONE_ID ? '628111@c.us' : jid);
   const tag = (from: string, callerPn?: string): WACallEvent => ({ ...call('offer', from), callerPn });
 
-  // Baileys takes `from` per tag but fills a missing callerPn from the first one, so the same caller can be
-  // spelled as a lid on one tag and as a phone number on the next.
+  // Baileys reads `from` and `callerPn` off each tag. It fills a missing callerPn from its offer cache only on
+  // the tags that are not offers, so a repeat offer keeps just the callerPn it carries, and the same caller
+  // can be spelled as a lid on one tag and as a phone number on the next.
   const spellings: Array<[string, WACallEvent, WACallEvent]> = [
     ['lid then phone', tag(LID, PHONE_ID), tag(PHONE_ID, PHONE_ID)],
     ['phone then lid', tag(PHONE_ID, PHONE_ID), tag(LID, PHONE_ID)],
@@ -238,7 +240,24 @@ describe('another tag of the call being rejected, spelled with the other identit
     },
   );
 
-  it('is the same call when the lid resolved to a phone number between the tags', async () => {
+  // The device suffix a jid may carry is not part of the caller: the neutral form drops it, the raw jid does not.
+  it.each([
+    ['lid', '1234:7@lid', '1234@lid'],
+    ['phone', '628111:7@s.whatsapp.net', '628111@s.whatsapp.net'],
+  ])('is the same call when only the device of the %s caller differs', async (_name, withDevice, bare) => {
+    const { events, outcomes, rings, settle } = setup(tag(withDevice), toNeutralJid);
+    const attempt = events.rejectCall(CALL_ID);
+
+    events.handleCallEvents([tag(bare)]);
+    settle().resolve();
+    await attempt;
+
+    expect(outcomes).toEqual([expect.objectContaining({ callId: CALL_ID, outcome: 'rejected' })]);
+    expect(rings).toHaveLength(1);
+  });
+
+  // The same raw caller stays the same call even when the lid resolved after the first tag changed its neutral form.
+  it('is the same call when the same lid resolved to a phone number after the first tag', async () => {
     let learned = false;
     const { events, outcomes, rings, settle } = setup(tag(LID), jid => (learned && jid === LID ? '628111@c.us' : jid));
     const attempt = events.rejectCall(CALL_ID);
