@@ -2042,9 +2042,13 @@ export class BaileysEvents {
         isGroup: call.isGroup === true,
       };
       // Offer and offer_notice carry one call id, so another tag of the call being rejected is neither a new
-      // ring nor another call: it must not put the handle back or announce the call a second time.
+      // ring nor another call: it must not put the handle back or announce the call a second time. Its caller
+      // may be spelled as a lid on one tag and as a phone number on the next, so the published identity counts too.
       const rejection = this.rejections.get(call.id);
-      if (this.isPending(call.id, rejection) && rejection?.entry.callFrom === call.from) {
+      if (
+        this.isPending(call.id, rejection) &&
+        (rejection?.entry.callFrom === call.from || rejection?.entry.from === published.from)
+      ) {
         continue;
       }
       if (!this.cacheLiveCall(call.id, call.from, published)) {

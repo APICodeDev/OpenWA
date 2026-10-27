@@ -10,7 +10,7 @@ const SIGNAL_DATE = new Date(1_700_000_000_000);
 const call = (status: string, from = CALLER, date = new Date()): WACallEvent =>
   ({ id: CALL_ID, from, chatId: from, status, offline: false, date }) as unknown as WACallEvent;
 
-function setup() {
+function setup(first: WACallEvent = call('offer'), neutral: (jid: string) => string = jid => jid) {
   const outcomes: CallOutcomeEvent[] = [];
   const rings: unknown[] = [];
   let settle!: { resolve: () => void; reject: (error: Error) => void };
@@ -25,13 +25,13 @@ function setup() {
   const host = {
     logger: { debug: () => undefined, warn: () => undefined },
     normalizedSelfJid: () => '99999@s.whatsapp.net',
-    toNeutralJid: (jid: string) => jid,
+    toNeutralJid: neutral,
     getSocketOrNull: () => socket,
     getOnCall: () => (ring: unknown) => rings.push(ring),
     getOnCallOutcome: () => (outcome: CallOutcomeEvent) => outcomes.push(outcome),
   } as unknown as BaileysEventsHost;
   const events = new BaileysEvents(host);
-  events.handleCallEvents([call('offer')]);
+  events.handleCallEvents([first]);
   return { events, outcomes, rings, socket, settle: () => settle };
 }
 
@@ -186,5 +186,81 @@ describe('a call signal that arrives while its rejection is pending', () => {
 
     expect(outcomes).toEqual([]);
     await expect(events.rejectCall(CALL_ID)).rejects.toBeInstanceOf(CallNotFoundError);
+  });
+});
+
+describe('another tag of the call being rejected, spelled with the other identity form', () => {
+  const LID = '1234@lid';
+  const PHONE_ID = '628111@s.whatsapp.net';
+  const resolved = (jid: string): string => (jid === LID || jid === PHONE_ID ? '628111@c.us' : jid);
+  const tag = (from: string, callerPn?: string): WACallEvent => ({ ...call('offer', from), callerPn });
+
+  // Baileys takes `from` per tag but fills a missing callerPn from the first one, so the same caller can be
+  // spelled as a lid on one tag and as a phone number on the next.
+  const spellings: Array<[string, WACallEvent, WACallEvent]> = [
+    ['lid then phone', tag(LID, PHONE_ID), tag(PHONE_ID, PHONE_ID)],
+    ['phone then lid', tag(PHONE_ID, PHONE_ID), tag(LID, PHONE_ID)],
+  ];
+
+  it.each(spellings)(
+    'is the same call after %s, so its success reports one rejection',
+    async (_name, first, repeat) => {
+      const { events, outcomes, rings, settle } = setup(first, resolved);
+      const attempt = events.rejectCall(CALL_ID);
+
+      events.handleCallEvents([repeat]);
+      settle().resolve();
+      await attempt;
+
+      expect(outcomes).toEqual([
+        expect.objectContaining({ callId: CALL_ID, outcome: 'rejected', from: '628111@c.us' }),
+      ]);
+      expect(rings).toHaveLength(1);
+      await expect(events.rejectCall(CALL_ID)).rejects.toBeInstanceOf(CallNotFoundError);
+    },
+  );
+
+  it.each(spellings)(
+    'is the same call after %s, so its failure leaves one rejectable call',
+    async (_name, first, repeat) => {
+      const { events, outcomes, rings, settle } = setup(first, resolved);
+      const attempt = events.rejectCall(CALL_ID);
+
+      events.handleCallEvents([repeat]);
+      settle().reject(new Error('Connection Closed'));
+      await expect(attempt).rejects.toThrow('Connection Closed');
+      const retry = events.rejectCall(CALL_ID);
+      settle().resolve();
+      await retry;
+
+      expect(rings).toHaveLength(1);
+      expect(outcomes).toEqual([expect.objectContaining({ callId: CALL_ID, outcome: 'rejected' })]);
+    },
+  );
+
+  it('is the same call when the lid resolved to a phone number between the tags', async () => {
+    let learned = false;
+    const { events, outcomes, rings, settle } = setup(tag(LID), jid => (learned && jid === LID ? '628111@c.us' : jid));
+    const attempt = events.rejectCall(CALL_ID);
+
+    learned = true;
+    events.handleCallEvents([tag(LID)]);
+    settle().resolve();
+    await attempt;
+
+    expect(outcomes).toEqual([expect.objectContaining({ callId: CALL_ID, outcome: 'rejected' })]);
+    expect(rings).toHaveLength(1);
+  });
+
+  it('is another call when a different caller reuses the id', async () => {
+    const { events, outcomes, rings, settle } = setup(tag(LID, PHONE_ID), resolved);
+    const attempt = events.rejectCall(CALL_ID);
+
+    events.handleCallEvents([tag('628222@s.whatsapp.net')]);
+    settle().resolve();
+    await attempt;
+
+    expect(outcomes).toEqual([]);
+    expect(rings).toHaveLength(2);
   });
 });
