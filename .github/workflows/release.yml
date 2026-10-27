@@ -738,7 +738,7 @@ jobs:
             image="${ref%:*}"
             if config="$(docker buildx imagetools inspect "$ref" --format '{{json .Image}}' 2>"$work/inspect.err")"; then
               # Both published architectures must identify the same stable application version.
-              version="$(jq -er '[.["linux/amd64"].config.Labels["org.opencontainers.image.version"], ((.["linux/arm64"] // .["linux/arm64/v8"]).config.Labels["org.opencontainers.image.version"])] | if all(.[]; type == "string") and (unique | length) == 1 then .[0] else error("missing or inconsistent platform versions") end' <<< "$config")" || return 1
+              version="$(jq -er '[.["linux/amd64"].config.Labels["org.opencontainers.image.version"], ((.["linux/arm64"] // .["linux/arm64/v8"]).config.Labels["org.opencontainers.image.version"])] | if all(.[]; type == "string") and (unique | length) == 1 then .[0] else error("missing or inconsistent platform versions") end' <<< "$config")" || { echo "::error::$ref has no consistent version label on both platforms" >&2; return 1; }
               if [[ ! "$version" =~ $stable ]]; then
                 echo "::error::$ref has no stable release version identity" >&2
                 return 1
@@ -759,8 +759,8 @@ jobs:
                 ;;
               *) echo "::error::Unsupported release registry for $ref" >&2; return 1 ;;
             esac
-            token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$token_url" | jq -er '.token // .access_token | select(type == "string" and length > 0)')" || return 1
-            status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output "$work/manifest.json" --write-out '%{http_code}' --header "Authorization: Bearer $token" --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$manifest_url")" || return 1
+            token="$(curl --fail --silent --show-error --connect-timeout 10 --max-time 30 "$token_url" | jq -er '.token // .access_token | select(type == "string" and length > 0)')" || { echo "::error::Cannot get a registry token for $ref" >&2; cat "$work/inspect.err" >&2; return 1; }
+            status="$(curl --silent --show-error --connect-timeout 10 --max-time 30 --output "$work/manifest.json" --write-out '%{http_code}' --header "Authorization: Bearer $token" --header 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "$manifest_url")" || { echo "::error::Cannot reach the registry for $ref" >&2; cat "$work/inspect.err" >&2; return 1; }
             if [ "$status" = 404 ] && jq -e '.errors | type == "array" and length > 0 and all(.[]; .code == "MANIFEST_UNKNOWN" or .code == "NAME_UNKNOWN")' "$work/manifest.json" >/dev/null; then
               printf 'absent\n'
               return 0
@@ -781,7 +781,7 @@ jobs:
                 continue
               fi
               if [[ ! "$VERSION" =~ $stable ]]; then
-                echo "::error::Cannot order non-stable release version $VERSION"
+                echo "::error::Cannot order release version '$VERSION': it is not a stable X.Y.Z"
                 exit 1
               fi
               current="$(channel_version "$tag")"
