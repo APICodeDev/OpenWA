@@ -72,7 +72,8 @@ async function submitAndReadError(): Promise<string> {
   return message;
 }
 
-// The only feedback a failed sign-in gives is this message, so it has to reach a screen reader and name the field it is about.
+// The only feedback a failed sign-in gives is this message, so it has to reach a screen reader and name the field it
+// is about.
 test('a refused sign-in is announced and tied to the key field', async () => {
   reply = () => new Response('', { status: 401 });
   await submitAndReadError();
