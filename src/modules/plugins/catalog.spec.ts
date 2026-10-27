@@ -63,6 +63,31 @@ describe('annotateCatalog', () => {
   });
 });
 
+describe('annotateCatalog with null optional fields', () => {
+  it('omits a null optional field, as the published schema has it absent or a string', () => {
+    const [entry] = annotateCatalog(
+      [
+        {
+          id: 'a',
+          name: 'A',
+          version: '1.0.0',
+          description: null,
+          keywords: null,
+          download: null,
+          stars: null,
+        } as never,
+      ],
+      [],
+    );
+    expect(entry).not.toHaveProperty('description');
+    expect(entry).not.toHaveProperty('keywords');
+    expect(entry).not.toHaveProperty('download');
+    // Unknown extra fields are passed through as they came.
+    expect(entry).toHaveProperty('stars', null);
+    expect(entry).toMatchObject({ id: 'a', installed: false, updateAvailable: false });
+  });
+});
+
 describe('isCatalogEntry', () => {
   const ok = { id: 'a', name: 'A', version: '1.0.0' };
 

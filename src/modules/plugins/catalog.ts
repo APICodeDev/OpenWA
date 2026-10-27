@@ -55,6 +55,15 @@ export function isCatalogEntry(value: unknown): value is CatalogEntry {
   );
 }
 
+/** The entry without the optional fields a catalog left null, so none is answered as null where a string is declared. */
+function withoutNulls(entry: CatalogEntry): CatalogEntry {
+  const out: CatalogEntry = { ...entry };
+  for (const key of [...OPTIONAL_STRING_FIELDS, 'keywords'] as const) {
+    if (out[key] === null) delete out[key];
+  }
+  return out;
+}
+
 /** A catalog entry annotated with this instance's install state. */
 export interface CatalogPlugin extends CatalogEntry {
   installed: boolean;
@@ -93,7 +102,7 @@ export function annotateCatalog(
     const installedVersion = byId.get(entry.id) ?? null;
     const cmp = installedVersion === null ? 0 : compareSemver(entry.version, installedVersion);
     return {
-      ...entry,
+      ...withoutNulls(entry),
       installed: installedVersion !== null,
       installedVersion,
       updateAvailable:

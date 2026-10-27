@@ -1214,7 +1214,10 @@ describe('PluginsService remote catalog', () => {
 
   it('accepts null in optional fields', async () => {
     serveOnce('[{"id":"a","name":"A","version":"1.0.0","homepage":null,"keywords":null}]');
-    await expect(service().getCatalog()).resolves.toMatchObject([{ id: 'a', installed: false }]);
+    const [entry] = await service().getCatalog();
+    expect(entry).toMatchObject({ id: 'a', installed: false });
+    expect(entry).not.toHaveProperty('homepage');
+    expect(entry).not.toHaveProperty('keywords');
   });
 
   it('annotates a well-formed catalog', async () => {
