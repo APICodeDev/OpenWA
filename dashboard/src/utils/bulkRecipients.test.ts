@@ -131,24 +131,29 @@ test('CSV quoting preserves full chat IDs and existing recipient syntax', () => 
   ]);
 });
 
-test('a quoted CSV name cannot introduce a recipient between commas', () => {
-  assert.deepEqual(parseBulkRecipients('"Alice,628123456789@c.us,office",+15550102233'), ['15550102233@c.us']);
-});
-
-test('a quoted multiline CSV name cannot introduce a recipient on an interior line', () => {
-  assert.deepEqual(parseBulkRecipients('"Alice\r\n628123456789@c.us\r\noffice",+15550102233'), ['15550102233@c.us']);
+test('a list wrapped in one pair of quotes, or a quoted cell of several numbers, keeps every number', () => {
+  assert.deepEqual(parseBulkRecipients('"628111222333\n628222333444\n628333444555"'), [
+    '628111222333@c.us',
+    '628222333444@c.us',
+    '628333444555@c.us',
+  ]);
+  assert.deepEqual(parseBulkRecipients('"628111222333,628222333444"'), ['628111222333@c.us', '628222333444@c.us']);
+  assert.deepEqual(parseBulkRecipients('"628111222333@c.us\r\n1203630000@g.us"'), [
+    '628111222333@c.us',
+    '1203630000@g.us',
+  ]);
 });
 
 test('a separator inside a quoted CSV field never concatenates two phone numbers', () => {
-  assert.deepEqual(parseBulkRecipients('"628123456789,15550102233",628987654321@c.us'), ['628987654321@c.us']);
+  assert.deepEqual(parseBulkRecipients('"628123456789,15550102233",628987654321@c.us'), [
+    '628123456789@c.us',
+    '15550102233@c.us',
+    '628987654321@c.us',
+  ]);
   assert.deepEqual(parseBulkRecipients('  "628123456789@c.us"  '), ['628123456789@c.us']);
 });
 
-test('an unclosed quoted CSV field is not treated as a full chat ID', () => {
-  assert.deepEqual(parseBulkRecipients('"628123456789@c.us'), []);
-});
-
-test('a quote that never closes does not drop the recipients after it', () => {
+test('a quote that never closes does not drop the recipients around it', () => {
   assert.deepEqual(parseBulkRecipients('"628111111111\n628222222222\n628333333333'), [
     '628111111111@c.us',
     '628222222222@c.us',
@@ -159,5 +164,20 @@ test('a quote that never closes does not drop the recipients after it', () => {
     '628222222222@c.us',
     '628333333333@c.us',
   ]);
-  assert.deepEqual(parseBulkRecipients('"628111111111@c.us\n628222222222@c.us'), ['628222222222@c.us']);
+  assert.deepEqual(parseBulkRecipients('"628111111111@c.us\n628222222222@c.us'), [
+    '628111111111@c.us',
+    '628222222222@c.us',
+  ]);
+  // One stray quote and a later one used to pair up and swallow the lines between them.
+  assert.deepEqual(
+    parseBulkRecipients('628111222333\n"628222333444\n628333444555\n628444555666\n628555666777\n"628666777888'),
+    [
+      '628111222333@c.us',
+      '628222333444@c.us',
+      '628333444555@c.us',
+      '628444555666@c.us',
+      '628555666777@c.us',
+      '628666777888@c.us',
+    ],
+  );
 });

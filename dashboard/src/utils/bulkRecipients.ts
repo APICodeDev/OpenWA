@@ -30,49 +30,11 @@ export const BULK_RECIPIENTS_FILE_MAX_BYTES = 2 * 1024 * 1024;
  * are phone-number formatting (`+1 (555) 010-2233` is one entry, not five), and no WhatsApp chat id
  * shape contains a comma, a semicolon or a tab.
  */
-const FIELD_SEPARATORS = /[,;\t\r\n\u060C\u061B]/;
+const FIELD_SEPARATORS = /[,;\t\u060C\u061B]/;
 
-// A quoted CSV field can contain separators; none of its pieces is a recipient on its own.
-function* recipientFields(text: string): Generator<string> {
-  let field = '';
-  let quoted = false;
-  let atStart = true;
-  // A quote that never closes would swallow every recipient after it, so the text from it on is read again with
-  // quotes as plain characters.
-  let plain = false;
-  let opened = 0;
-  let fieldBeforeQuote = '';
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (ch === '"' && !plain && (quoted || atStart)) {
-      atStart = false;
-      if (quoted && text[i + 1] === '"') {
-        field += '"';
-        i++;
-      } else {
-        quoted = !quoted;
-        if (quoted) {
-          opened = i;
-          fieldBeforeQuote = field;
-        }
-      }
-    } else if (!quoted && FIELD_SEPARATORS.test(ch)) {
-      yield field;
-      field = '';
-      atStart = true;
-    } else {
-      field += ch;
-      if (atStart && !/\s/.test(ch)) atStart = false;
-    }
-    if (quoted && i === text.length - 1) {
-      plain = true;
-      quoted = false;
-      field = fieldBeforeQuote;
-      i = opened - 1;
-    }
-  }
-  yield field;
-}
+// A quote at the edge of a field is the CSV quoting of a cell, never part of a chat id: `"123@g.us"` is the chat id
+// 123@g.us. Quotes are not tracked across fields or lines, so one that never closes cannot swallow what follows it.
+const stripEdgeQuotes = (field: string): string => field.replace(/^"/, '').replace(/"$/, '').trim();
 
 /**
  * Fewest digits a bare number may carry to be treated as a phone number, matching the bound the
@@ -92,16 +54,23 @@ const CHAT_ID = /^[0-9][0-9:-]*@(c\.us|g\.us|s\.whatsapp\.net|lid|newsletter|bro
 
 export function parseBulkRecipients(text: string): string[] {
   const seen = new Set<string>();
-  // Fold before parsing, so native digits and full-width quotes/separators keep the same meaning.
-  for (const rawField of recipientFields(normalizePhoneText(text))) {
-    const field = rawField.trim();
-    if (!field || FIELD_SEPARATORS.test(field)) continue;
-    if (field.includes('@')) {
-      if (CHAT_ID.test(field)) seen.add(field);
-      continue;
+  // Folded before the split, so a list in the digits and the commas of another script is split as it reads.
+  for (const rawLine of normalizePhoneText(text).split(/\r\n?|\n/)) {
+    // Split into fields before anything else. The button offers `.csv`, and a row with more than one
+    // column used to have its columns' digits CONCATENATED by the strip below: `1,628123456789`
+    // became `1628123456789@c.us`, a different number that looks entirely plausible in the
+    // recipients box. Splitting first keeps each column a candidate on its own.
+    for (const rawField of rawLine.split(FIELD_SEPARATORS)) {
+      const field = rawField.trim();
+      if (!field) continue;
+      if (field.includes('@')) {
+        const id = stripEdgeQuotes(field);
+        if (CHAT_ID.test(id)) seen.add(id);
+        continue;
+      }
+      const digits = field.replace(/[^0-9]/g, '');
+      if (digits.length >= MIN_PHONE_DIGITS) seen.add(`${digits}@c.us`);
     }
-    const digits = field.replace(/[^0-9]/g, '');
-    if (digits.length >= MIN_PHONE_DIGITS) seen.add(`${digits}@c.us`);
   }
   return [...seen];
 }
