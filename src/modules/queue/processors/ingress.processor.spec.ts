@@ -193,6 +193,88 @@ describe('IngressProcessor', () => {
     expect(hooks.execute).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'bullmq:rateLimitExceeded',
+    'bullmq:movedToDelayed',
+    'bullmq:movedToWait',
+    'bullmq:movedToWaitingChildren',
+    'bullmq:unrecoverable',
+  ])('uses bounded retries for ordinary dispatch error text %s', async message => {
+    const rows: Array<{ lastError: string; attempts: number }> = [];
+    const proc = new IngressProcessor(
+      {
+        isRestorePending: () => false,
+        dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error(message)),
+      } as never,
+      { save: (row: { lastError: string; attempts: number }) => Promise.resolve(rows.push(row)) } as never,
+      { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+      {} as never,
+      {} as never,
+    );
+    let retries = 0;
+    let terminal = 0;
+    let rateLimited = 0;
+    const backend = {
+      closing: false,
+      retryJob: () => {
+        retries++;
+        return Promise.resolve();
+      },
+      moveToFailed: () => {
+        terminal++;
+        return Promise.resolve({ finishedOn: 1 });
+      },
+      moveJobFromActiveToWait: () => {
+        rateLimited++;
+        return Promise.resolve(0);
+      },
+    };
+    const queue = {
+      name: 'ingress',
+      qualifiedName: 'bull:ingress',
+      opts: {},
+      toKey: (key: string) => key,
+      trace: (_kind: unknown, _operation: unknown, _name: unknown, callback: () => unknown) => callback(),
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
+      backend,
+    };
+    const nativeJob = Job.fromJSON(
+      queue as never,
+      {
+        id: 'ing-retry',
+        name: 'ingress',
+        data: JSON.stringify((job() as { data: unknown }).data),
+        opts: { attempts: 3 },
+      } as never,
+    );
+    const worker = Object.assign(Object.create(Worker.prototype) as object, {
+      name: 'ingress',
+      opts: {},
+      backend,
+      lockManager: { trackJob: () => undefined, untrackJob: () => undefined },
+      trace: queue.trace,
+      retryIfFailed: (run: () => Promise<unknown>) => run(),
+      callProcessJob: (value: Parameters<IngressProcessor['process']>[0]) => proc.process(value),
+    }) as unknown as Worker;
+    EventEmitter.call(worker);
+    const recorded: Promise<void>[] = [];
+    worker.on('failed', (failed, error) => {
+      recorded.push(proc.onWorkerFailed(failed as never, error));
+    });
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await worker.processJob(nativeJob, 'token', () => false);
+      await Promise.all(recorded);
+    }
+
+    expect(nativeJob.attemptsMade).toBe(3);
+    expect(retries).toBe(2);
+    expect(terminal).toBe(1);
+    expect(rateLimited).toBe(0);
+    expect(recorded).toHaveLength(3);
+    expect(rows).toEqual([expect.objectContaining({ attempts: 3, lastError: message })]);
+  });
+
   it('serializes two jobs for the same conversation and parallelizes different ones', async () => {
     const started: string[] = [];
     const finished: string[] = [];

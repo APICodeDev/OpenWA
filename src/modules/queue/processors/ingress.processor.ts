@@ -1,6 +1,6 @@
 import { Optional } from '@nestjs/common';
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { DelayedError, Job, Queue } from 'bullmq';
+import { DelayedError, Job, Queue, RATE_LIMIT_ERROR } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
@@ -131,6 +131,12 @@ export class IngressProcessor extends WorkerHost {
 
       if (isFinalAttempt) await this.deadLetterOrRequeue(job, job.attemptsMade + 1, errorMessage);
 
+      // BullMQ reads an error with exactly this text as a rate limit, moves the job back to wait without
+      // counting the attempt and runs it again: here a hot loop that never reaches the final attempt, or on
+      // it writes a dead letter on every run. A handler may relay such text from elsewhere.
+      if (errorMessage === RATE_LIMIT_ERROR) {
+        throw new Error(`Ingress dispatch failed: ${errorMessage}`, { cause: err });
+      }
       // Re-throw to trigger BullMQ's exponential backoff / retry.
       throw err;
     }
