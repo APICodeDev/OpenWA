@@ -21,6 +21,7 @@ import {
   BUNDLED_SERVICE_ENV,
   DockerService,
   MANAGED_DOCKER_PROFILES,
+  datastoreInUse,
   hostPinnedElsewhere,
   namesBundledContainer,
 } from '../docker';
@@ -486,7 +487,9 @@ export class InfraConfigController {
       const bundled = BUNDLED_SERVICE_ENV[profile];
       if (!bundled) return false;
       const [key] = bundled;
-      return namesBundledContainer(profile, isEnvPinned(key) ? process.env[key] : (saved ??= readGeneratedEnv())[key]);
+      const bootValue = this.bootValueReader((saved ??= readGeneratedEnv()));
+      // A host that still names the container keeps it only while the next boot uses that datastore.
+      return datastoreInUse(profile, bootValue) && namesBundledContainer(profile, bootValue(key));
     };
     const requestedRemoval = body?.profilesToRemove || [];
     const keptRunning = requestedRemoval.filter(dialsBundled);

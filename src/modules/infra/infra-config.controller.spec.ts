@@ -2660,7 +2660,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
   });
 
   describe('a service the environment pins the app to', () => {
-    const KEYS = ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT'];
+    const KEYS = ['DATABASE_HOST', 'REDIS_HOST', 'S3_ENDPOINT', 'DATABASE_TYPE', 'REDIS_ENABLED', 'STORAGE_TYPE'];
     let savedEnv: Array<[string, string | undefined]>;
 
     beforeEach(() => {
@@ -2680,6 +2680,9 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
       process.env.DATABASE_HOST = 'postgres';
       process.env.REDIS_HOST = 'redis';
       process.env.S3_ENDPOINT = 'http://minio:9000';
+      process.env.DATABASE_TYPE = 'postgres';
+      process.env.REDIS_ENABLED = 'true';
+      process.env.STORAGE_TYPE = 's3';
       recordPinnedEnvKeys(process.env);
       const stopManagedService = jest.fn().mockResolvedValue(true);
       const controller = buildController({

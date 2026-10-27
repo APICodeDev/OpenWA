@@ -4,6 +4,7 @@ import * as path from 'path';
 import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { GLOBAL_VALIDATION_OPTIONS } from '../../config/app-validation';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
+import { RestartDto } from './dto/restart.dto';
 import { SaveConfigDto } from './dto/save-config.dto';
 import { InfraConfigController } from './infra-config.controller';
 
@@ -178,4 +179,78 @@ it('accepts a valid partial PostgreSQL change and preserves an absent pool value
   expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_POOL_SIZE).toBe('17');
   expect((await save({ database: { poolSize: 18 } })).saved).toBe(true);
   expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_POOL_SIZE).toBe('18');
+});
+
+const disabledServices: Array<{
+  profile: string;
+  stored: Record<string, string>;
+  pins: Record<string, string>;
+  body: SaveConfigDto;
+}> = [
+  {
+    profile: 'postgres',
+    stored: { ...database, POSTGRES_BUILTIN: 'true', DATABASE_HOST: 'postgres' },
+    pins: { DATABASE_HOST: 'postgres' },
+    body: { database: { type: 'sqlite' } },
+  },
+  {
+    profile: 'minio',
+    stored: {
+      STORAGE_TYPE: 's3',
+      MINIO_BUILTIN: 'true',
+      S3_ENDPOINT: 'http://minio:9000',
+      S3_ACCESS_KEY_ID: 'minioadmin',
+      S3_SECRET_ACCESS_KEY: 'minioadmin',
+    },
+    pins: { S3_ENDPOINT: 'http://minio:9000' },
+    body: { storage: { type: 'local' } },
+  },
+  {
+    profile: 'redis',
+    stored: {
+      REDIS_ENABLED: 'true',
+      REDIS_BUILTIN: 'true',
+      REDIS_HOST: 'redis',
+      QUEUE_ENABLED: 'false',
+      CACHE_ENABLED: 'false',
+    },
+    pins: { REDIS_HOST: 'redis' },
+    body: { redis: { enabled: false, builtIn: true } },
+  },
+];
+for (const example of disabledServices) {
+  it(`stops unused ${example.profile} despite its bundled host pin`, async () => {
+    seed(example.stored);
+    Object.assign(process.env, example.pins);
+    recordPinnedEnvKeys(example.pins);
+    expect((await save(example.body)).saved).toBe(true);
+    const { controller, stop } = build();
+    const input = await admitted({ profilesToRemove: [example.profile] }, RestartDto);
+    expect((await controller.requestRestart(input)).profilesToRemove).toEqual([example.profile]);
+    expect(stop).toHaveBeenCalledWith(example.profile);
+  });
+}
+
+it.each(['QUEUE_ENABLED', 'CACHE_ENABLED'])('keeps Redis for its active %s consumer', async consumer => {
+  seed({ REDIS_HOST: 'redis', REDIS_ENABLED: 'false', [consumer]: 'true' });
+  process.env.REDIS_HOST = 'redis';
+  recordPinnedEnvKeys({ REDIS_HOST: 'redis' });
+  const { controller, stop } = build();
+  expect((await controller.requestRestart({ profilesToRemove: ['redis'] })).profilesToRemove).toEqual([]);
+  expect(stop).not.toHaveBeenCalled();
+});
+
+it('writes the same unused-profile stop to the signal-file fallback', async () => {
+  process.env.DATABASE_HOST = 'OpenWA-POSTGRES.';
+  recordPinnedEnvKeys({ DATABASE_HOST: process.env.DATABASE_HOST });
+  const { controller, stop } = build(false);
+  expect((await controller.requestRestart({ profilesToRemove: ['postgres'] })).profilesToRemove).toEqual(['postgres']);
+  expect(
+    (
+      JSON.parse(actualFs.readFileSync(path.join(directory, 'data', '.orchestration-request.json'), 'utf8')) as {
+        profilesToRemove: string[];
+      }
+    ).profilesToRemove,
+  ).toEqual(['postgres']);
+  expect(stop).not.toHaveBeenCalled();
 });
