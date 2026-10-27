@@ -59,7 +59,8 @@ repeating a throttled request straight away prolongs the throttle; a catalog 503
 can persist because WhatsApp may never answer that query, so bound any retry. A
 429 from the global rate limiter lifts when its window expires (seconds for the
 per-second tier, up to an hour for the hourly tier by default), and
-`.retryAfterSeconds` carries its `Retry-After` header. A 429 whose `.code` is
+`.retryAfterSeconds` carries its `Retry-After` header, never above 2147483 seconds (about 24.8 days),
+so that `retryAfterSeconds * 1000` is always a valid `setTimeout` delay. A 429 whose `.code` is
 `"SEND_PACING_LIMITED"` is usually not transient: do not retry it before
 `.retryAfterSeconds`, which then comes from the body: a few seconds when only
 sends still in flight caused it, the rest of the failure breaker's cooldown

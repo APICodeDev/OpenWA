@@ -336,8 +336,23 @@ describe('OpenWAClient', () => {
     expect(dated.retryAfterSeconds).toBeGreaterThanOrEqual(0);
     expect(dated.retryAfterSeconds).toBeLessThanOrEqual(3);
     // Only whole seconds or an HTTP date count; Date.parse would read '-5' or '1.5' as a past date.
-    for (const bad of ['soon', '-5', '1.5', 'Tue 5', '9'.repeat(400)]) {
+    for (const bad of ['soon', '-5', '1.5', 'Tue 5']) {
       expect((await fail({ status: 503, headers: { 'Retry-After': bad } })).retryAfterSeconds).toBeUndefined();
+    }
+
+    // A wait is capped at 2147483 seconds, the longest a caller can pass to setTimeout (times 1000) without
+    // it firing at once, whether it comes from the header, an HTTP date or the body.
+    const ceiling = 2147483;
+    for (const huge of ['9999999999', '1'.repeat(25), '9'.repeat(400), '2147484']) {
+      expect((await fail({ status: 503, headers: { 'Retry-After': huge } })).retryAfterSeconds).toBe(ceiling);
+    }
+    expect((await fail({ status: 503, headers: { 'Retry-After': '2147483' } })).retryAfterSeconds).toBe(ceiling);
+    expect((await fail({ status: 503, headers: { 'Retry-After': '86400' } })).retryAfterSeconds).toBe(86400);
+    const farDate = await fail({ status: 503, headers: { 'Retry-After': 'Fri, 31 Dec 9999 23:59:59 GMT' } });
+    expect(farDate.retryAfterSeconds).toBe(ceiling);
+    for (const retryAfterSeconds of [1e300, 9999999999, 2147483.5]) {
+      const err = await fail({ status: 429, body: { statusCode: 429, message: 'x', retryAfterSeconds } });
+      expect(err.retryAfterSeconds).toBe(ceiling);
     }
 
     const logout = await fail({
