@@ -275,7 +275,7 @@ func isIdempotentSendPath(path string) bool {
 }
 
 // doRaw performs the request and returns the response body and Content-Type.
-// Any non-2xx status (including an unfollowed 3xx) is an error.
+// Any non-2xx status (including an unfollowed 3xx or a final 1xx) is an error.
 //
 // A path segment that is "." or ".." is refused before sending: a proxy that
 // resolves dot segments would route the request to the parent resource. A
@@ -345,8 +345,8 @@ func (c *Client) doRaw(ctx context.Context, method, path string, query url.Value
 		return nil, "", fmt.Errorf("openwa: reading response body: %w", err)
 	}
 
-	// Any non-2xx (including an unfollowed 3xx) is an error.
-	if resp.StatusCode >= 300 {
+	// Any non-2xx (including an unfollowed 3xx or a final 1xx) is an error.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", parseAPIError(resp.StatusCode, data, method+" "+path, resp.Header)
 	}
 	return data, resp.Header.Get("Content-Type"), nil

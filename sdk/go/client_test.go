@@ -2033,3 +2033,43 @@ func TestReservedCharactersStayInTypedPathSegment(t *testing.T) {
 		t.Errorf("the ID moved into query or fragment: %s", rt.lastReq.URL)
 	}
 }
+
+func TestNon2xxResponsesDoNotDecodeSuccess(t *testing.T) {
+	for _, status := range []int{101, 199, 200, 204, 299, 300, 503} {
+		for _, kind := range []string{"json", "bytes"} {
+			t.Run(fmt.Sprintf("%d/%s", status, kind), func(t *testing.T) {
+				body := `{"ok":true}`
+				if status == 204 {
+					body = ""
+				}
+				c := newTestClient(t, &recordTransport{status: status, body: body})
+				var parsed map[string]any
+				var raw []byte
+				var out any = &parsed
+				if kind == "bytes" {
+					out = &raw
+				}
+				err := c.Do(context.Background(), "GET", "/api/x", nil, nil, out)
+				if status < 200 || status >= 300 {
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.StatusCode != status {
+						t.Errorf("error = %v, want APIError with status %d", err, status)
+					}
+					if parsed != nil || raw != nil {
+						t.Error("an error response decoded a success body")
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				} else if status == 204 {
+					if parsed != nil || len(raw) != 0 {
+						t.Error("204 should keep an empty body")
+					}
+				} else if kind == "json" && parsed["ok"] != true {
+					t.Errorf("decoded JSON = %v", parsed)
+				} else if kind == "bytes" && string(raw) != body {
+					t.Errorf("decoded bytes = %q, want %q", raw, body)
+				}
+			})
+		}
+	}
+}
