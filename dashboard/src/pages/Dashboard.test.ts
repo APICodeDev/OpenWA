@@ -182,6 +182,14 @@ test('a session list without statistics is counted by its own length', async () 
   assert.equal(document.querySelector('.section-subtitle')?.textContent, 'Showing 1 of 1 sessions');
 });
 
+test('a connected session is counted without statistics, in the card and the header badge', async () => {
+  sessionList = [READY_SESSION, { ...READY_SESSION, id: 'sess-2', name: 'Spare', status: 'disconnected' }];
+  renderDashboard();
+  await rtl.screen.findByText('Main');
+  assert.equal(statValue('Connected Sessions'), '1');
+  assert.equal(document.querySelector('.status-badge')?.textContent, 'Connected');
+});
+
 test('a read-only key is offered no Disconnect', async () => {
   webhooksStatus = 403;
   sessionList = [READY_SESSION];
