@@ -348,7 +348,7 @@ test('a readiness attempt that hangs is given up on and the next one is made bef
   assert.equal(result.current.restartStatus, 'success');
 });
 
-test('a restart request that never answers ends in the error view at its bound, with no readiness poll', async () => {
+test('a restart request that never answers ends with the outcome unknown at its bound, with no readiness poll', async () => {
   mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 1800000000000 });
   restartAnswer = signal => abortReady(deferred().promise, signal);
   const { result } = rtl.renderHook(() => useRestartFlow());
@@ -366,7 +366,7 @@ test('a restart request that never answers ends in the error view at its bound, 
     mock.timers.tick(61 * 1000);
     await settleRestartReply();
   });
-  assert.equal(result.current.restartStatus, 'error');
+  assert.equal(result.current.restartStatus, 'unknown');
   assert.equal(result.current.restartError, null);
   assert.equal(result.current.restartCountdown, 0);
   await rtl.act(async () => {

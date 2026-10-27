@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { infraApi } from '../services/api';
 import { restartPollAttempts } from '../utils/restartPoll';
 
-// 'unknown': a proxy answered in the gateway's place (a 504, a Cloudflare 52x, or a 502 with no gateway
-// code), so whether the restart went through cannot be told.
 // One readiness request is given this long before it counts as a failed attempt and the next one is made; the
 // elapsed deadline of the whole wait is still what ends it.
 const READINESS_ATTEMPT_TIMEOUT_MS = 5000;
@@ -11,6 +9,9 @@ const READINESS_ATTEMPT_TIMEOUT_MS = 5000;
 // the restarting view has no close button.
 const RESTART_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
+// 'unknown': a proxy answered in the gateway's place (a 504, a Cloudflare 52x, or a 502 with no gateway
+// code), or the restart request was given up on without an answer, so whether the restart went through
+// cannot be told.
 export type RestartStatus = 'idle' | 'restarting' | 'waiting' | 'success' | 'error' | 'unknown';
 
 export interface RestartOpenRequest {
@@ -218,11 +219,12 @@ export function useRestartFlow(): RestartFlow {
       setRestartWarnings(warnings);
     } catch (err) {
       if (!isCurrent()) return;
-      // Given up on after its bound: the server never answered, which the poll below could only misread.
+      // Given up on after its bound: the server awaits its container work before it answers and shuts down, so it
+      // may still restart. Not a failure, and not something the poll below could settle: the old process answers.
       if (request.signal.aborted) {
         stopCountdown();
         setRestartCountdown(0);
-        setRestartStatus('error');
+        setRestartStatus('unknown');
         return;
       }
       // An HTTP status (a proxy 503 included) means no shutdown was confirmed and the old
