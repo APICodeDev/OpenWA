@@ -633,6 +633,9 @@ export class MessageProjector {
 
   /** Record a message as not yet written; a re-fire of the same id keeps the changes recorded so far. */
   private trackInFlight(key: string, message: InboundMessageData): InFlightEntry {
+    // A message whose id the engine could not read is registered under no key: the empty id would be shared by
+    // every such message, and a revoke or ack that names no message would reach all of them.
+    if (!message.id) return { ref: refOf(message) };
     const inFlight = this.inboundInFlight.get(key) ?? {
       // The first delivery of an id says whose message it is: a repeat sent from another chat must not
       // take that over from it, or a change aimed through the repeat would be judged by the wrong rule.
