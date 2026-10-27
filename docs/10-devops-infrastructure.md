@@ -936,9 +936,11 @@ still pending after that, the scrape serves the last result it kept, up to 5 min
 `openwa_stats_available` stays 1; the late result fills the memo and is kept for the next scrape. With no result
 that recent, such as the first scrape after start, or a read that has hung for more than 5 minutes after the last
 good one, the series are left out and the gauge reads 0. A read still pending after 5 minutes is given up on and the
-next scrape starts a new one. The process, HTTP, webhook and queue series are served as usual. A read still pending is shared by the scrapes that arrive
-meanwhile, so they answer without waiting again and add no query of their own, whatever
-`STATS_CACHE_TTL_MS` is. The 2 seconds bound the wait, not the query: nothing cancels it in the database.
+next scrape starts a new one. The process, HTTP, webhook and queue series are served as usual. While a read is
+still within its 5 minutes it is shared by the scrapes that arrive meanwhile, so they answer without waiting again
+and add no query of their own. With `STATS_CACHE_TTL_MS=0` each give-up starts a new overview query while the
+abandoned one stays pending in the database; at the default the replacement joins the overview flight already
+running. The 2 seconds bound the wait, not the query: nothing cancels it in the database.
 
 Access is **disabled by default**: the endpoint returns **404** unless `METRICS_TOKEN` is set. When
 set, scrapers must send `Authorization: Bearer <token>` (compared with `timingSafeEqual`); a missing or
