@@ -17,6 +17,9 @@ import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
 import type { IngressJobData } from '../../modules/queue/processors/ingress.processor';
 
+/** The all-sessions scope is spelled null, undefined or '*' depending on where it was stored. */
+const scopeKey = (scope: string | null | undefined): string => (!scope || scope === '*' ? '*' : scope);
+
 /** Time budget for a sandboxed plugin's hook handler before the chain proceeds without it. */
 const SANDBOX_HOOK_TIMEOUT_MS = 5000;
 /** A sandboxed plugin's healthCheck must answer within this, else it's reported unhealthy (not hung). */
@@ -208,6 +211,11 @@ export class PluginSandboxBridge {
     // Throwing hands the job to the normal retry/dead-letter path.
     if (!instance || instance.enabled === false) {
       throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' is disabled or deleted');
+    }
+    // The job carries the session the instance acted on at admission. Rebound since, the delivery would
+    // reach the handler under that session with the new session's config, so it is refused instead.
+    if (scopeKey(instance.sessionScope) !== scopeKey(d.sessionId)) {
+      throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' was rebound since this delivery');
     }
     // Three layers, most specific last: the base ('*') config, then the operator's per-session
     // override from PUT /plugins/:id/sessions/:sessionId/config, then THIS instance's own config.

@@ -348,4 +348,29 @@ describe('ingress dispatch keeps what was decided when the delivery was admitted
       expect(calls[0].verified).toBe(want);
     },
   );
+
+  it('refuses a delivery admitted for a session the instance has since left', async () => {
+    const rebound = instanceRow('acct-a', { apiToken: 'token-A' }, 'S-new');
+    const { bridge, calls } = makeBridge({ rows: [rebound], sessionConfig: { 'S-new': { endpoint: 'https://new' } } });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', 'S-old'))).rejects.toThrow(/rebound/);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('treats null, undefined and * as the one all-sessions scope', async () => {
+    const wildcard = instanceRow('acct-a', { apiToken: 'token-A' }, '*');
+    const { bridge, calls } = makeBridge({ rows: [wildcard] });
+
+    await bridge.dispatchWebhookForInstance(job('acct-a', null));
+    await bridge.dispatchWebhookForInstance(job('acct-a', '*'));
+
+    expect(calls).toHaveLength(2);
+  });
+
+  it('refuses a delivery admitted for all sessions once the instance is bound to one', async () => {
+    const { bridge, calls } = makeBridge({ rows: [row()] });
+
+    await expect(bridge.dispatchWebhookForInstance(job('acct-a', null))).rejects.toThrow(/rebound/);
+    expect(calls).toHaveLength(0);
+  });
 });
