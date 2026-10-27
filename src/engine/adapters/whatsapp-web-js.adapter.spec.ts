@@ -1303,6 +1303,16 @@ describe('WhatsAppWebJsAdapter channels (#625 — wwebjs Client has no getChanne
     expect(result).toEqual([{ id: 'M1', body: 'hello', timestamp: 1700000000, hasMedia: false }]);
   });
 
+  it('getChannelMessages finds a channel whose id carries only the renamed `$1` field, as getChannelById does', async () => {
+    const fetchMessages = jest.fn().mockResolvedValue([]);
+    const getChannels = jest.fn().mockResolvedValue([{ id: { $1: CHANNEL }, name: 'News', fetchMessages }]);
+    const adapter = readyAdapter({ getChannels });
+
+    await expect(adapter.getChannelById(CHANNEL)).resolves.toMatchObject({ id: CHANNEL });
+    await expect(adapter.getChannelMessages(CHANNEL, 10)).resolves.toEqual([]);
+    expect(fetchMessages).toHaveBeenCalledWith({ limit: 10 });
+  });
+
   it('getChannelMessages surfaces a not-found channel as ChannelNotFoundError (→ 404), not a silent []', async () => {
     const getChannels = jest
       .fn()
