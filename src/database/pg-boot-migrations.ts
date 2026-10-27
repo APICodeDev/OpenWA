@@ -91,9 +91,13 @@ export async function createBootDataSource(
   // DataSource itself never starts them unsynchronized inside initialize(). The UTC pin is merged in
   // at the same point, because this is the one place the runtime postgres data connection is built
   // (the migration CLI's own data source carries it directly).
-  const build = (extra: Record<string, unknown> | undefined): DataSource =>
-    createDataSource({ ...options, migrationsRun: false, extra: { ...extra, ...postgresUtcExtra() } });
-  const runtimeExtra = options.extra as Record<string, unknown> | undefined;
+  const build = (extra: ClientConfig | undefined): DataSource =>
+    createDataSource({
+      ...options,
+      migrationsRun: false,
+      extra: { ...extra, ...postgresUtcExtra(extra?.connectionTimeoutMillis) },
+    });
+  const runtimeExtra = options.extra as ClientConfig | undefined;
 
   // statement_timeout bounds live runtime queries, and pg sends it in the startup packet, so every
   // statement on a pool built with it inherits the limit. A backfill or index build over a large
