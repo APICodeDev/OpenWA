@@ -216,14 +216,26 @@ describe('MediaConversionService', () => {
         expect(load).toHaveBeenCalledWith('https://example.com/note.m4a', 'socks4://stored.invalid:1080');
       });
 
-      // Ids are generated uuids; anything else matches no row, and asking Postgres would raise on
-      // the cast rather than answer.
-      it('does not query the row for a session id that cannot be one', async () => {
+      it('uses the saved proxy for an imported safe-string session id', async () => {
+        const load = loadSpy();
+        const service = makeService(config(), { row: { proxyUrl: 'socks5://stored.invalid:1080' } });
+        await service.convertToVoice('legacy-session', { url: 'https://example.com/note.m4a' });
+        expect(findOne).toHaveBeenCalledWith({ where: { id: 'legacy-session' }, select: { proxyUrl: true } });
+        expect(load).toHaveBeenCalledWith('https://example.com/note.m4a', 'socks5://stored.invalid:1080');
+      });
+
+      it('keeps direct fetch behavior for an unknown safe-string id', async () => {
         const load = loadSpy();
         const service = makeService();
+        await service.convertToVoice('missing-session', { url: 'https://example.com/note.m4a' });
+        expect(findOne).toHaveBeenCalledTimes(1);
+        expect(load).toHaveBeenCalledWith('https://example.com/note.m4a', undefined);
+      });
 
-        await service.convertToVoice('not-a-uuid', { url: 'https://example.com/note.m4a' });
-
+      it('does not query a NUL-bearing session id', async () => {
+        const load = loadSpy();
+        const service = makeService();
+        await service.convertToVoice('session\0name', { url: 'https://example.com/note.m4a' });
         expect(findOne).not.toHaveBeenCalled();
         expect(load).toHaveBeenCalledWith('https://example.com/note.m4a', undefined);
       });

@@ -1,7 +1,6 @@
 import { BadRequestException, Injectable, OnApplicationShutdown, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { isUUID } from 'class-validator';
 import { Repository } from 'typeorm';
 import { createLogger } from '../../common/services/logger.service';
 import { EngineRegistry } from '../../engine/engine-registry.service';
@@ -159,11 +158,9 @@ export class MediaConversionService implements OnApplicationShutdown {
     if (this.engines.has(sessionId)) {
       return this.engines.proxyUrl(sessionId);
     }
-    // Ids are generated uuids, so anything else matches no row; asking Postgres would raise on the
-    // cast instead of answering "no session".
-    if (!isUUID(sessionId)) {
-      return undefined;
-    }
+    // Ids are varchar, and a restored session can keep a safe non-uuid id. A NUL cannot be bound by
+    // PostgreSQL, so it answers "no session" instead of raising.
+    if (sessionId.includes('\0')) return undefined;
     const session = await this.sessionRepository.findOne({ where: { id: sessionId }, select: { proxyUrl: true } });
     return session?.proxyUrl ?? undefined;
   }
