@@ -103,6 +103,7 @@ function resetFetchCalls(): void {
   startGate = null;
   startResult = null;
   createFailure = null;
+  proxyPatchFails = false;
   stopFailure = null;
   forceKillFailure = null;
   confirmGate = null;
@@ -140,6 +141,7 @@ let startFailure: { status: number; message: string; leaves?: Partial<Session> }
 let startResult: { answer: Partial<Session>; leaves?: Partial<Session> } | null = null;
 // When set, the next POST /api/sessions answers with this error. Spent by that one create.
 let createFailure: { status: number; message: string } | null = null;
+let proxyPatchFails = false;
 // When set, POST .../stop answers with this error.
 let stopFailure: { status: number; message: string } | null = null;
 // When set, POST .../force-kill answers with this status and body.
@@ -255,6 +257,10 @@ function installFetchStub(): void {
       if (method === 'GET' && proxyGetFails) return Promise.resolve(jsonResponse({ message: 'boom' }, 500));
       if (method === 'GET') return Promise.resolve(jsonResponse({ ...sessionProxy }));
       if (method === 'PATCH') {
+        if (proxyPatchFails) {
+          const answer = jsonResponse({ message: 'Proxy write refused' }, 500);
+          return proxyPatchGate ? proxyPatchGate.then(() => answer) : Promise.resolve(answer);
+        }
         const payload = body as { proxyUrl?: string | null } | undefined;
         if (payload?.proxyUrl === null) {
           sessionProxy = { enabled: false, proxyType: null, proxyHost: null, hasCredentials: false };
@@ -2198,4 +2204,103 @@ test('a key refused the wildcard room joins each listed session instead', async 
   for (const frame of feedFrames().slice(1)) {
     assert.deepEqual((frame as { events: string[] }).events, SESSION_FEED_EVENTS);
   }
+});
+
+function pendingResponse() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => (release = resolve));
+  return { promise, release };
+}
+
+async function finishResponse(pending: ReturnType<typeof pendingResponse>) {
+  await rtl.act(async () => {
+    pending.release();
+    await pending.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  });
+}
+
+async function openProxyEditor(name = 'new-device') {
+  const card = (await rtl.screen.findByText(name)).closest('.session-card') as HTMLElement;
+  rtl.fireEvent.click(rtl.within(card).getByRole('button', { name: 'Proxy' }));
+  const dialog = await rtl.screen.findByRole('dialog');
+  await rtl.within(dialog).findByRole('checkbox');
+  return dialog;
+}
+
+function setProxyDraft(dialog: HTMLElement, url: string) {
+  const form = rtl.within(dialog);
+  if (!(form.getByRole('checkbox') as HTMLInputElement).checked) rtl.fireEvent.click(form.getByRole('checkbox'));
+  rtl.fireEvent.change(form.getByLabelText('Proxy URL'), { target: { value: url } });
+}
+
+test('an earlier proxy save preserves the draft in a reopened editor for the same session', async () => {
+  resetFetchCalls();
+  const first = pendingResponse();
+  proxyPatchGate = first.promise;
+  renderSessions();
+  let dialog = await openProxyEditor();
+  setProxyDraft(dialog, 'http://first.invalid:8080');
+  rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+  await rtl.waitFor(() => assert.ok(findFetchCall('PATCH', '/api/sessions/sess-qr-1/proxy')));
+  rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Cancel' }));
+  dialog = await openProxyEditor();
+  setProxyDraft(dialog, 'http://replacement.invalid:8080');
+  await finishResponse(first);
+
+  assert.equal(rtl.screen.queryByRole('dialog') === dialog, true, 'the earlier save dismissed the reopened editor');
+  assert.equal(
+    (rtl.within(dialog).getByLabelText('Proxy URL') as HTMLInputElement).value,
+    'http://replacement.invalid:8080',
+  );
+  assert.equal((rtl.within(dialog).getByLabelText('Proxy URL') as HTMLInputElement).disabled, false);
+});
+
+for (const firstFails of [false, true]) {
+  test(`an earlier proxy ${firstFails ? 'failure' : 'success'} cannot unlock a second save in the same session editor`, async () => {
+    resetFetchCalls();
+    const first = pendingResponse();
+    const second = pendingResponse();
+    proxyPatchGate = first.promise;
+    proxyPatchFails = firstFails;
+    renderSessions();
+    let dialog = await openProxyEditor();
+    setProxyDraft(dialog, 'http://first.invalid:8080');
+    rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+    await rtl.waitFor(() => assert.equal(fetchCalls.filter(c => c.method === 'PATCH').length, 1));
+    rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Cancel' }));
+    dialog = await openProxyEditor();
+    setProxyDraft(dialog, 'http://second.invalid:8080');
+    proxyPatchGate = second.promise;
+    proxyPatchFails = false;
+    rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+    await rtl.waitFor(() => assert.equal(fetchCalls.filter(c => c.method === 'PATCH').length, 2));
+    try {
+      await finishResponse(first);
+      assert.equal(rtl.screen.queryByRole('dialog') === dialog, true, 'the earlier save dismissed the pending editor');
+      const input = rtl.within(dialog).getByLabelText('Proxy URL') as HTMLInputElement;
+      assert.equal(input.value, 'http://second.invalid:8080');
+      assert.equal(input.disabled, true, 'the earlier completion unlocked the newer pending save');
+      assert.equal((rtl.within(dialog).getByRole('checkbox') as HTMLInputElement).disabled, true);
+    } finally {
+      await finishResponse(second);
+    }
+    assert.equal(rtl.screen.queryByRole('dialog') === null, true, 'the current successful save must still close');
+  });
+}
+
+test('a failed proxy save preserves its current draft and allows retry', async () => {
+  resetFetchCalls();
+  proxyPatchFails = true;
+  renderSessions();
+  const dialog = await openProxyEditor();
+  setProxyDraft(dialog, 'http://retry.invalid:8080');
+  rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+  await rtl.screen.findByText('Proxy write refused');
+  assert.equal(rtl.screen.queryByRole('dialog') === dialog, true);
+  assert.equal((rtl.within(dialog).getByLabelText('Proxy URL') as HTMLInputElement).value, 'http://retry.invalid:8080');
+  assert.equal((rtl.within(dialog).getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled, false);
+  proxyPatchFails = false;
+  rtl.fireEvent.click(rtl.within(dialog).getByRole('button', { name: 'Save' }));
+  await rtl.waitFor(() => assert.equal(rtl.screen.queryByRole('dialog') === null, true));
 });

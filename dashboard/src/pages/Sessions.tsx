@@ -503,9 +503,9 @@ export function Sessions() {
   const proxySessionId = proxySession?.id ?? null;
   // Cancel stays enabled while a save runs, so a save that answers after its modal closed must neither
   // close nor unlock whichever proxy modal is open by then.
-  const proxyOpenId = useRef<string | null>(null);
+  const proxyVisit = useRef(0);
   useEffect(() => {
-    proxyOpenId.current = proxySessionId;
+    proxyVisit.current += 1;
     setProxySaving(false);
     setProxyInfo(null);
     setProxyEnabled(false);
@@ -533,6 +533,7 @@ export function Sessions() {
       });
     return () => {
       cancelled = true;
+      proxyVisit.current += 1;
     };
     // Only the session being edited belongs in here. `t` and `toast` are recreated on every render of
     // their providers (ToastContext hands out a fresh object literal), so listing them re-runs this
@@ -555,6 +556,7 @@ export function Sessions() {
     }
     setProxyUrlError(null);
     const id = proxySession.id;
+    const visit = proxyVisit.current;
     setProxySaving(true);
     try {
       if (!proxyEnabled) {
@@ -568,11 +570,11 @@ export function Sessions() {
         return;
       }
       toast.success(t('sessions.proxy.saveSuccessTitle'), t('sessions.proxy.saveSuccess'));
-      if (proxyOpenId.current === id) setProxySession(null);
+      if (proxyVisit.current === visit) setProxySession(null);
     } catch (err) {
       toast.error(t('sessions.proxy.saveError'), err instanceof Error ? err.message : t('common.unknownError'));
     } finally {
-      if (proxyOpenId.current === id) setProxySaving(false);
+      if (proxyVisit.current === visit) setProxySaving(false);
     }
   };
 
