@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -145,14 +146,25 @@ func parseRetryAfter(resp *http.Response) (time.Duration, bool) {
 	return retryAfterHeader(resp.Header)
 }
 
-// retryAfterHeader reads Retry-After as whole seconds or an HTTP date.
+// maxRetryAfter stands for a delay too long to count: it is past any request deadline.
+const maxRetryAfter = time.Duration(1<<63 - 1)
+
+// retryAfterHeader reads Retry-After as whole seconds or an HTTP date. A count of seconds that does
+// not fit a Duration is reported as maxRetryAfter, not wrapped around to a short or negative wait.
 func retryAfterHeader(h http.Header) (time.Duration, bool) {
 	v := h.Get("Retry-After")
 	if v == "" {
 		return 0, false
 	}
-	if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
+	if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs >= 0 {
+		if secs > int64(maxRetryAfter/time.Second) {
+			return maxRetryAfter, true
+		}
 		return time.Duration(secs) * time.Second, true
+	}
+	// ParseInt also fails on a count beyond int64: that is still a long delay, unlike "-5" or "soon".
+	if digits := strings.TrimPrefix(v, "+"); digits != "" && strings.Trim(digits, "0123456789") == "" {
+		return maxRetryAfter, true
 	}
 	if t, err := http.ParseTime(v); err == nil {
 		if d := time.Until(t); d > 0 {

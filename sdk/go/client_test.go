@@ -2073,3 +2073,87 @@ func TestNon2xxResponsesDoNotDecodeSuccess(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryAfterDurationBounds(t *testing.T) {
+	const longest = time.Duration(1<<63 - 1)
+	for _, tc := range []struct {
+		name, header string
+		want         time.Duration
+		valid        bool
+	}{
+		{"zero", "0", 0, true},
+		{"small", "2", 2 * time.Second, true},
+		{"positive sign", "+2", 2 * time.Second, true},
+		{"negative zero", "-0", 0, true},
+		{"leading zeroes", strings.Repeat("0", 80) + "2", 2 * time.Second, true},
+		{"last whole second", "9223372036", 9223372036000000000, true},
+		{"overflow boundary", "9223372037", longest, true},
+		{"max integer", "9223372036854775807", longest, true},
+		{"oversized integer", strings.Repeat("9", 80), longest, true},
+		{"oversized positive integer", "+" + strings.Repeat("9", 80), longest, true},
+		{"negative", "-1", 0, false},
+		{"oversized negative integer", "-" + strings.Repeat("9", 80), 0, false},
+		{"fraction", "0.25", 0, false},
+		{"invalid suffix after overflow", strings.Repeat("9", 80) + "x", 0, false},
+		{"invalid", "soon", 0, false},
+		{"sign only", "+", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, valid := retryAfterHeader(http.Header{"Retry-After": {tc.header}})
+			if got != tc.want || valid != tc.valid {
+				t.Errorf("duration = %s, valid = %v; want %s, %v", got, valid, tc.want, tc.valid)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, body string
+		want       time.Duration
+	}{
+		{"small body", `{"retryAfterSeconds":2}`, 2 * time.Second},
+		{"fractional body", `{"retryAfterSeconds":0.25}`, 250 * time.Millisecond},
+		{"zero body overrides header", `{"retryAfterSeconds":0}`, 0},
+		{"negative body uses header", `{"retryAfterSeconds":-1}`, 7 * time.Second},
+		{"missing body delay uses header", `{}`, 7 * time.Second},
+		{"wrong body type uses header", `{"retryAfterSeconds":"2"}`, 7 * time.Second},
+		{"large body overrides header", `{"retryAfterSeconds":1e20}`, longest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseAPIError(429, []byte(tc.body), "GET /x", http.Header{"Retry-After": {"7"}})
+			if got.RetryAfter != tc.want {
+				t.Errorf("RetryAfter = %s, want %s", got.RetryAfter, tc.want)
+			}
+		})
+	}
+}
+
+func TestRetryDoesNotResendBeforeOversizedRetryAfter(t *testing.T) {
+	for _, status := range []int{429, 503} {
+		for _, header := range []string{"9223372037", strings.Repeat("9", 80)} {
+			for _, respect := range []bool{true, false} {
+				t.Run(fmt.Sprintf("%d/%s/respect=%v", status, header, respect), func(t *testing.T) {
+					var calls int32
+					rt := RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+						if atomic.AddInt32(&calls, 1) == 1 {
+							return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {header}}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
+						}
+						return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(`{}`)), Request: req}, nil
+					})
+					c := newTestClient(t, rt, WithTimeout(500*time.Millisecond), WithRetry(RetryPolicy{
+						MaxRetries: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, RespectRetryAfter: respect,
+					}))
+					err := c.Do(context.Background(), "GET", "/api/x", nil, nil, nil)
+					if !respect {
+						if err != nil || calls != 2 {
+							t.Errorf("disabled Retry-After: error = %v, calls = %d", err, calls)
+						}
+						return
+					}
+					var apiErr *APIError
+					if !errors.As(err, &apiErr) || apiErr.StatusCode != status || apiErr.RetryAfter <= 0 || calls != 1 {
+						t.Errorf("error = %v, calls = %d; want the first response without a retry", err, calls)
+					}
+				})
+			}
+		}
+	}
+}

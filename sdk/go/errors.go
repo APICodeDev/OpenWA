@@ -175,7 +175,11 @@ func parseAPIError(status int, raw []byte, context string, header http.Header) *
 	// The body's retryAfterSeconds wins: send pacing puts its wait (possibly
 	// hours) only there, and a header added by a proxy must not shorten it.
 	if secs, ok := fields["retryAfterSeconds"].(float64); ok && secs >= 0 {
-		apiErr.RetryAfter = time.Duration(secs * float64(time.Second))
+		if nanos := secs * float64(time.Second); nanos >= float64(maxRetryAfter) {
+			apiErr.RetryAfter = maxRetryAfter
+		} else {
+			apiErr.RetryAfter = time.Duration(nanos)
+		}
 	} else if d, ok := retryAfterHeader(header); ok {
 		apiErr.RetryAfter = d
 	}
