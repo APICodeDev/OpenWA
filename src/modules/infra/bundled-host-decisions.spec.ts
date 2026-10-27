@@ -5,6 +5,7 @@ jest.mock('fs', () => {
   return {
     ...actual,
     writeFileSync: jest.fn(),
+    renameSync: jest.fn(),
     chmodSync: jest.fn(),
     existsSync: jest.fn().mockReturnValue(false),
     readFileSync: jest.fn().mockReturnValue(''),
@@ -18,7 +19,13 @@ jest.mock('../../config/storage-root', () => {
 import { InfraConfigController } from './infra-config.controller';
 import { InfraStatusController } from './infra-status.controller';
 import { hostPinnedElsewhere } from '../docker';
-import { recordPinnedEnvKeys } from '../../config/env-precedence';
+import {
+  BLANK_SHADOWED_ENV_KEYS,
+  clearBlankEnv,
+  isEnvPinned,
+  recordOsEnvKeys,
+  recordPinnedEnvKeys,
+} from '../../config/env-precedence';
 import { HOST_SPELLINGS, SERVICES, SERVICE_NAMES, type ServiceName } from '../../../test/fixtures/builtin-mode-cases';
 
 // Every decision that asks whether a host is the bundled container, for every spelling of the shared table, with the
@@ -72,17 +79,35 @@ const label = (c: Case) => `${c.service} ${JSON.stringify(c.host)} ${c.position}
 
 let pinnedKeys: string[] = [];
 let fileText = '';
+let environment: NodeJS.ProcessEnv;
+
+beforeEach(() => {
+  environment = { ...process.env };
+  for (const key of Object.keys(process.env)) {
+    if (/^(DATABASE_|POSTGRES_|REDIS_|STORAGE_|S3_|MINIO_|QUEUE_|CACHE_|ENGINE_TYPE$)/.test(key))
+      delete process.env[key];
+  }
+});
 
 function arrange(c: Case, stored = ''): void {
   const spec = SERVICES[c.service];
   // A pinned host must outrank the file's, so the file holds a host of the other kind.
   const fileHost = c.position === 'file' ? c.host : c.reach ? spec.externalHost : spec.bundledHost;
-  const lines = [`${spec.selection}=${spec.selected}`, `${spec.host}=${fileHost}`];
+  // Unrelated stored database fields still belong to a complete PostgreSQL connection.
+  const lines = [
+    'DATABASE_TYPE=postgres',
+    'DATABASE_HOST=db.external.example',
+    'DATABASE_USERNAME=openwa',
+    `${spec.selection}=${spec.selected}`,
+    `${spec.host}=${fileHost}`,
+  ];
   if (c.flag !== 'absent') lines.push(`${spec.flag}=${c.flag}`);
   fileText = `${lines.join('\n')}\n${STORED_SECRETS}${stored}`;
   const pins: Record<string, string> = { ...SECRETS, ...(c.position === 'pinned' ? { [spec.host]: c.host } : {}) };
   Object.assign(process.env, pins);
   pinnedKeys = Object.keys(pins);
+  // Credentials are OS-supplied; the case's host pin is a project .env assignment, including a real blank.
+  recordOsEnvKeys(SECRETS);
   recordPinnedEnvKeys(pins);
   (fs.existsSync as jest.Mock).mockReturnValue(true);
   (fs.readFileSync as jest.Mock).mockReturnValue(fileText);
@@ -92,6 +117,11 @@ function arrange(c: Case, stored = ''): void {
 afterEach(() => {
   for (const key of pinnedKeys) delete process.env[key];
   pinnedKeys = [];
+  for (const key of Object.keys(process.env)) {
+    if (!(key in environment)) delete process.env[key];
+  }
+  Object.assign(process.env, environment);
+  recordOsEnvKeys(process.env);
   recordPinnedEnvKeys({});
   (fs.existsSync as jest.Mock).mockReturnValue(false);
   (fs.readFileSync as jest.Mock).mockReturnValue('');
@@ -149,6 +179,7 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
   // The host the next boot dials reaches the container exactly when this case's host does: a pinned one outranks a
   // file host of the other kind, and a file host is read as is.
   const reached = c.reach;
+  const blankProjectDatabaseHost = c.service === 'database' && c.position === 'pinned' && c.host.trim() === '';
 
   it('may start the container unless a pin names another server', async () => {
     arrange(c);
@@ -189,11 +220,16 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
   if (c.service !== 'redis') {
     it('keeps the stored credentials of a built-in save only when the bundled container already uses them', () => {
       arrange(c);
-      const env = saved(
+      const payload =
         c.service === 'database'
           ? { database: { type: 'postgres', builtIn: true } }
-          : { storage: { type: 's3', builtIn: true } },
-      );
+          : { storage: { type: 's3', builtIn: true } };
+      if (blankProjectDatabaseHost) {
+        expect(() => saved(payload)).toThrow(/DATABASE_HOST is required/);
+        expect(fs.writeFileSync).not.toHaveBeenCalled();
+        return;
+      }
+      const env = saved(payload);
       const keep = c.position === 'pinned' || reached;
       if (c.service === 'database') expect(env.DATABASE_PASSWORD).toBe(keep ? 'StoredPw789!' : 'openwa');
       else
@@ -206,11 +242,16 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
   if (c.service !== 'redis') {
     it('keeps the stored user, database and schema, or bucket and region, of a built-in save only when the bundled container already serves them', () => {
       arrange(c, STORED_VALUES);
-      const env = saved(
+      const payload =
         c.service === 'database'
           ? { database: { type: 'postgres', builtIn: true } }
-          : { storage: { type: 's3', builtIn: true } },
-      );
+          : { storage: { type: 's3', builtIn: true } };
+      if (blankProjectDatabaseHost) {
+        expect(() => saved(payload)).toThrow(/DATABASE_HOST is required/);
+        expect(fs.writeFileSync).not.toHaveBeenCalled();
+        return;
+      }
+      const env = saved(payload);
       if (c.service === 'database')
         expect([env.DATABASE_USERNAME, env.DATABASE_NAME, env.POSTGRES_SCHEMA]).toEqual(
           reached ? ['app', 'appdb', 'tenant'] : ['openwa', 'openwa', 'public'],
@@ -227,10 +268,30 @@ describe.each(cases.map(c => [label(c), c] as const))('%s', (_label, c) => {
         : c.service === 'redis'
           ? { redis: { enabled: true, host: c.host, port: '6379' }, queue: { enabled: false } }
           : { storage: { type: 's3', s3Endpoint: c.host, s3Region: 'us-east-1' } };
+    if (blankProjectDatabaseHost) {
+      expect(() => saved(section)).toThrow(/DATABASE_HOST is required/);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+      return;
+    }
     const env = saved(section);
     expect(env[spec.flag]).toBe(c.flag === 'absent' ? undefined : c.flag);
     const sentHost = c.service === 'storage' ? c.host || undefined : c.host.trim() || 'localhost';
     const storedBundled = c.position === 'pinned' ? !c.reach : c.reach;
     expect(env[spec.host]).toBe(storedBundled ? spec.bundledHost : sentHost);
   });
+});
+
+it.each(['', ' \t ', '\r'])('lets a blank OS database host %j use the valid generated host', blank => {
+  arrange({ service: 'database', host: blank, reach: false, position: 'pinned', flag: 'false' });
+  const hostEnvironment: NodeJS.ProcessEnv = { ...SECRETS, DATABASE_HOST: blank };
+  clearBlankEnv(hostEnvironment, BLANK_SHADOWED_ENV_KEYS);
+  delete process.env.DATABASE_HOST;
+  Object.assign(process.env, hostEnvironment);
+  recordOsEnvKeys(hostEnvironment);
+  recordPinnedEnvKeys(hostEnvironment);
+
+  expect(isEnvPinned('DATABASE_HOST')).toBe(false);
+  const env = saved({ queue: { enabled: false } });
+  expect(env.DATABASE_HOST).toBe('postgres');
+  expect(env.QUEUE_ENABLED).toBe('false');
 });

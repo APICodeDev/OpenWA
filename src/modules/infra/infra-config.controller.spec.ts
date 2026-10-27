@@ -69,11 +69,26 @@ const hostEnvSaved = HOST_ENV.map(k => [k, process.env[k]] as const);
 beforeAll(() => HOST_ENV.forEach(k => delete process.env[k]));
 afterAll(() => hostEnvSaved.forEach(([k, v]) => (process.env[k] = v)));
 
+// These helpers exercise individual settings on an otherwise complete PostgreSQL configuration.
+function completeDatabaseFixture(config: unknown, existing = ''): SaveConfigDto {
+  const payload = config as SaveConfigDto;
+  if (payload.database?.type !== 'postgres' || payload.database.builtIn === true) return payload;
+  const saved = jest.requireActual<typeof import('dotenv')>('dotenv').parse(existing);
+  return {
+    ...payload,
+    database: {
+      ...(!saved.DATABASE_HOST && !process.env.DATABASE_HOST ? { host: 'localhost' } : {}),
+      ...(!saved.DATABASE_USERNAME && !process.env.DATABASE_USERNAME ? { username: 'postgres' } : {}),
+      ...payload.database,
+    },
+  };
+}
+
 describe('InfraConfigController.saveConfig SSL reject-unauthorized', () => {
   function writtenEnv(config: unknown): string {
     const spy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
     const controller = new InfraConfigController({} as never, {} as never, {} as never);
-    controller.saveConfig(config as never);
+    controller.saveConfig(completeDatabaseFixture(config));
     const content = spy.mock.calls[0][1] as string;
     spy.mockRestore();
     return content;
@@ -272,7 +287,7 @@ describe('InfraConfigController PostgreSQL schema (POSTGRES_SCHEMA)', () => {
     (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig(config as never);
+    newController().saveConfig(completeDatabaseFixture(config, existing));
     const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.readFileSync as jest.Mock).mockReturnValue('');
@@ -345,7 +360,9 @@ describe('InfraConfigController.saveConfig writes the generated env owner-only',
   it('persists data/.env.generated with mode 0600, not world-readable', () => {
     const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
     const controller = new InfraConfigController({} as never, {} as never, {} as never);
-    controller.saveConfig({ database: { type: 'postgres', sslEnabled: true, password: 'pw' } } as never);
+    controller.saveConfig({
+      database: { type: 'postgres', host: 'db', username: 'app', sslEnabled: true, password: 'pw' },
+    } as never);
     const opts = writeSpy.mock.calls[0][2];
     expect(opts).toEqual({ mode: 0o600 });
     writeSpy.mockRestore();
@@ -359,7 +376,7 @@ describe('InfraConfigController.saveConfig env-name correctness and merge (#226)
     (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig(config as never);
+    newController().saveConfig(completeDatabaseFixture(config, existing));
     const calls = (fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>;
     const content = calls[0][1];
     // Reset to defaults so later tests start from "no prior config".
@@ -475,7 +492,9 @@ describe('InfraConfigController.saveConfig writes values the next boot reads bac
   function savedPassword(password: string): { line: string | undefined; parsed: string | undefined } {
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig({ database: { type: 'postgres', builtIn: false, host: 'db', password } } as never);
+    newController().saveConfig({
+      database: { type: 'postgres', builtIn: false, host: 'db', username: 'app', password },
+    } as never);
     const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
     return {
       line: content.split('\n').find(l => l.startsWith('DATABASE_PASSWORD=')),
@@ -502,7 +521,7 @@ describe('InfraConfigController.saveConfig writes values the next boot reads bac
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.writeFileSync as jest.Mock).mockClear();
     newController().saveConfig({
-      database: { type: 'postgres', builtIn: false, host: 'db', password: databasePassword },
+      database: { type: 'postgres', builtIn: false, host: 'db', username: 'app', password: databasePassword },
       redis: { enabled: true, builtIn: false, host: 'cache', password: redisPassword },
     } as never);
     return ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
@@ -549,7 +568,7 @@ describe('InfraConfigController.saveConfig engine selection (persist ENGINE_TYPE
     (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig(config as never);
+    newController().saveConfig(completeDatabaseFixture(config, existing));
     const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.readFileSync as jest.Mock).mockReturnValue('');
@@ -832,7 +851,7 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig(config as never);
+    newController().saveConfig(completeDatabaseFixture(config, existing));
     const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.readFileSync as jest.Mock).mockReturnValue('');
@@ -974,7 +993,7 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     });
 
     it('keeps a stored PostgreSQL and S3 choice and their settings under the opposite pins', () => {
-      pin({ DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+      pin({ DATABASE_TYPE: 'sqlite', DATABASE_NAME: './data/pinned.sqlite', STORAGE_TYPE: 'local' });
 
       const env = written(
         {
@@ -996,6 +1015,8 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     it('keeps a stored SQLite and local choice under the opposite pins, with no bundled container', () => {
       pin({
         DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db.pinned.example',
+        DATABASE_USERNAME: 'app',
         DATABASE_PASSWORD: 'Str0ng!Passw0rd',
         STORAGE_TYPE: 's3',
         S3_ACCESS_KEY_ID: 'ak-strong',
@@ -1018,6 +1039,8 @@ describe('InfraConfigController.saveConfig per-key merge (partial payloads)', ()
     it('follows a pinned type without writing it when nothing is stored', () => {
       pin({
         DATABASE_TYPE: 'postgres',
+        DATABASE_HOST: 'db.pinned.example',
+        DATABASE_USERNAME: 'app',
         DATABASE_PASSWORD: 'Str0ng!Passw0rd',
         STORAGE_TYPE: 's3',
         S3_ACCESS_KEY_ID: 'ak-strong',
@@ -1292,7 +1315,7 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
     (fs.existsSync as jest.Mock).mockReturnValue(existing !== undefined);
     (fs.readFileSync as jest.Mock).mockReturnValue(existing ?? '');
     (fs.writeFileSync as jest.Mock).mockClear();
-    newController().saveConfig(config as never);
+    newController().saveConfig(completeDatabaseFixture(config, existing));
     const content = ((fs.writeFileSync as jest.Mock).mock.calls as Array<[string, string]>)[0][1];
     (fs.existsSync as jest.Mock).mockReturnValue(false);
     (fs.readFileSync as jest.Mock).mockReturnValue('');
@@ -1896,15 +1919,26 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       ];
       const switchBack = (running: Record<string, string>) => {
         Object.assign(process.env, running);
-        const env = jest
-          .requireActual<typeof import('dotenv')>('dotenv')
-          .parse(
-            written(
-              { database: { type: 'postgres', builtIn: true }, storage: { type: 's3', builtIn: true } },
-              SWITCHED,
-            ),
-          );
-        return Object.fromEntries(KEYS.map(key => [key, env[key]]));
+        // These runtime values came from the generated file, so they are not host overrides of the new save.
+        const precedence =
+          jest.requireActual<typeof import('../../config/env-precedence')>('../../config/env-precedence');
+        const wasOsProvided = precedence.isOsProvidedEnv;
+        const source = jest
+          .spyOn(precedence, 'isOsProvidedEnv')
+          .mockImplementation(key => !Object.prototype.hasOwnProperty.call(running, key) && wasOsProvided(key));
+        try {
+          const env = jest
+            .requireActual<typeof import('dotenv')>('dotenv')
+            .parse(
+              written(
+                { database: { type: 'postgres', builtIn: true }, storage: { type: 's3', builtIn: true } },
+                SWITCHED,
+              ),
+            );
+          return Object.fromEntries(KEYS.map(key => [key, env[key]]));
+        } finally {
+          source.mockRestore();
+        }
       };
       // Nothing is pinned: the running process holds the values its boot loaded from the file.
       afterEach(() => {
@@ -1957,7 +1991,12 @@ describe('InfraConfigController.saveConfig built-in/external mode flips and the 
       });
 
       it('writes the bundled ones while the running process uses SQLite and local storage', () => {
-        const env = switchBack({ ...RUNNING, DATABASE_TYPE: 'sqlite', STORAGE_TYPE: 'local' });
+        const env = switchBack({
+          ...RUNNING,
+          DATABASE_TYPE: 'sqlite',
+          DATABASE_NAME: './data/running.sqlite',
+          STORAGE_TYPE: 'local',
+        });
         expect([env.DATABASE_NAME, env.DATABASE_PASSWORD, env.S3_BUCKET, env.S3_ACCESS_KEY_ID]).toEqual([
           'openwa',
           'openwa',
@@ -2177,6 +2216,7 @@ describe('InfraConfigController.saveConfig persists strictly-coerced form boolea
         type: 'postgres',
         builtIn: 'false',
         host: 'db.example.com',
+        username: 'app',
         password: 'unit-test-pw',
         sslEnabled: 'true',
         sslRejectUnauthorized: 'false',
@@ -2772,7 +2812,7 @@ describe('InfraConfigController.requestRestart constrains teardown to managed pr
     ] as const)('%s switched off from the page', (service, payload) => {
       it('is stopped by the restart that follows the save', async () => {
         const saved = [
-          'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_PASSWORD=openwa',
+          'DATABASE_TYPE=postgres\nPOSTGRES_BUILTIN=true\nDATABASE_HOST=postgres\nDATABASE_USERNAME=openwa\nDATABASE_PASSWORD=openwa',
           'REDIS_ENABLED=true\nREDIS_BUILTIN=true\nREDIS_HOST=redis\nREDIS_PORT=6379\nQUEUE_ENABLED=true',
           'STORAGE_TYPE=s3\nMINIO_BUILTIN=true\nS3_ENDPOINT=http://minio:9000\nS3_ACCESS_KEY_ID=minioadmin',
           'S3_SECRET_ACCESS_KEY=minioadmin\n',
@@ -2931,7 +2971,9 @@ describe('InfraConfigController audit trail (light-dependency handlers)', () => 
 
   it('saveConfig emits INFRA_CONFIG_SAVED without leaking secret values into the metadata', () => {
     const audit = makeAudit();
-    build(audit).saveConfig({ database: { type: 'postgres', host: 'db', password: 'topsecret' } } as never);
+    build(audit).saveConfig({
+      database: { type: 'postgres', host: 'db', username: 'app', password: 'topsecret' },
+    } as never);
     expect(audit.logInfo).toHaveBeenCalledTimes(1);
     const calls = audit.logInfo.mock.calls as Array<[AuditAction, { metadata: { sections: string[] } }]>;
     const [action, ctx] = calls[0];

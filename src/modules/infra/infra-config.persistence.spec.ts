@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { ValidationPipe } from '@nestjs/common';
+import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import { GLOBAL_VALIDATION_OPTIONS } from '../../config/app-validation';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
 import { SaveConfigDto } from './dto/save-config.dto';
@@ -137,4 +137,45 @@ it('creates and replaces the overlay owner-only', async () => {
   expect((await save({ engine: { headless: true } })).saved).toBe(true);
   if (process.platform !== 'win32') expect(actualFs.statSync(file).mode & 0o777).toBe(0o600);
   expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('true');
+});
+
+const invalidBootCases: Array<{
+  name: string;
+  stored: Record<string, string>;
+  pins: Record<string, string>;
+  body: unknown;
+}> = [
+  {
+    name: 'missing PostgreSQL host and user',
+    stored: {},
+    pins: {},
+    body: { database: { type: 'postgres', password: 'DummyPassword123456' } },
+  },
+  {
+    name: 'a PostgreSQL bare name under a SQLite type pin',
+    stored: {},
+    pins: { DATABASE_TYPE: 'sqlite' },
+    body: { database: { type: 'postgres', builtIn: true } },
+  },
+  { name: 'an exponent-form pool size', stored: database, pins: {}, body: { database: { poolSize: 1e21 } } },
+];
+for (const example of invalidBootCases) {
+  it(`refuses ${example.name} before persisting`, async () => {
+    seed(example.stored);
+    Object.assign(process.env, example.pins);
+    recordPinnedEnvKeys(example.pins);
+    const before = actualFs.readFileSync(file);
+    const input = await admitted(example.body, SaveConfigDto);
+    expect(() => build().controller.saveConfig(input)).toThrow(BadRequestException);
+    expect(actualFs.readFileSync(file)).toEqual(before);
+    expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+  });
+}
+
+it('accepts a valid partial PostgreSQL change and preserves an absent pool value', async () => {
+  seed({ ...database, DATABASE_POOL_SIZE: '17' });
+  expect((await save({ database: { poolSize: null } })).saved).toBe(true);
+  expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_POOL_SIZE).toBe('17');
+  expect((await save({ database: { poolSize: 18 } })).saved).toBe(true);
+  expect(dotenv.parse(actualFs.readFileSync(file)).DATABASE_POOL_SIZE).toBe('18');
 });
