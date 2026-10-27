@@ -627,6 +627,41 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ NODE_URL: 'https://node-a.internal' })).not.toThrow();
   });
 
+  // Without a scheme the S3 client throws "Invalid URL" on every call and media quietly lands on local disk.
+  describe('S3_ENDPOINT', () => {
+    it.each(['minio:9000', '127.0.0.1:9000', 'localhost:9000', 'minio', 'ftp://minio:9000'])(
+      'rejects %s while S3 is the selected storage',
+      endpoint => {
+        expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: endpoint })).toThrow(
+          /S3_ENDPOINT must be an absolute http\(s\) URL/,
+        );
+      },
+    );
+
+    it('does not echo the value, which may carry credentials', () => {
+      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: 'AKIAKEY:hunter2@s3host:9000' })).not.toThrow(
+        /hunter2/,
+      );
+      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: 'AKIAKEY:hunter2@s3host:9000' })).toThrow(
+        /S3_ENDPOINT/,
+      );
+    });
+
+    it.each(['http://minio:9000', 'https://s3.example.com', 'https://gateway.example.com/s3/', ' http://minio:9000 '])(
+      'accepts %s',
+      endpoint => {
+        expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: endpoint })).not.toThrow();
+      },
+    );
+
+    it('leaves an unset or blank endpoint alone, and a stale one while storage is local', () => {
+      expect(() => validateEnv({ STORAGE_TYPE: 's3' })).not.toThrow();
+      expect(() => validateEnv({ STORAGE_TYPE: 's3', S3_ENDPOINT: '  ' })).not.toThrow();
+      expect(() => validateEnv({ STORAGE_TYPE: 'local', S3_ENDPOINT: 'minio:9000' })).not.toThrow();
+      expect(() => validateEnv({ S3_ENDPOINT: 'minio:9000' })).not.toThrow();
+    });
+  });
+
   it('rejects a non-positive media-conversion knob instead of silently using the default', () => {
     expect(() => validateEnv({ MEDIA_CONVERSION_CONCURRENCY: '0' })).toThrow(/positive integer/);
     expect(() => validateEnv({ MEDIA_CONVERSION_TIMEOUT_MS: 'abc' })).toThrow(/positive integer/);

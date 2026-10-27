@@ -620,6 +620,22 @@ export function validateEnv(config: EnvConfig): EnvConfig {
     }
   }
 
+  // The S3 client builds every request from this URL. A value without a scheme (`minio:9000`) fails each call as
+  // "Invalid URL" and media goes to the local fallback directory instead, so a typo in the endpoint reads as a
+  // working bucket. Only checked while S3 is the selected storage; the value is not echoed, as it may hold keys.
+  const s3Endpoint = str('S3_ENDPOINT');
+  if (s3Endpoint && rawEnum('STORAGE_TYPE') === 's3') {
+    let protocol: string | undefined;
+    try {
+      protocol = new URL(s3Endpoint).protocol;
+    } catch {
+      protocol = undefined;
+    }
+    if (protocol !== 'http:' && protocol !== 'https:') {
+      errors.push('S3_ENDPOINT must be an absolute http(s) URL such as "http://minio:9000"');
+    }
+  }
+
   // Boolean feature flags read at module-eval time (app.module.ts) with a bare `=== 'true'` /
   // `!== 'false'` comparison: a typo (`True`, `1`, `yes`) or trailing whitespace/CR silently
   // (dis)ables the feature. Validate the RAW value — NOT a trimmed one — so `'true '` / `'true\r'`
