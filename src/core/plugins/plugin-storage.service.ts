@@ -447,7 +447,13 @@ export class PluginStorageService {
               files
                 .filter(f => f.endsWith('.json'))
                 .map(f => f.slice(0, -'.json'.length))
-                .map(stem => decodeStorageFileName(stem) ?? (!isPackageDir && resolveLegacyKeyPath(stem) ? stem : null))
+                .map(stem => {
+                  // A listed key must be one get/set/delete accept, so a canonical name that decodes to an
+                  // unsafe or empty key is not listed (and is not a legacy key either, see resolveLegacyKeyPath).
+                  const decoded = decodeStorageFileName(stem);
+                  if (decoded !== null) return isSafeStorageKey(decoded) ? decoded : null;
+                  return !isPackageDir && resolveLegacyKeyPath(stem) ? stem : null;
+                })
                 .filter((k): k is string => k !== null),
             ),
           );

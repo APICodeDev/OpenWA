@@ -117,6 +117,15 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(await storage.list()).toEqual(['foo']);
   });
 
+  it('does not list a canonical encoded filename whose key get and set would refuse', async () => {
+    const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
+    await storage.set('real', { ok: true });
+    const encoded = (key: string): string => `key-${Buffer.from(key).toString('base64url')}.json`;
+    for (const key of ['', '../escape']) fs.writeFileSync(path.join(pluginDataDir, encoded(key)), '{}');
+
+    expect(await storage.list()).toEqual(['real']);
+  });
+
   it('deletes a legacy plain-key file', async () => {
     const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
     fs.writeFileSync(path.join(pluginDataDir, 'legacy.json'), JSON.stringify({ old: true }));
