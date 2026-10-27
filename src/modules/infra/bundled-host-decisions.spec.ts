@@ -64,15 +64,22 @@ interface Case {
   flag: Flag;
 }
 
+// A storage endpoint that is not an absolute http(s) URL is refused by boot validation, so a save never reaches the
+// decisions below with one; the blank spelling is no endpoint at all.
+const isSavableHost = (service: ServiceName, host: string): boolean =>
+  service !== 'storage' || host.trim() === '' || /^https?:\/\//i.test(host.trim());
+
 const cases: Case[] = SERVICE_NAMES.flatMap(service =>
   [
     ...HOST_SPELLINGS[service].reach.map(host => ({ host, reach: true })),
     ...HOST_SPELLINGS[service].elsewhere.map(host => ({ host, reach: false })),
-  ].flatMap(({ host, reach }) =>
-    (['pinned', 'file'] as const).flatMap(position =>
-      (['true', 'false', 'absent'] as const).map(flag => ({ service, host, reach, position, flag })),
+  ]
+    .filter(({ host }) => isSavableHost(service, host))
+    .flatMap(({ host, reach }) =>
+      (['pinned', 'file'] as const).flatMap(position =>
+        (['true', 'false', 'absent'] as const).map(flag => ({ service, host, reach, position, flag })),
+      ),
     ),
-  ),
 );
 
 const label = (c: Case) => `${c.service} ${JSON.stringify(c.host)} ${c.position}, flag ${c.flag}`;
