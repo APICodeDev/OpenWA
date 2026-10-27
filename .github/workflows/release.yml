@@ -428,12 +428,7 @@ jobs:
           if [ -z "$NOTES" ]; then
             NOTES="Release v${VERSION}"
           fi
-          # Use EOF delimiter for multi-line output
-          {
-            echo "NOTES<<EOF"
-            echo "$NOTES"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$NOTES" > "$RUNNER_TEMP/release-notes.md"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
@@ -445,7 +440,7 @@ jobs:
           token: ${{ secrets.RELEASE_PAT || secrets.GITHUB_TOKEN }}
           tag_name: ${{ github.ref_name }}
           name: v${{ steps.version.outputs.VERSION }}
-          body: ${{ steps.changelog.outputs.NOTES }}
+          body_path: ${{ runner.temp }}/release-notes.md
           draft: false
           # Same rule as the image channels below: any tag with a '-' suffix is a prerelease, so a
           # tag kept off X.Y and latest can never become GitHub's "Latest" release either.
