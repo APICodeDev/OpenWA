@@ -23,9 +23,9 @@ test.after(() => fs.rmSync(WORK, { recursive: true, force: true }));
 const PREFIX_BYTES = 64;
 const MARKER = 'FIXTURE_WRITE_FAULT';
 const PRELOAD = path.join(WORK, 'write-fault.cjs');
-// Fails one write ('write': the temporary file beside FIXTURE_FAULT_FILE, or the file itself) or one
-// rename ('rename': onto FIXTURE_FAULT_FILE). A full disk or an I/O error lands a prefix first; a refused
-// or busy open writes nothing.
+// Fails one write ('write': the temporary file beside FIXTURE_FAULT_FILE, or the file itself), one
+// rename ('rename': onto FIXTURE_FAULT_FILE) or the chmod of the temporary file ('chmod'). A full disk or
+// an I/O error lands a prefix first; a refused or busy open writes nothing.
 fs.writeFileSync(
   PRELOAD,
   `'use strict';
@@ -33,6 +33,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const write = fs.writeFileSync;
 const rename = fs.renameSync;
+const chmod = fs.chmodSync;
 const op = process.env.FIXTURE_FAULT_OP;
 const file = path.resolve(process.env.FIXTURE_FAULT_FILE);
 const code = process.env.FIXTURE_FAULT_CODE;
@@ -51,6 +52,10 @@ fs.writeFileSync = function (target, data, ...args) {
 fs.renameSync = function (from, to) {
   if (op === 'rename' && path.resolve(String(to)) === file) fail();
   return rename.call(fs, from, to);
+};
+fs.chmodSync = function (target, mode) {
+  if (op === 'chmod' && path.resolve(String(target)).startsWith(file + '.')) fail();
+  return chmod.call(fs, target, mode);
 };
 `,
 );
@@ -216,6 +221,36 @@ test('patch-baileys-pairing.js fails even under --best-effort when only the firs
   assert.equal(result.status, 1);
 });
 
+// A file system that refuses chmod (a bind mount, FAT) must not turn into a failed or skipped patch: the
+// in-place write this replaced needed none. The file is patched, keeps the mode it had, and no temporary
+// file is left, under --best-effort and, for the Puppeteer patch, without it.
+const refusedChmod = tree => ({ op: 'chmod', code: 'EPERM', file: Object.values(tree.targets)[0] });
+const patchedWithoutChmod = (tree, result, before) => {
+  assert.match(result.stderr, new RegExp(MARKER), 'the injected fault did not fire');
+  assert.equal(result.status, 0, result.stderr);
+  Object.entries(before).forEach(([relative, text]) => {
+    assert.notEqual(fs.readFileSync(tree.targets[relative], 'utf8'), text);
+    assert.equal(fs.statSync(tree.targets[relative]).mode & 0o777, 0o640);
+  });
+  assert.deepEqual(leftovers(tree), []);
+};
+
+for (const [name, relative, shapeOf] of PATCHERS) {
+  test(`${name} patches the file when the file system refuses chmod`, () => {
+    const shape = `// fixture\n${shapeOf(require(`./${name}`))}\n`;
+    const tree = fixture(name, { [relative]: shape });
+    patchedWithoutChmod(tree, patch(tree, { fault: refusedChmod(tree) }), { [relative]: shape });
+  });
+}
+
+test('patch-baileys-pairing.js patches both files when the file system refuses chmod', () => {
+  const tree = pairingTree();
+  const before = Object.fromEntries(
+    Object.entries(tree.targets).map(([key, file]) => [key, fs.readFileSync(file, 'utf8')]),
+  );
+  patchedWithoutChmod(tree, patch(tree, { fault: { op: 'chmod', code: 'EPERM', file: tree.targets[SOCKET] } }), before);
+});
+
 // The Puppeteer patch has no --best-effort mode: any failure is fatal, and leaves the file untouched.
 const puppeteer = require('./patch-wwebjs-puppeteer.js');
 test('patch-wwebjs-puppeteer.js fails on a write error and leaves Client.js as it was', () => {
@@ -227,6 +262,13 @@ test('patch-wwebjs-puppeteer.js fails on a write error and leaves Client.js as i
   assert.equal(fs.readFileSync(tree.targets[relative], 'utf8'), shape);
   assert.deepEqual(leftovers(tree), []);
   assert.equal(result.status, 1);
+});
+
+test('patch-wwebjs-puppeteer.js patches Client.js when the file system refuses chmod, without --best-effort', () => {
+  const relative = 'whatsapp-web.js/src/Client.js';
+  const shape = `// fixture\n${puppeteer.REPLACEMENTS.map(([before]) => before).join('\n')}\n`;
+  const tree = fixture('patch-wwebjs-puppeteer.js', { [relative]: shape });
+  patchedWithoutChmod(tree, patch(tree, { fault: refusedChmod(tree), bestEffort: false }), { [relative]: shape });
 });
 
 test('a link is written through, not replaced', () => {
