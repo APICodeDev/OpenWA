@@ -105,6 +105,18 @@ describe('PluginStorageService sandboxed per-plugin storage containment', () => 
     expect(jsonFiles).toHaveLength(2);
   });
 
+  it("does not let a key spelled like another key's encoded filename read or delete that key", async () => {
+    // 'foo' is stored as key-Zm9v.json. The literal key 'key-Zm9v' has its own encoded file; its legacy
+    // fallback (<key>.json) is that same path, which belongs to 'foo'.
+    await storage.set('foo', { kept: true });
+
+    expect(await storage.get('key-Zm9v')).toBeNull();
+    await storage.delete('key-Zm9v');
+
+    expect(await storage.get('foo')).toEqual({ kept: true });
+    expect(await storage.list()).toEqual(['foo']);
+  });
+
   it('deletes a legacy plain-key file', async () => {
     const pluginDataDir = path.join(dataDir, 'plugins', pluginId);
     fs.writeFileSync(path.join(pluginDataDir, 'legacy.json'), JSON.stringify({ old: true }));

@@ -357,6 +357,8 @@ export class PluginStorageService {
       // These are package-owned files when package code and state share a directory. They must never
       // be treated as legacy plugin storage (or get/delete/set migration can read or remove code).
       if (key === 'manifest' || key === 'package') return null;
+      // A canonical encoded filename belongs to the key it decodes to, not to a legacy key spelled like it.
+      if (decodeStorageFileName(key) !== null) return null;
       const fileName = `${key}.json`;
       return isPathWithin(pluginDataDir, fileName) ? path.join(pluginDataDir, fileName) : null;
     };
