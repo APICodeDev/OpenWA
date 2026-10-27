@@ -3,6 +3,9 @@ import { lookup } from 'dns/promises';
 import { type LookupAddress, type LookupOptions } from 'dns';
 import { Agent, fetch as undiciFetch, Headers, type Dispatcher, type RequestInit, type Response } from 'undici';
 import { createProxyDispatcher } from './proxy-dispatcher';
+import { createLogger } from '../services/logger.service';
+
+const logger = createLogger('SsrfGuard');
 
 /** Thrown when an outbound URL is blocked by the SSRF guard. */
 export class SsrfBlockedError extends Error {
@@ -58,7 +61,7 @@ export function isSsrfProtectionEnabled(): boolean {
  * bypass the block. Matched case-insensitively against the URL hostname.
  */
 function getAllowedHosts(): Set<string> {
-  return new Set(
+  const hosts = new Set(
     (process.env.SSRF_ALLOWED_HOSTS ?? '')
       .split(',')
       // Strip IPv6 brackets so an entry copied from a URL (e.g. "[::1]") matches the
@@ -71,6 +74,30 @@ function getAllowedHosts(): Set<string> {
       )
       .filter(Boolean),
   );
+  warnUnusableAllowedHosts(hosts);
+  return hosts;
+}
+
+/** What `url.hostname` can equal: a host name, with underscores for a container name, or an IP literal. */
+const ALLOWED_HOST_PATTERN = /^[a-z0-9_]([a-z0-9_.-]*[a-z0-9_])?\.?$/;
+
+let warnedUnusableHosts = '';
+
+/**
+ * An entry is compared with the hostname of the URL, so one with a scheme, port, path or wildcard never
+ * matches, and the refusal it was meant to lift only says the destination is not allowed. Name such entries once.
+ */
+function warnUnusableAllowedHosts(hosts: ReadonlySet<string>): void {
+  const unusable = [...hosts].filter(host => !isIPv4(host) && !isIPv6(host) && !ALLOWED_HOST_PATTERN.test(host));
+  const key = unusable.join(',');
+  if (key === warnedUnusableHosts) return;
+  warnedUnusableHosts = key;
+  if (unusable.length > 0) {
+    logger.warn(
+      'SSRF_ALLOWED_HOSTS entries must be a bare host name or IP address, without a scheme, port, path or ' +
+        `wildcard; these never match and are ignored: ${unusable.join(', ')}`,
+    );
+  }
 }
 
 // IPv4 ranges that must never be reachable by an outbound webhook (SSRF targets). Membership is
