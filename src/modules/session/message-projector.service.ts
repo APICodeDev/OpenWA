@@ -750,7 +750,9 @@ export class MessageProjector {
           // The ingest awaited; a stop()/delete() can retire this engine mid-flight — don't
           // dispatch for a session that no longer exists (mirrors message.received's re-check).
           if (!this.engines.isLive(id, engine)) return;
-          if (created) this.dispatchStatusReceived(id, row);
+          // One that expired while the ingest ran (a slow media write) is gone from every read: announcing it
+          // would point a consumer at a status the API no longer serves.
+          if (created && row.expiresAt > Date.now()) this.dispatchStatusReceived(id, row);
         })
         .catch(err =>
           this.logger.warn('Status ingest failed', {
