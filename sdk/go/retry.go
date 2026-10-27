@@ -176,21 +176,22 @@ func retryAfterHeader(h http.Header) (time.Duration, bool) {
 
 // isSendPacingRefusal reports whether resp is the gateway's send-pacing 429,
 // which must not be retried before the body's retryAfterSeconds. It reads the
-// body and puts the bytes back, so the caller still gets the full error.
-func isSendPacingRefusal(resp *http.Response) bool {
+// body and puts the bytes back, so the caller still gets the full error. A body that cannot be read
+// to the end is returned as an error, not replaced by the part that arrived.
+func isSendPacingRefusal(resp *http.Response) (bool, error) {
 	if resp.StatusCode != http.StatusTooManyRequests || resp.Body == nil {
-		return false
+		return false, nil
 	}
 	data, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	resp.Body = io.NopCloser(bytes.NewReader(data))
 	if err != nil {
-		return false
+		return false, err
 	}
+	resp.Body = io.NopCloser(bytes.NewReader(data))
 	var body struct {
 		Code string `json:"code"`
 	}
-	return json.Unmarshal(data, &body) == nil && body.Code == "SEND_PACING_LIMITED"
+	return json.Unmarshal(data, &body) == nil && body.Code == "SEND_PACING_LIMITED", nil
 }
 
 // retryMiddleware retries network errors and retryable statuses per policy,
@@ -229,8 +230,14 @@ func retryMiddleware(p RetryPolicy, log Logger) Middleware {
 					// after the gateway already sent the message, so replaying
 					// a POST on those would double-send. A send-pacing 429 is
 					// usually not transient, so it goes back to the caller.
-					retryable = retryableForMethod(req.Method, resp.StatusCode) &&
-						attempt < p.MaxRetries && !isSendPacingRefusal(resp)
+					retryable = retryableForMethod(req.Method, resp.StatusCode) && attempt < p.MaxRetries
+					if retryable {
+						pacing, readErr := isSendPacingRefusal(resp)
+						if readErr != nil {
+							return nil, readErr
+						}
+						retryable = !pacing
+					}
 				}
 				if !retryable || attempt >= p.MaxRetries {
 					return resp, err

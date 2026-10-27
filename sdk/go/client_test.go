@@ -2157,3 +2157,104 @@ func TestRetryDoesNotResendBeforeOversizedRetryAfter(t *testing.T) {
 		}
 	}
 }
+
+type responseReadErrorBody struct {
+	reads, closed int
+}
+
+func (b *responseReadErrorBody) Read(p []byte) (int, error) {
+	b.reads++
+	return copy(p, `{"code":`), io.ErrUnexpectedEOF
+}
+
+func (b *responseReadErrorBody) Close() error {
+	b.closed++
+	return nil
+}
+
+func TestRetryPreservesResponseBodyReadError(t *testing.T) {
+	for _, status := range []int{200, 429} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			body := &responseReadErrorBody{}
+			var calls int32
+			c := newTestClient(t, RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				atomic.AddInt32(&calls, 1)
+				return &http.Response{StatusCode: status, Header: http.Header{"Retry-After": {"3600"}}, Body: body, Request: req}, nil
+			}), WithTimeout(500*time.Millisecond), WithRetry(DefaultRetryPolicy()))
+			err := c.Do(context.Background(), "GET", "/api/x", nil, nil, nil)
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Errorf("error = %v, want preserved io.ErrUnexpectedEOF", err)
+			}
+			if calls != 1 || body.reads != 1 || body.closed != 1 {
+				t.Errorf("calls = %d, reads = %d, closes = %d; want one each", calls, body.reads, body.closed)
+			}
+		})
+	}
+}
+
+func TestRetryPreservesResponseBodyTimeout(t *testing.T) {
+	for _, status := range []int{200, 429} {
+		for _, callerDeadline := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/caller=%v", status, callerDeadline), func(t *testing.T) {
+				var calls int32
+				started := make(chan struct{}, 1)
+				finished := make(chan struct{}, 1)
+				release := make(chan struct{})
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					atomic.AddInt32(&calls, 1)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(status)
+					_, _ = w.Write([]byte(`{"code":`))
+					w.(http.Flusher).Flush()
+					select {
+					case started <- struct{}{}:
+					default:
+					}
+					select {
+					case <-r.Context().Done():
+					case <-release:
+					}
+					select {
+					case finished <- struct{}{}:
+					default:
+					}
+				}))
+				t.Cleanup(srv.Close)
+				t.Cleanup(func() { close(release) })
+				ctx := context.Background()
+				wantTimeout := 125 * time.Millisecond
+				opts := []Option{WithRetry(DefaultRetryPolicy())}
+				if callerDeadline {
+					var cancel context.CancelFunc
+					ctx, cancel = context.WithTimeout(ctx, wantTimeout)
+					defer cancel()
+					wantTimeout = 0
+				} else {
+					opts = append(opts, WithTimeout(wantTimeout))
+				}
+				c, err := New(srv.URL, "k", opts...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = c.Do(ctx, "GET", "/api/x", nil, nil, nil)
+				select {
+				case <-started:
+				default:
+					t.Fatal("the response body was not flushed")
+				}
+				var te *TimeoutError
+				if !errors.As(err, &te) || te.Timeout != wantTimeout {
+					t.Errorf("error = %v, want a TimeoutError with budget %s", err, wantTimeout)
+				}
+				if got := atomic.LoadInt32(&calls); got != 1 {
+					t.Errorf("calls = %d, want one", got)
+				}
+				select {
+				case <-finished:
+				case <-time.After(2 * time.Second):
+					t.Error("cancellation did not release the server handler")
+				}
+			})
+		}
+	}
+}
