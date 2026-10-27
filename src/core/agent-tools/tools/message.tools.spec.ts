@@ -51,8 +51,25 @@ describe('messageTools', () => {
       includeMedia: true,
       deep: true,
     });
-    expect(getChatHistory).toHaveBeenCalledWith('s1', '628111@c.us', 50, true, true);
+    expect(getChatHistory).toHaveBeenCalledWith('s1', '628111@c.us', 50, true, true, undefined);
     expect(out).toEqual([{ id: 'm1' }]);
+  });
+
+  it('MessageHistory hands the request cancellation signal to getChatHistory', async () => {
+    const getChatHistory = jest.fn().mockResolvedValue([]);
+    const tools = makeTools({ getChatHistory } as unknown as MessageService);
+    const controller = new AbortController();
+    await invokeTool(
+      tools.get('MessageHistory')!,
+      { sessionId: 's1', chatId: '628111@c.us' },
+      'key',
+      makeAuth() as unknown as AuthService,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    expect((getChatHistory.mock.calls[0] as unknown[])[5]).toBe(controller.signal);
   });
 
   it('MessageGetReactions delegates to getMessageReactions', async () => {

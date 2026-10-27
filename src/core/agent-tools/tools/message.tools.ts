@@ -127,8 +127,8 @@ export function messageTools(message: MessageService): AnyToolDescriptor[] {
         includeMedia: z.boolean().optional().describe('Download media as base64 (slower)'),
         deep: z.boolean().optional().describe('Raise limit ceiling to 2000 for reaching further back in history'),
       }),
-      handler: input =>
-        message.getChatHistory(input.sessionId, input.chatId, input.limit, input.includeMedia, input.deep),
+      handler: (input, _apiKey, _chatScope, signal) =>
+        message.getChatHistory(input.sessionId, input.chatId, input.limit, input.includeMedia, input.deep, signal),
     }),
     defineTool({
       name: 'MessageGetReactions',
