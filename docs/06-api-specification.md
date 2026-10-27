@@ -1826,7 +1826,7 @@ rejected with `400` rather than guessing which half was meant.
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1719312000 }
 ```
 
-`messageId` is the WhatsApp message id from the engine. By default (`SIMULATE_TYPING`; set it to `false` to disable) a typing indicator and a humanising pause run before the send: 500 ms plus 45 ms per character, capped at `SIMULATE_TYPING_MAX_MS` (default 5000 ms), with +/-15% jitter.
+`messageId` is the WhatsApp message id from the engine. By default (`SIMULATE_TYPING`; set it to `false` to disable) a typing indicator and a humanising pause run before the send: 500 ms plus 45 ms per character, capped at `SIMULATE_TYPING_MAX_MS` (default 5000 ms), with +/-15% jitter; the pause never exceeds that cap, jitter included.
 
 **Errors:** `400` unknown body field, validation failure, or session not active / blocked by a plugin hook · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends)) · `503` Baileys recipient lookup failed or timed out before the operation was sent, or WhatsApp rate-limited the send (code 429: nothing was sent, the `Idempotency-Key` is freed) or timed out a query it awaits (code 408: the outcome is not proven, the key stays taken)
 
@@ -6424,7 +6424,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 #### DELETE /api/plugins/:id
 
-Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, drop its registry entry, and remove its `ctx.storage` data directory (`<dataDir>/plugins/<id>` — a separate tree when `PLUGINS_DIR` points outside the data dir). Built-in plugins are protected. A plugin that is installed but not loaded — one whose code went missing — can be uninstalled too; there is simply no runtime to tear down first. `404` therefore means an id the gateway has no registry entry for.
+Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, remove its `ctx.storage` data directory (`<dataDir>/plugins/<id>` — a separate tree when `PLUGINS_DIR` points outside the data dir), and drop its registry entry last. Built-in plugins are protected. A plugin that is installed but not loaded — one whose code went missing — can be uninstalled too; there is simply no runtime to tear down first. `404` therefore means an id the gateway has no registry entry for.
 
 **Auth:** API key (ADMIN)
 
@@ -6442,7 +6442,7 @@ Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, dr
 
 Note: this DELETE returns `200` with a body (not the usual `204`).
 
-**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
+**Errors:** `400` cannot uninstall (e.g. built-in, or a package or storage folder that could not be removed; the registry entry stays, so the call can be repeated) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6524,7 +6524,7 @@ Key facts:
 }
 ```
 
-For `tools/call` the result is an MCP `CallToolResult` (`content` array of `text` or embedded base64 `resource` items — payloads over 4096 bytes become a `resource`). **Tool-level failures are returned in-band as `CallToolResult` with `isError:true`** (HTTP stays 200), including a role, session or chat refusal (`name:'ForbiddenException'`), rate-limit hits (`message:'MCP rate limit exceeded'`), and an unknown tool or arguments that fail the tool's `inputSchema` (text `MCP error -32602: …`).
+For `tools/call` the result is an MCP `CallToolResult` (`content` array of `text` or embedded base64 `resource` items — payloads over 4096 bytes of UTF-8 become a `resource`). **Tool-level failures are returned in-band as `CallToolResult` with `isError:true`** (HTTP stays 200), including a role, session or chat refusal (`name:'ForbiddenException'`), rate-limit hits (`message:'MCP rate limit exceeded'`), and an unknown tool or arguments that fail the tool's `inputSchema` (text `MCP error -32602: …`).
 
 **Errors:** `401` for a missing or invalid key and `403` for a key carrying `allowedIps`, each with a JSON-RPC error body · `406` when `Accept` does not list both `application/json` and `text/event-stream` · `415` for a non-JSON `Content-Type` · `400` for malformed JSON, or with a `-32700` JSON-RPC error body for JSON that is not a valid JSON-RPC message · in-band JSON-RPC errors `-32601` (unknown method) and `-32603` (params that fail the method's schema, such as a `tools/call` without `name`; the message carries the validation issues), at HTTP 200 · `500` if the key lookup fails for a reason other than a refused key, or if the transport throws before headers are sent · `404` when `MCP_ENABLED` is not `true`
 
@@ -6732,6 +6732,8 @@ Generate a shareable WhatsApp call link.
 #### POST /api/sessions/:sessionId/calls/:callId/reject
 
 Reject a currently ringing incoming call. **Baileys only**: the whatsapp-web.js engine answers `501`. Only a live call can be rejected: the id is valid while the call rings (a short server-side cache); afterwards it expires.
+
+A failed rejection can be retried only while the same call is still ringing; a call that ends or rings again during the attempt is not restored. If the call is accepted, rejected or missed while a rejection is pending, that outcome is reported once as the call's `call.accepted`, `call.rejected` or `call.missed` event, even when the rejection then fails or times out. A completed rejection that no longer belongs to the current call, because it ended or the connection was cleared meanwhile, reports nothing.
 
 **Auth:** API key (OPERATOR)
 

@@ -521,7 +521,9 @@ and among themselves in their own order. On `execute(event, data,
 handler that returns `{ continue: false }` stops the chain. A handler that **throws** is logged and the
 chain continues with the previous data (one bad plugin can't break the chain). Same-event re-entrancy
 is blocked: a handler that re-fires the event it is handling is short-circuited (guards synchronous
-re-entry only). Plugins never call `HookManager` directly — they use `ctx.registerHook(...)`, which
+re-entry only). The guard ends with the call that opened it, so a send that a handler schedules from a
+timer or a detached promise after that call has settled runs every handler, a moderation veto included;
+a sandboxed handler that overran the hook timeout stays guarded until the worker answers. Plugins never call `HookManager` directly — they use `ctx.registerHook(...)`, which
 also applies the per-session activation gate.
 
 Chains for different messages run concurrently, so a handler can see one chat's messages out of order.
