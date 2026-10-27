@@ -1451,6 +1451,11 @@ export class SessionEngineLifecycle {
           await this.fences.destroyWithEscalation(id, mine);
           this.engines.deleteIfLive(id, mine);
         }
+        // Nothing will re-register an engine for this episode now. A state left pending would keep the
+        // session counted as active: its lease renewed with no engine behind it, and its cap slot held.
+        if (!this.engines.has(id) && this.reconnectStates.get(id) === state && state.started === attempt) {
+          this.cancelReconnect(id);
+        }
         // Same start/delete window as start()'s post-init guard: this re-init re-created auth dirs
         // delete() had already purged — purge again so no credentials outlive the row.
         await this.purgeAuthDirsIfDeleted(id);
