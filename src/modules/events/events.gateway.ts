@@ -289,8 +289,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (!current) return 'deleted';
     if (!current.isActive) return 'revoked';
     const expiry = apiKeyExpiryTime(current.expiresAt);
-    // A stored expiry that does not parse reads as unset to apiKeyExpiryTime, which AuthService refuses as expired.
-    if (current.expiresAt && (expiry === null || expiry <= now)) return 'expired';
+    // An expiry that does not parse is the epoch for apiKeyExpiryTime, so it is expired here as AuthService refuses it.
+    if (expiry !== null && expiry <= now) return 'expired';
     const authorization = apiKeyAuthorizationFingerprint(current);
     // Per socket, not per key: sockets under one key connected at different moments, so one can hold
     // a stale snapshot while another already carries the new authorization. A socket that subscribed
