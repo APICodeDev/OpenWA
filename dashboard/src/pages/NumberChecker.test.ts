@@ -1362,3 +1362,259 @@ test('NumberChecker: Copy works where navigator.clipboard does not exist', async
   assert.equal(copy.mock.callCount(), 1);
   assert.deepEqual(copy.mock.calls[0].arguments, ['copy']);
 });
+
+function heldSingleResponse() {
+  let release!: (response: Response) => void;
+  const promise = new Promise<Response>(resolve => (release = resolve));
+  return { promise, release };
+}
+
+async function finishSingleResponse(pending: ReturnType<typeof heldSingleResponse>, response: Response) {
+  await rtl.act(async () => {
+    pending.release(response);
+    await pending.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
+  });
+}
+
+async function startSingleLookup(number = '6581234567') {
+  await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  rtl.fireEvent.change(rtl.screen.getByPlaceholderText(/9876543210/), { target: { value: number } });
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+}
+
+const SINGLE_KEY_A = 'dummy-single-key-a';
+const SINGLE_KEY_B = 'dummy-single-key-b';
+type SingleRetirement = 'route' | 'key-change' | 'logout-login';
+
+async function retireSingleLookup(reason: SingleRetirement) {
+  if (reason === 'route') {
+    rtl.fireEvent.click(rtl.screen.getByText('Leave'));
+    await rtl.screen.findByText('Elsewhere');
+  } else if (reason === 'key-change') {
+    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_B);
+  } else {
+    sessionStorage.removeItem('openwa_api_key');
+    rtl.cleanup();
+    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_B);
+    renderRoutes();
+    await rtl.screen.findByRole('option', { name: /Primary Session/ });
+  }
+}
+
+for (const reason of ['route', 'key-change', 'logout-login'] as const) {
+  for (const answer of ['registered', 'missing', 'failure'] as const) {
+    test(`NumberChecker: a single lookup retired by ${reason} ignores its late ${answer} response`, async () => {
+      const pending = heldSingleResponse();
+      const checks: { path: string; key: string | null }[] = [];
+      const pictures: { path: string; key: string | null }[] = [];
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        const key = new Headers(init?.headers).get('X-API-Key');
+        if (path.includes('/contacts/check/')) {
+          checks.push({ path, key });
+          return pending.promise;
+        }
+        if (path.includes('/profile-picture')) {
+          pictures.push({ path, key });
+          return Promise.resolve(jsonResponse({ url: 'https://avatar.invalid/retired.png' }));
+        }
+        return defaultFetch(input, init);
+      }) as typeof fetch;
+      sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+      renderRoutes();
+      await startSingleLookup();
+      assert.deepEqual(checks, [
+        {
+          path: '/api/sessions/test-session-1/contacts/check/6581234567',
+          key: SINGLE_KEY_A,
+        },
+      ]);
+      await retireSingleLookup(reason);
+      const response =
+        answer === 'failure'
+          ? jsonResponse({ message: 'Retired single lookup failed' }, 503)
+          : jsonResponse({
+              number: '6581234567',
+              exists: answer === 'registered',
+              whatsappId: answer === 'registered' ? '6581234567@c.us' : null,
+            });
+      await finishSingleResponse(pending, response);
+
+      assert.deepEqual(pictures, [], 'a retired lookup dispatched an optional profile request');
+      assert.equal(document.querySelector('.nc-result-card') === null, true, 'a retired lookup published a result');
+      assert.equal(
+        document.querySelector('.nc-history-table tbody tr') === null,
+        true,
+        'a retired lookup added recent history',
+      );
+      assert.equal(document.querySelector('.toast') === null, true, 'a retired lookup published a toast');
+      if (reason === 'route') {
+        rtl.fireEvent.click(rtl.screen.getByText('Return'));
+        await rtl.screen.findByRole('option', { name: /Primary Session/ });
+        assert.equal(document.querySelector('.nc-result-card') === null, true);
+      }
+    });
+  }
+
+  for (const answer of ['avatar', 'failure'] as const) {
+    test(`NumberChecker: a profile lookup retired by ${reason} ignores its late ${answer} response`, async () => {
+      const pending = heldSingleResponse();
+      const pictures: { path: string; key: string | null }[] = [];
+      globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input);
+        if (path.includes('/contacts/check/')) return Promise.resolve(registered('6581234567'));
+        if (path.includes('/profile-picture')) {
+          pictures.push({ path, key: new Headers(init?.headers).get('X-API-Key') });
+          return pending.promise;
+        }
+        return defaultFetch(input, init);
+      }) as typeof fetch;
+      sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+      renderRoutes();
+      await startSingleLookup();
+      await rtl.waitFor(() =>
+        assert.deepEqual(pictures, [
+          {
+            path: '/api/sessions/test-session-1/contacts/6581234567%40c.us/profile-picture',
+            key: SINGLE_KEY_A,
+          },
+        ]),
+      );
+      await retireSingleLookup(reason);
+      await finishSingleResponse(
+        pending,
+        answer === 'avatar'
+          ? jsonResponse({ url: 'https://avatar.invalid/retired.png' })
+          : jsonResponse({ message: 'Retired profile lookup failed' }, 500),
+      );
+
+      assert.equal(pictures.length, 1);
+      assert.equal(
+        document.querySelector('.nc-result-card') === null,
+        true,
+        'a retired profile lookup published a result',
+      );
+      assert.equal(
+        document.querySelector('.nc-history-table tbody tr') === null,
+        true,
+        'a retired profile lookup added history',
+      );
+      assert.equal(document.querySelector('.toast') === null, true, 'a retired profile lookup published a toast');
+    });
+  }
+}
+
+for (const answer of ['avatar', 'no-avatar', 'profile-failure', 'missing'] as const) {
+  test(`NumberChecker: an active single lookup keeps its ${answer} result`, async () => {
+    const pictures: { path: string; key: string | null }[] = [];
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.includes('/contacts/check/')) {
+        return Promise.resolve(
+          answer === 'missing'
+            ? jsonResponse({ number: '6581234567', exists: false, whatsappId: null })
+            : registered('6581234567'),
+        );
+      }
+      if (path.includes('/profile-picture')) {
+        pictures.push({ path, key: new Headers(init?.headers).get('X-API-Key') });
+        return Promise.resolve(
+          answer === 'profile-failure'
+            ? jsonResponse({ message: 'Optional avatar unavailable' }, 500)
+            : jsonResponse({ url: answer === 'avatar' ? 'https://avatar.invalid/current.png' : null }),
+        );
+      }
+      return defaultFetch(input, init);
+    }) as typeof fetch;
+    sessionStorage.setItem('openwa_api_key', SINGLE_KEY_A);
+    renderComponent();
+    await startSingleLookup();
+    await rtl.screen.findByText(answer === 'missing' ? 'Not Registered' : 'Registered on WhatsApp', {
+      selector: '.nc-status-badge',
+    });
+    assert.equal(document.querySelector('.nc-result-phone')?.textContent, '+6581234567');
+    assert.equal(
+      document.querySelector('.nc-avatar')?.getAttribute('src') ?? null,
+      answer === 'avatar' ? 'https://avatar.invalid/current.png' : null,
+    );
+    assert.deepEqual(
+      pictures,
+      answer === 'missing'
+        ? []
+        : [
+            {
+              path: '/api/sessions/test-session-1/contacts/6581234567%40c.us/profile-picture',
+              key: SINGLE_KEY_A,
+            },
+          ],
+    );
+    assert.equal(document.querySelector('.toast') === null, true);
+    assert.equal((rtl.screen.getByRole('button', { name: 'Check' }) as HTMLButtonElement).disabled, false);
+  });
+}
+
+test('NumberChecker: an active single lookup reports a failure and permits retry', async () => {
+  let fail = true;
+  const pictures: string[] = [];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.includes('/contacts/check/')) {
+      return Promise.resolve(
+        fail
+          ? jsonResponse({ message: 'Current single lookup failed' }, 503)
+          : jsonResponse({ number: '6581234567', exists: false, whatsappId: null }),
+      );
+    }
+    if (path.includes('/profile-picture')) pictures.push(path);
+    return defaultFetch(input, init);
+  }) as typeof fetch;
+  renderComponent();
+  await startSingleLookup();
+  await rtl.screen.findByText('Current single lookup failed');
+  assert.equal(document.querySelector('.nc-result-card') === null, true);
+  assert.equal((rtl.screen.getByRole('button', { name: 'Check' }) as HTMLButtonElement).disabled, false);
+  fail = false;
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Check' }));
+  await rtl.screen.findByText('Not Registered', { selector: '.nc-status-badge' });
+  assert.deepEqual(pictures, []);
+});
+
+test('NumberChecker: single lookup history keeps ten recent distinct numbers', async () => {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.includes('/contacts/check/')) {
+      return Promise.resolve(
+        jsonResponse({ number: path.split('/contacts/check/')[1], exists: false, whatsappId: null }),
+      );
+    }
+    return defaultFetch(input, init);
+  }) as typeof fetch;
+  renderComponent();
+  const numbers = Array.from({ length: 11 }, (_, i) => `65812345${String(i).padStart(2, '0')}`);
+  for (const number of numbers) {
+    await startSingleLookup(number);
+    await rtl.waitFor(() => assert.equal(document.querySelector('.nc-result-phone')?.textContent, `+${number}`));
+  }
+  const history = () =>
+    [...document.querySelectorAll('.nc-history-table tbody tr')].map(row => row.children[0].textContent);
+  assert.deepEqual(
+    history(),
+    numbers
+      .slice(1)
+      .reverse()
+      .map(number => `+${number}`),
+  );
+  await startSingleLookup(numbers[4]);
+  await rtl.waitFor(() => assert.equal(document.querySelector('.nc-result-phone')?.textContent, `+${numbers[4]}`));
+  assert.deepEqual(
+    history(),
+    [
+      numbers[4],
+      ...numbers
+        .slice(1)
+        .reverse()
+        .filter(number => number !== numbers[4]),
+    ].map(number => `+${number}`),
+  );
+});
