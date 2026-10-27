@@ -57,6 +57,10 @@ class OpenWAApiError(OpenWAError):
         header = next((v for k, v in (headers or {}).items() if k.lower() == "retry-after"), None)
         self.retry_after_seconds = _retry_after_seconds(fields.get("retryAfterSeconds"), header)
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Exception pickles only `args` (the message), which cannot rebuild an error that needs a status.
+        return (_rebuild_api_error, (type(self), self.args[0], self.status, self.body, self.error_kind, self.headers))
+
     @classmethod
     def from_response(
         cls,
@@ -160,6 +164,10 @@ class OpenWATimeoutError(OpenWAError):
         super().__init__(f"Request timed out after {timeout}s")
         self.timeout = timeout
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # `args` holds the formatted message, which would be formatted again on the way back.
+        return (type(self), (self.timeout,))
+
 
 def classify(
     status: int, message: str, body: Any, error_kind: str | None, *, headers: Mapping[str, str] | None = None
@@ -174,6 +182,17 @@ def classify(
         501: OpenWANotImplementedError,
         503: OpenWAServiceUnavailableError,
     }.get(status, OpenWAApiError)
+    return cls(message, status, body, error_kind, headers=headers)
+
+
+def _rebuild_api_error(
+    cls: type[OpenWAApiError],
+    message: str,
+    status: int,
+    body: Any,
+    error_kind: str | None,
+    headers: Mapping[str, str] | None,
+) -> OpenWAApiError:
     return cls(message, status, body, error_kind, headers=headers)
 
 

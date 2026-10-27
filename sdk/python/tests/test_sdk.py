@@ -187,6 +187,27 @@ class TestClientCore:
         assert caught.value.status == 429
         assert caught.value.retry_after_seconds is None
 
+    def test_errors_survive_pickle_and_copy(self) -> None:
+        # Worker pools (multiprocessing, concurrent.futures) carry a raised exception across processes.
+        import copy
+        import pickle
+
+        err = OpenWAApiError.from_response(
+            429,
+            '{"statusCode": 429, "message": "slow", "error": "Too Many Requests", "code": "SEND_PACING_LIMITED"}',
+            "POST /x",
+            headers={"Retry-After": "7"},
+        )
+        for clone in (pickle.loads(pickle.dumps(err)), copy.copy(err), copy.deepcopy(err)):
+            assert type(clone) is OpenWARateLimitError
+            assert str(clone) == str(err)
+            assert (clone.status, clone.body, clone.error_kind, clone.code) == (429, err.body, "Too Many Requests", err.code)
+            assert clone.retry_after_seconds == 7
+            assert clone.headers == {"Retry-After": "7"}
+        timeout = pickle.loads(pickle.dumps(OpenWATimeoutError(30.0)))
+        assert str(timeout) == "Request timed out after 30.0s"
+        assert timeout.timeout == 30.0
+
     def test_strips_trailing_slash(self):
         backend = MockBackend().on("GET", "/api/sessions", body=[])
         client = OpenWAClient(base_url="http://localhost:2785/", api_key="k", transport=backend.as_transport())
