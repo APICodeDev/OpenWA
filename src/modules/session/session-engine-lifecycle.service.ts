@@ -706,7 +706,11 @@ export class SessionEngineLifecycle {
     // await, ownership is re-validated by object identity + the synchronous stop mark before the
     // adapter is allowed to initialize — a retired engine must never reach initialize() (which would
     // re-arm a torn-down adapter and open an untracked socket).
-    const initialStatusPromise = this.updateStatus(id, SessionStatus.INITIALIZING);
+    const initialStatusPromise = this.updateStatus(
+      id,
+      SessionStatus.INITIALIZING,
+      () => !this.closed && this.isLiveEngine(id, engine) && !this.stoppingSessions.has(id),
+    );
     this.pendingInitialStatuses.set(id, { engine, promise: initialStatusPromise });
     try {
       await initialStatusPromise;
@@ -1508,8 +1512,8 @@ export class SessionEngineLifecycle {
   // Deliberately NON-async: callers (initializeEngine's pending-initial-status fence above all)
   // must await the broadcaster's own promise object, keeping the exact settlement profile the
   // inline method had — an async wrapper would add adoption hops the retirement-race specs catch.
-  updateStatus(id: string, status: SessionStatus): Promise<void> {
-    return this.broadcaster.updateStatus(id, status);
+  updateStatus(id: string, status: SessionStatus, canAnnounce?: () => boolean): Promise<void> {
+    return this.broadcaster.updateStatus(id, status, canAnnounce);
   }
 
   /**
