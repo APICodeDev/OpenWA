@@ -70,9 +70,9 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
 
 // The most digits a phone number has. A longer paste is kept whole and refused, never cut to a number nobody typed.
 const PAIRING_PHONE_MAX_DIGITS = 15;
-// What a number may be written with besides its digits: a leading plus, spaces (a no-break space included), hyphens,
-// dots and parentheses.
-const PHONE_FORMATTING = /^\+?[\d\s().-]*$/;
+// What a number may be written with besides its digits: a plus, spaces (a no-break space included), hyphens, dots and
+// parentheses. The plus comes first, but may follow an opening parenthesis, as in "(+62) 812-3456-7890".
+const PHONE_FORMATTING = /^[\s(]*\+?[\d\s().-]*$/;
 // A number written that way is read to its digits. Any other text (a letter, an extension, a sentence around the
 // number) is kept as pasted and refused, since joining its digit groups would make a number nobody typed.
 const readPairingPhone = (text: string) => {

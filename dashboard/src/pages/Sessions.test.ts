@@ -815,6 +815,8 @@ test('the pairing phone field accepts formatted numbers whole and refuses text w
     ['(021) 555 0100', '0215550100'],
     ['+62\u00a0812.3456.7890', '6281234567890'],
     ['  +1 (555) 123-4567 ', '15551234567'],
+    ['(+62) 812-3456-7890', '6281234567890'],
+    ['(+1) 5551234567', '15551234567'],
   ];
   for (const [pasted, digits] of accepted) {
     fireEvent.change(phoneInput, { target: { value: pasted } });
@@ -828,6 +830,7 @@ test('the pairing phone field accepts formatted numbers whole and refuses text w
     '+62 812-3456-7890 ext. 12',
     '62812abc3456',
     '+62 812 +3456 7890',
+    '(+62) +812-3456-7890',
   ];
   for (const pasted of refused) {
     fireEvent.change(phoneInput, { target: { value: pasted } });
