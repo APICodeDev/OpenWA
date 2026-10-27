@@ -70,7 +70,19 @@ function restrictionTitle(restriction: AccountRestriction, t: TFunction): string
 
 // The most digits a phone number has. A longer paste is kept whole and refused, never cut to a number nobody typed.
 const PAIRING_PHONE_MAX_DIGITS = 15;
-const pairingDigits = (text: string) => normalizePhoneText(text).replace(/\D/g, '');
+// What a number may be written with besides its digits: a leading plus, spaces (a no-break space included), hyphens,
+// dots and parentheses.
+const PHONE_FORMATTING = /^\+?[\d\s().-]*$/;
+// A number written that way is read to its digits. Any other text (a letter, an extension, a sentence around the
+// number) is kept as pasted and refused, since joining its digit groups would make a number nobody typed.
+const readPairingPhone = (text: string) => {
+  const normalized = normalizePhoneText(text);
+  return PHONE_FORMATTING.test(normalized.trim()) ? normalized.replace(/\D/g, '') : normalized;
+};
+const pairingPhoneRefused = (text: string) => {
+  const normalized = normalizePhoneText(text);
+  return !PHONE_FORMATTING.test(normalized.trim()) || normalized.replace(/\D/g, '').length > PAIRING_PHONE_MAX_DIGITS;
+};
 
 export function Sessions() {
   const { t } = useTranslation();
@@ -650,7 +662,7 @@ export function Sessions() {
     }
   };
 
-  const pairingPhoneTooLong = pairingDigits(phoneNumber).length > PAIRING_PHONE_MAX_DIGITS;
+  const pairingPhoneInvalid = pairingPhoneRefused(phoneNumber);
   const filteredSessions = filterSessions(sessions, searchQuery, statusFilter);
   // A failed read says nothing about how many sessions there are: with none held, the banner is the only message.
   const listUnknown = listFailed && sessions.length === 0;
@@ -900,18 +912,18 @@ export function Sessions() {
                       // A composition in progress is left as typed, since rewriting it garbles what the IME commits;
                       // it is read when the composition ends. Pasted and directly typed text is read at once.
                       // No native maxLength: it counts the separators of a pasted "+62 812-3456-7890" and cuts it
-                      // short. A paste of more than 15 digits is kept and refused below, with no request.
-                      aria-invalid={pairingPhoneTooLong || undefined}
-                      aria-describedby={pairingPhoneTooLong ? 'pairing-phone-error' : undefined}
+                      // short. A paste of more than 15 digits, or with other characters, is kept and refused below.
+                      aria-invalid={pairingPhoneInvalid || undefined}
+                      aria-describedby={pairingPhoneInvalid ? 'pairing-phone-error' : undefined}
                       onChange={e =>
                         setPhoneNumber(
-                          (e.nativeEvent as InputEvent).isComposing ? e.target.value : pairingDigits(e.target.value),
+                          (e.nativeEvent as InputEvent).isComposing ? e.target.value : readPairingPhone(e.target.value),
                         )
                       }
-                      onCompositionEnd={e => setPhoneNumber(pairingDigits(e.currentTarget.value))}
-                      onKeyDown={e => e.key === 'Enter' && !pairingPhoneTooLong && handleGeneratePairingCode()}
+                      onCompositionEnd={e => setPhoneNumber(readPairingPhone(e.currentTarget.value))}
+                      onKeyDown={e => e.key === 'Enter' && !pairingPhoneInvalid && handleGeneratePairingCode()}
                     />
-                    {pairingPhoneTooLong && (
+                    {pairingPhoneInvalid && (
                       <p id="pairing-phone-error" className="input-error" role="alert">
                         {t('sessions.pairing.invalidPhone')}
                       </p>

@@ -756,21 +756,29 @@ test('the pairing phone field leaves a composition in progress alone and reads i
   assert.equal(phoneInput.value, '628123456789');
 });
 
-// A native maxLength counts the separators of a pasted number and cuts it before the page reads it: "+62 812-3456-7890"
-// is 17 characters but 12 digits. And cutting a number of more than 15 digits would leave a valid-looking one nobody
-// typed, so it is kept whole, refused in the field, and no pairing code is requested for it.
-test('the pairing phone field keeps a formatted paste whole and refuses one of more than 15 digits', async () => {
+async function openPairingPhoneField() {
   const { screen, fireEvent, within } = rtl;
   resetFetchCalls();
   renderSessions();
-
   await screen.findByText('new-device');
   const qrCard = screen.getByText('new-device').closest('.session-card') as HTMLElement;
   fireEvent.click(within(qrCard).getByRole('button', { name: 'Show QR' }));
   await screen.findByAltText('QR');
   fireEvent.click(screen.getByRole('tab', { name: 'Link with Phone Number' }));
-  const phoneInput = screen.getByLabelText('Phone Number') as HTMLInputElement;
-  const generate = screen.getByRole('button', { name: 'Generate Pairing Code' }) as HTMLButtonElement;
+  return {
+    phoneInput: screen.getByLabelText('Phone Number') as HTMLInputElement,
+    generate: screen.getByRole('button', { name: 'Generate Pairing Code' }) as HTMLButtonElement,
+  };
+}
+
+const pairingCodeRequests = () => fetchCalls.filter(c => c.path.endsWith('/pairing-code'));
+
+// A native maxLength counts the separators of a pasted number and cuts it before the page reads it: "+62 812-3456-7890"
+// is 17 characters but 12 digits. And cutting a number of more than 15 digits would leave a valid-looking one nobody
+// typed, so it is kept whole, refused in the field, and no pairing code is requested for it.
+test('the pairing phone field keeps a formatted paste whole and refuses one of more than 15 digits', async () => {
+  const { screen, fireEvent } = rtl;
+  const { phoneInput, generate } = await openPairingPhoneField();
 
   assert.equal(phoneInput.hasAttribute('maxlength'), false, 'a native maxLength cuts a pasted formatted number');
   fireEvent.change(phoneInput, { target: { value: '+62 812-3456-7890' } });
@@ -788,15 +796,53 @@ test('the pairing phone field keeps a formatted paste whole and refuses one of m
   assert.equal(generate.disabled, true);
 
   fireEvent.keyDown(phoneInput, { key: 'Enter' });
-  assert.equal(
-    fetchCalls.some(c => c.path.endsWith('/pairing-code')),
-    false,
-    'a pairing code was requested for a number of more than 15 digits',
-  );
+  assert.equal(pairingCodeRequests().length, 0, 'a pairing code was requested for a number of more than 15 digits');
 
   fireEvent.change(phoneInput, { target: { value: '6281234567890' } });
   assert.equal(phoneInput.getAttribute('aria-invalid'), null);
   assert.equal(screen.queryByText(/Enter a valid phone number/) === null, true);
+  assert.equal(generate.disabled, false);
+});
+
+// Joining the digit groups of text around a number makes a valid-looking one nobody typed: "Order 12 call +62 ..." and
+// "... ext. 12" both hold 15 digits. Only digits and the usual formatting are read; anything else is kept and refused.
+test('the pairing phone field accepts formatted numbers whole and refuses text with other characters', async () => {
+  const { screen, fireEvent } = rtl;
+  const { phoneInput, generate } = await openPairingPhoneField();
+
+  const accepted: Array<[string, string]> = [
+    ['+62 812-3456-7890', '6281234567890'],
+    ['(021) 555 0100', '0215550100'],
+    ['+62\u00a0812.3456.7890', '6281234567890'],
+    ['  +1 (555) 123-4567 ', '15551234567'],
+  ];
+  for (const [pasted, digits] of accepted) {
+    fireEvent.change(phoneInput, { target: { value: pasted } });
+    assert.equal(phoneInput.value, digits, `${pasted} was not read whole`);
+    assert.equal(phoneInput.getAttribute('aria-invalid'), null, `${pasted} was refused`);
+    assert.equal(generate.disabled, false, `${pasted} left Generate disabled`);
+  }
+
+  const refused = [
+    'Order 12 call +62 812-3456-7890',
+    '+62 812-3456-7890 ext. 12',
+    '62812abc3456',
+    '+62 812 +3456 7890',
+  ];
+  for (const pasted of refused) {
+    fireEvent.change(phoneInput, { target: { value: pasted } });
+    assert.equal(phoneInput.value, pasted, `${pasted} was rewritten to a number nobody typed`);
+    assert.equal(phoneInput.getAttribute('aria-invalid'), 'true', `${pasted} was not marked invalid`);
+    assert.equal(screen.getAllByText(/Enter a valid phone number/).length, 1, `${pasted} showed no single error`);
+    assert.equal(generate.disabled, true, `${pasted} left Generate enabled`);
+    fireEvent.keyDown(phoneInput, { key: 'Enter' });
+    assert.equal(pairingCodeRequests().length, 0, `a pairing code was requested for ${pasted}`);
+  }
+
+  // Cleaning the text up makes it a number again.
+  fireEvent.change(phoneInput, { target: { value: '+62 812-3456-7890' } });
+  assert.equal(phoneInput.value, '6281234567890');
+  assert.equal(phoneInput.getAttribute('aria-invalid'), null);
   assert.equal(generate.disabled, false);
 });
 
