@@ -7,8 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { isUUID } from 'class-validator';
-import { EntityTarget, EntityManager, In, IsNull, Repository, DataSource } from 'typeorm';
+import { EntityTarget, EntityManager, In, IsNull, Raw, Repository, DataSource } from 'typeorm';
 import { Session, SessionStatus } from './entities/session.entity';
 import { Message } from '../message/entities/message.entity';
 import { MessageBatch } from '../message/entities/message-batch.entity';
@@ -957,14 +956,16 @@ export class SessionEngineControls {
       // carried before 0.23.5, and the boot migration keeps a legacy one it could not rename. Unless
       // it is another session's id, whatever its shape (an import accepts any safe key): the dirs it
       // names are then that session's live login, the same exact-id guard the migration keeps. A
-      // failed lookup withholds the name rather than fail a delete that has already committed. On
-      // PostgreSQL the id column is a uuid, so a name of any other shape is no session's id there, and
-      // looking it up would fail rather than miss.
+      // failed lookup withholds the name rather than fail a delete that has already committed. The id
+      // column is varchar on PostgreSQL too (an import keeps any safe key), so a name of any shape can be
+      // a session's id there; it is compared as text, which also covers a column typed uuid.
       // Keyed by `id`, not `session.id`: TypeORM clears a removed entity's primary key, so session.id
       // is undefined here and the purge would refuse it as an unsafe key and remove nothing.
-      const nameIsAnId =
-        (dataSource.options.type !== 'postgres' || isUUID(session.name)) &&
-        (await this.sessionRepository.exists({ where: { id: session.name } }).catch(() => true));
+      const legacyId =
+        dataSource.options.type === 'postgres'
+          ? Raw(alias => `CAST(${alias} AS text) = :legacyId`, { legacyId: session.name })
+          : session.name;
+      const nameIsAnId = await this.sessionRepository.exists({ where: { id: legacyId } }).catch(() => true);
       await this.engineFactory.purgeSessionData(id, nameIsAnId ? undefined : session.name);
     } catch (error) {
       // The session survives, but the write scopes closed above stay retired for good: a bulk batch

@@ -449,6 +449,49 @@ describe('SessionService', () => {
     // The name rule lets a session be named after another session's id, whatever that id looks like
     // (an import accepts any safe key). The dirs that name points at are then the other session's
     // live credentials, so the name is kept out of the purge.
+    it.each(['better-sqlite3', 'postgres'] as const)(
+      "delete() preserves another imported session's id-keyed directories on %s",
+      async dialect => {
+        Object.assign(dataSource, { options: { type: dialect } });
+        (repository.findOne as jest.Mock).mockResolvedValue(
+          createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
+        );
+        (repository.exists as jest.Mock).mockResolvedValue(true);
+        await service.delete('sess-uuid-1');
+        expect(repository.exists).toHaveBeenCalled();
+        expect((engineFactory.purgeSessionData as jest.Mock).mock.calls).toEqual([['sess-uuid-1', undefined]]);
+      },
+    );
+
+    it.each([false, true])('executes the text ID lookup before legacy cleanup (collision: %s)', async collision => {
+      // The portable cast runs through the real TypeORM parser and SQLite driver.
+      const sql = new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [Session],
+        synchronize: true,
+      });
+      await sql.initialize();
+      try {
+        const sessions = sql.getRepository(Session);
+        if (collision) await sessions.save({ id: 'imported-bob', name: 'other-session' });
+        Object.assign(dataSource, { options: { type: 'postgres' } });
+        (repository.findOne as jest.Mock).mockResolvedValue(
+          createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
+        );
+        (repository.exists as jest.Mock).mockImplementation((options: Parameters<typeof sessions.exists>[0]) =>
+          sessions.exists(options),
+        );
+        await service.delete('sess-uuid-1');
+        await expect((repository.exists as jest.Mock).mock.results[0].value).resolves.toBe(collision);
+        expect((engineFactory.purgeSessionData as jest.Mock).mock.calls).toEqual([
+          ['sess-uuid-1', collision ? undefined : 'imported-bob'],
+        ]);
+      } finally {
+        await sql.destroy();
+      }
+    });
+
     it("delete() keeps the name out of the purge when it is another session's id", async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(
         createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
