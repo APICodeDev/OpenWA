@@ -79,7 +79,11 @@ describe('IngressProcessor', () => {
       dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
     };
     const failures = { save: jest.fn().mockRejectedValue(new Error('db down')), count: jest.fn().mockResolvedValue(0) };
-    const queue = { add: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(1) };
+    const queue = {
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
+      add: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(1),
+    };
     const proc = new IngressProcessor(
       loader as never,
       failures as never,
@@ -115,6 +119,59 @@ describe('IngressProcessor', () => {
     };
     expect(await requeueFrom('ing-abc-requeued-1')).toBe('ing-abc-requeued-2');
     expect(await requeueFrom('ing-abc-requeued-2')).toBe('ing-abc-requeued-1');
+  });
+
+  it.each(['final attempt', 'stalled event'])('bounds re-queue readiness after a %s', async mode => {
+    const original = process.env.REDIS_CONNECT_TIMEOUT_MS;
+    process.env.REDIS_CONNECT_TIMEOUT_MS = '100';
+    jest.useFakeTimers();
+    try {
+      const ready = new Promise<void>(() => undefined);
+      const queue = {
+        waitUntilReady: () => ready,
+        remove: jest.fn(() => ready.then(() => 1)),
+        add: jest.fn(),
+      };
+      const proc = new IngressProcessor(
+        {
+          isRestorePending: () => false,
+          dispatchWebhookForInstance: jest.fn().mockRejectedValue(new Error('boom')),
+        } as never,
+        {
+          save: jest.fn().mockRejectedValue(new Error('db down')),
+        } as never,
+        { execute: jest.fn().mockResolvedValue({ continue: true }) } as never,
+        queue as never,
+        {} as never,
+      );
+      const failed = job({
+        id: 'ing-abc',
+        name: 'ingress',
+        attemptsMade: 2,
+        ...(mode === 'stalled event' ? { deferredFailure: 'job stalled more than allowable limit' } : {}),
+      });
+      let outcome: string | undefined;
+      const pending =
+        mode === 'final attempt'
+          ? proc.process(failed)
+          : proc.onWorkerFailed(failed, new Error('job stalled more than allowable limit'));
+      void pending.then(
+        () => (outcome = 'resolved'),
+        (error: Error) => (outcome = error.message),
+      );
+
+      await jest.advanceTimersByTimeAsync(99);
+      expect(outcome).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+
+      expect(outcome).toBe(mode === 'final attempt' ? 'boom' : 'resolved');
+      expect(queue.remove).not.toHaveBeenCalled();
+      expect(queue.add).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+      if (original === undefined) delete process.env.REDIS_CONNECT_TIMEOUT_MS;
+      else process.env.REDIS_CONNECT_TIMEOUT_MS = original;
+    }
   });
 
   // The original job of a re-queued delivery stays 'failed', which the reconciler reads as dead-lettered:
@@ -357,7 +414,11 @@ describe('IngressProcessor stall exhaustion (worker failed event)', () => {
   const setup = () => {
     const failures = { save: jest.fn().mockResolvedValue(undefined), count: jest.fn().mockResolvedValue(0) };
     const hooks = { execute: jest.fn().mockResolvedValue({ continue: true }) };
-    const queue = { add: jest.fn().mockResolvedValue(undefined), remove: jest.fn().mockResolvedValue(0) };
+    const queue = {
+      waitUntilReady: jest.fn().mockResolvedValue(undefined),
+      add: jest.fn().mockResolvedValue(undefined),
+      remove: jest.fn().mockResolvedValue(0),
+    };
     const proc = new IngressProcessor({} as never, failures as never, hooks as never, queue as never, {} as never);
     return { proc, failures, hooks, queue };
   };

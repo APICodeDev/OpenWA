@@ -4,7 +4,7 @@ import { DelayedError, Job, Queue, RATE_LIMIT_ERROR } from 'bullmq';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { QUEUE_NAMES } from '../queue-names';
-import { workerConnectionOptions, ingressWorkerConcurrency } from '../redis-connection';
+import { workerConnectionOptions, ingressWorkerConcurrency, producerReady } from '../redis-connection';
 import { closeWorkerIfStarted, MAX_WORKER_CLOSE_WAIT_MS, startedWorker } from './close-worker';
 import { IntegrationDeliveryFailure } from '../../integration/entities/integration-delivery-failure.entity';
 import { IngressEvent } from '../../integration/entities/ingress-event.entity';
@@ -224,6 +224,9 @@ export class IngressProcessor extends WorkerHost {
       try {
         const [first, second] = requeuedJobIds(String(job.id).replace(REQUEUED_JOB_ID, ''));
         const jobId = String(job.id) === first ? second : first;
+        // The producer queue holds its calls until its first connect, which the worker's own connection does not
+        // wait for; bounded, so the recovery gives up instead of waiting on a Redis that never answered it.
+        await producerReady(this.ingressQueue);
         await this.ingressQueue.remove(jobId);
         await this.ingressQueue.add(job.name, d, {
           jobId,
