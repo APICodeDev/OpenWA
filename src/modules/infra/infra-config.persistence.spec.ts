@@ -21,7 +21,15 @@ const database = {
   DATABASE_USERNAME: 'app',
   DATABASE_PASSWORD: 'DummyPassword123456',
 };
-const pinKeys = ['DATABASE_TYPE', 'DATABASE_HOST', 'DATABASE_SSL', 'REDIS_HOST', 'S3_ENDPOINT'];
+const pinKeys = [
+  'DATABASE_TYPE',
+  'DATABASE_HOST',
+  'DATABASE_SSL',
+  'REDIS_HOST',
+  'REDIS_TLS',
+  'REDIS_USERNAME',
+  'S3_ENDPOINT',
+];
 let directory: string;
 let file: string;
 let previous: Array<[string, string | undefined]>;
@@ -241,6 +249,61 @@ for (const example of invalidBootCases) {
     expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
   });
 }
+
+describe('the save refuses what the boot would refuse beside the built-in Redis and an S3 store', () => {
+  const builtInRedis = { redis: { enabled: true, builtIn: true } };
+  const pin = (key: string, value: string, origin: string) => {
+    process.env[key] = value;
+    recordOsEnvKeys(origin === 'host' ? { [key]: value } : {});
+    recordPinnedEnvKeys({ [key]: value });
+  };
+  const refused = async (body: unknown, message: RegExp) => {
+    const before = actualFs.readFileSync(file);
+    const input = await admitted(body, SaveConfigDto);
+    expect(() => build().controller.saveConfig(input)).toThrow(message);
+    expect(actualFs.readFileSync(file)).toEqual(before);
+    expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+  };
+
+  it.each(['host', 'project file'])('refuses a true %s REDIS_TLS pin', async origin => {
+    seed({ REDIS_ENABLED: 'true' });
+    pin('REDIS_TLS', 'true', origin);
+    await refused(builtInRedis, /REDIS_TLS=true cannot/);
+  });
+
+  it.each(['REDIS_ENABLED', 'QUEUE_ENABLED', 'CACHE_ENABLED'])(
+    'refuses a named REDIS_USERNAME pin for the %s consumer',
+    async consumer => {
+      seed({ REDIS_ENABLED: consumer === 'REDIS_ENABLED' ? 'true' : 'false', [consumer]: 'true' });
+      pin('REDIS_USERNAME', 'worker', 'host');
+      await refused(
+        { redis: { enabled: consumer === 'REDIS_ENABLED', builtIn: true } },
+        /REDIS_USERNAME must be unset/,
+      );
+    },
+  );
+
+  it('refuses an S3 endpoint that is not an http(s) URL', async () => {
+    await refused(
+      {
+        storage: {
+          type: 's3',
+          s3Endpoint: 'minio:9000',
+          s3AccessKey: 'AKIAREALKEY123456',
+          s3SecretKey: 'RealSecretKey1234567890',
+          s3Bucket: 'b',
+        },
+      },
+      /S3_ENDPOINT must be an absolute/,
+    );
+  });
+
+  it('still saves a switch back to local storage over a stored endpoint without a scheme', async () => {
+    seed({ STORAGE_TYPE: 's3', S3_ENDPOINT: 'minio:9000' });
+    expect((await save({ storage: { type: 'local' } })).saved).toBe(true);
+    expect(dotenv.parse(actualFs.readFileSync(file))).not.toHaveProperty('S3_ENDPOINT');
+  });
+});
 
 it('accepts a valid partial PostgreSQL change and preserves an absent pool value', async () => {
   seed({ ...database, DATABASE_POOL_SIZE: '17' });
