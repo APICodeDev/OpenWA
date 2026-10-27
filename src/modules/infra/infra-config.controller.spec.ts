@@ -10,6 +10,7 @@ jest.mock('fs', () => {
   return {
     ...actual,
     writeFileSync: jest.fn(),
+    renameSync: jest.fn(),
     // saveConfig now writes the generated env via writeSecretFile, which chmods 0600 — mock it
     // so the secret-hygiene path never touches the real filesystem.
     chmodSync: jest.fn(),

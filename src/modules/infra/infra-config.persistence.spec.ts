@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { ValidationPipe } from '@nestjs/common';
+import { GLOBAL_VALIDATION_OPTIONS } from '../../config/app-validation';
 import { recordOsEnvKeys, recordPinnedEnvKeys } from '../../config/env-precedence';
+import { SaveConfigDto } from './dto/save-config.dto';
 import { InfraConfigController } from './infra-config.controller';
 
 jest.mock('fs', () => {
@@ -11,6 +14,12 @@ jest.mock('fs', () => {
 
 const actualFs = jest.requireActual<typeof import('fs')>('fs');
 const dotenv = jest.requireActual<typeof import('dotenv')>('dotenv');
+const database = {
+  DATABASE_TYPE: 'postgres',
+  DATABASE_HOST: 'db.example.invalid',
+  DATABASE_USERNAME: 'app',
+  DATABASE_PASSWORD: 'DummyPassword123456',
+};
 const pinKeys = ['DATABASE_TYPE', 'DATABASE_HOST', 'DATABASE_SSL', 'REDIS_HOST', 'S3_ENDPOINT'];
 let directory: string;
 let file: string;
@@ -66,6 +75,14 @@ function build(available = true) {
   };
 }
 
+async function admitted<T>(body: unknown, metatype: new () => T): Promise<T> {
+  return new ValidationPipe(GLOBAL_VALIDATION_OPTIONS).transform(body, { type: 'body', metatype }) as Promise<T>;
+}
+
+async function save(body: unknown) {
+  return build().controller.saveConfig(await admitted(body, SaveConfigDto));
+}
+
 it.each([true, false])('preserves the SQLite file path with an explicit type %s', explicit => {
   seed({ DATABASE_NAME: './data/customer.sqlite' });
   const result = build().controller.saveConfig({
@@ -81,4 +98,43 @@ it('drops the PostgreSQL database name when leaving PostgreSQL for SQLite', () =
   const result = build().controller.saveConfig({ database: { type: 'sqlite' } });
   expect(result.saved).toBe(true);
   expect(dotenv.parse(actualFs.readFileSync(file))).not.toHaveProperty('DATABASE_NAME');
+});
+
+it('preserves the old overlay after a bounded partial write failure and lets a retry succeed', async () => {
+  seed({ ...database, PUPPETEER_HEADLESS: 'true' });
+  const before = actualFs.readFileSync(file);
+  jest.mocked(fs.writeFileSync).mockImplementationOnce((target, data, options) => {
+    actualFs.writeFileSync(
+      target,
+      (typeof data === 'string'
+        ? Buffer.from(data)
+        : Buffer.from(data.buffer, data.byteOffset, data.byteLength)
+      ).subarray(0, 64),
+      options,
+    );
+    throw Object.assign(new Error('bounded write failure'), { code: 'ENOSPC' });
+  });
+  expect((await save({ engine: { headless: false } })).saved).toBe(false);
+  expect(actualFs.readFileSync(file)).toEqual(before);
+  expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+  expect((await save({ engine: { headless: false } })).saved).toBe(true);
+  expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('false');
+});
+
+it('preserves the old overlay and removes staging after a replacement failure', async () => {
+  const before = actualFs.readFileSync(file);
+  jest.mocked(fs.renameSync).mockImplementationOnce(() => {
+    throw new Error('replacement denied');
+  });
+  expect((await save({ engine: { headless: false } })).saved).toBe(false);
+  expect(actualFs.readFileSync(file)).toEqual(before);
+  expect(actualFs.readdirSync(path.dirname(file))).toEqual(['.env.generated']);
+});
+
+it('creates and replaces the overlay owner-only', async () => {
+  actualFs.unlinkSync(file);
+  expect((await save({ engine: { headless: false } })).saved).toBe(true);
+  expect((await save({ engine: { headless: true } })).saved).toBe(true);
+  if (process.platform !== 'win32') expect(actualFs.statSync(file).mode & 0o777).toBe(0o600);
+  expect(dotenv.parse(actualFs.readFileSync(file)).PUPPETEER_HEADLESS).toBe('true');
 });

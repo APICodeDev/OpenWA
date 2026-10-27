@@ -32,6 +32,7 @@ import { SaveConfigDto } from './dto/save-config.dto';
 import { assertNoDefaultSecretsInProduction } from '../../config/bootstrap-security';
 import { BLANK_SHADOWED_ENV_KEYS, isEnvPinned, isOsProvidedEnv } from '../../config/env-precedence';
 import { resolveStorageRoot } from '../../config/storage-root';
+import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
@@ -395,7 +396,20 @@ export class InfraConfigController {
 
     // Write to data/ so it persists across container restarts. Owner-only (0600): this file holds
     // the DB/S3/Redis credentials, so it must not be world-readable between save and next restart.
-    writeSecretFile(envPath, contents);
+    // Staged beside the target and renamed over it: a write that fails part-way (disk full) would
+    // otherwise leave a truncated overlay for the next boot to load.
+    const staged = `${envPath}.${randomUUID()}.tmp`;
+    try {
+      writeSecretFile(staged, contents);
+      fs.renameSync(staged, envPath);
+    } catch (error) {
+      try {
+        fs.rmSync(staged, { force: true });
+      } catch {
+        // Keep the original write or rename error if cleanup also fails.
+      }
+      throw error;
+    }
     this.logger.log('Configuration saved', { envPath });
   }
 
