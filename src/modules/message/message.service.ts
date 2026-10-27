@@ -405,7 +405,9 @@ export class MessageService implements PluginMessagePort {
 
     if (after !== undefined) {
       // A selection cursor must name a row inside this same selection, not merely a row from the
-      // session. Otherwise an unrelated chat/time/direction could silently truncate a valid walk.
+      // session. Otherwise an unrelated time/direction/type could silently truncate a valid walk. A chat or
+      // sender filter is left out: its candidate set can change between pages (a lid mapping learned or lost),
+      // and the cursor is only a position in time, so a row stored under an alias must still anchor the walk.
       if (
         (messageTimeOrder ||
           options.since !== undefined ||
