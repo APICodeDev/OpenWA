@@ -16,7 +16,7 @@ import { producerReady } from '../queue/redis-connection';
 import { constantTimeEqual } from '../../common/security/constantTimeEqual';
 import { limiterKeyForIp, resolveClientIp, type RequestLike } from '../../common/utils/ip';
 import { SlidingWindowLimiter } from '../events/ws-rate-limit';
-import { StatsService } from '../stats/stats.service';
+import { StatsService, type OverviewStats } from '../stats/stats.service';
 import { getWebhookDeliveryFailuresTotal } from '../../common/metrics/webhook-delivery-metrics';
 import {
   getSessionReconnectAttemptsTotal,
@@ -47,6 +47,9 @@ export const METRICS_RENDER_TTL_MS = 5000;
 /** Bound on each queue's job-count read, so a connected but unresponsive Redis cannot stall the scrape. */
 export const QUEUE_READ_TIMEOUT_MS = 2000;
 
+/** Budget for waiting on database-derived statistics during a scrape. */
+export const STATS_READ_TIMEOUT_MS = 2000;
+
 /** The job states reported per queue. `completed` is left out: removeOnComplete trims it, so it means nothing. */
 const QUEUE_JOB_STATES = ['wait', 'active', 'delayed', 'failed'] as const;
 
@@ -62,6 +65,7 @@ export class MetricsService implements OnModuleDestroy {
   private readonly logger = createLogger('MetricsService');
 
   private cachedRender: { at: number; text: string } | null = null;
+  private pendingOverview: Promise<OverviewStats | null> | null = null;
 
   /**
    * The route skips the shared throttler so a scrape interval costs no request budget, which left
@@ -138,16 +142,8 @@ export class MetricsService implements OnModuleDestroy {
     // too, and `up` conflated "process dead" with "database unreachable": the exact incident this
     // endpoint exists to describe. The series that need no database are emitted either way, and the
     // ones that do are OMITTED rather than reported as zero, because a zero would fire an alert
-    // claiming every session had dropped.
-    let overview: Awaited<ReturnType<StatsService['getOverview']>> | null = null;
-    try {
-      overview = await this.statsService.getOverview();
-    } catch (err) {
-      this.logger.warn(
-        `Metrics scrape could not read stats; database-derived series omitted: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    const queueCounts = await this.readQueueCounts();
+    // claiming every session had dropped. A read that merely hangs is bounded the same way.
+    const [overview, queueCounts] = await Promise.all([this.readOverviewOrNull(), this.readQueueCounts()]);
     const mem = process.memoryUsage();
     const lines: string[] = [];
 
@@ -258,6 +254,41 @@ export class MetricsService implements OnModuleDestroy {
     const text = lines.join('\n') + '\n';
     this.cachedRender = { at: now, text };
     return text;
+  }
+
+  /**
+   * The overview, or null when it failed or did not settle within STATS_READ_TIMEOUT_MS. The wait is shared
+   * until the read itself settles, so scrapes arriving behind a stuck read neither queue up nor each start a
+   * deadline of their own.
+   */
+  private readOverviewOrNull(): Promise<OverviewStats | null> {
+    if (this.pendingOverview) return this.pendingOverview;
+    const work = Promise.resolve().then(() => this.statsService.getOverview());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waiting = Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('statistics read timed out')), STATS_READ_TIMEOUT_MS);
+      }),
+    ]).then(
+      overview => {
+        clearTimeout(timer);
+        return overview;
+      },
+      err => {
+        clearTimeout(timer);
+        this.logger.warn(
+          `Metrics scrape could not read stats; database-derived series omitted: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      },
+    );
+    this.pendingOverview = waiting;
+    const clear = (): void => {
+      if (this.pendingOverview === waiting) this.pendingOverview = null;
+    };
+    void work.then(clear, clear);
+    return waiting;
   }
 
   /**
