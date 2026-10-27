@@ -795,13 +795,26 @@ export class SessionEngineLifecycle {
         // Do NOT port this reorder to delete()/stop()/forceKill(): there, engines.has(id) staying
         // TRUE for the duration of the teardown await is the sole deterministic block on a concurrent
         // start() (start() clears stoppingSessions rather than rejecting on it), so delete-first would
-        // open a start()-during-teardown orphan-engine window. Verified in the teardown-ordering audit.
+        // open a start()-during-teardown orphan-engine window.
         const wasLive = this.engines.deleteIfLive(id, engine);
+        const reconnectState = this.reconnectStates.get(id);
+        const reconnectAttempt = reconnectState?.started;
+        // The teardown below can outlast a stop, a start or a later reconnect attempt, whose engine and
+        // status this deadline must then leave alone.
+        const isCurrentTimeout = (): boolean =>
+          wasLive &&
+          !this.engines.has(id) &&
+          this.reconnectStates.get(id) === reconnectState &&
+          reconnectState?.started === reconnectAttempt;
         if (wasLive) this.sessionErrors.set(id, err.message);
         // Force-kill whatever got launched so a retry doesn't collide with an orphaned browser.
         // teardownEngineSafely is itself time-bound, so this can't wedge a second time.
         await this.teardownEngineSafely(id, engine, e => e.forceDestroy(), 'force-destroy');
-        if (wasLive) await this.updateStatus(id, SessionStatus.DISCONNECTED);
+        if (isCurrentTimeout()) {
+          await this.sessionRepository.update(id, { status: SessionStatus.DISCONNECTED });
+          // A replacement may reach READY while the database response is still pending.
+          if (isCurrentTimeout()) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+        }
         // Map to a diagnostic 504 like the auth-timeout branch below, so a wedged init doesn't escape as a
         // bare 500 (#733 follow-up). This deadline covers EVERY cause and cannot tell them apart: the
         // auth-timeout below only fires once the page has LOADED (whatsapp-web.js navigates with
