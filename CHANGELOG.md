@@ -365,6 +365,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `GET /api/sessions/{sessionId}/contacts/profile-pictures` leaves out an id it skipped after another lookup timed out, where an id without a picture or with a failed lookup stays `null`; a client that indexes the answer by every requested id must handle a missing key.
 - A plugin catalog with an entry whose `id`, `name`, `version` or text field is not text is refused with `400`, naming the entry; the default catalog is unaffected, and a private `PLUGIN_CATALOG_URL` catalog must correct the entry.
 - `POST /api/integration/instances/{pluginId}/{instanceId}/redrive` replays and counts only the dead letters written under the instance's current session binding; rows of an earlier binding stay in the dead-letter table.
+- A per-session plugin config or an integration instance that sets a `net.allowConfigHosts` key (for example `baseUrl`) to another origin than the layer beneath no longer inherits that layer's `secret` fields, and a list holding one is not inherited either; put the secret in that config or instance, or the plugin reaches the new host without it. A deployment that shared one token across per-session hosts must copy the token to each.
 
 ### Security
 
@@ -380,6 +381,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Disconnect a WebSocket whose API key's stored expiry stops parsing, as REST already refuses it.
 - The message list no longer returns a row that was replaced between page selection and read and no longer matches the requested chat, time window, direction or type; for a chat-restricted key it could be another chat's message.
 - `scripts/restore.sh` also refuses an archive configuration that puts the admin key file, `.env.generated` or `database.sql` on a directory the restore refills, where a link planted in the archive made the copy write outside the data directory.
+- A per-session plugin config or an integration instance that points a `net.allowConfigHosts` key at another origin than the layer beneath no longer receives that layer's secrets, where a session-restricted admin key could send the operator's stored tokens to a host of its choosing.
 
 ## [0.25.0] - 2026-10-15
 
