@@ -283,6 +283,7 @@
   line-height: 1.3;
 }
 
+/* Cut by its own direction and hugging the start edge, as a chat name is (see .chat-item-name). */
 .chats-page .session-name {
   font-size: 1rem;
   font-weight: 500;
@@ -290,6 +291,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .session-phone {
