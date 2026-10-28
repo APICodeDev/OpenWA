@@ -149,7 +149,7 @@ afterEach(() => {
 test('NumberChecker: renders single check form and tabs', () => {
   const { getByText, getByPlaceholderText } = renderComponent();
   assert.ok(getByText('Check Single Account'));
-  assert.ok(getByPlaceholderText('e.g. 919876543210 or 6281234567890 (with country code)'));
+  assert.ok(getByPlaceholderText('e.g. 919876543210 or 6281234567890'));
 });
 
 test('NumberChecker: switches to bulk / batch tab when clicked', () => {

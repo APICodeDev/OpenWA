@@ -238,6 +238,9 @@
   gap: 6px;
 }
 
+/* Text that is cut with an ellipsis takes its direction from its own characters (unicode-bidi: plaintext).
+   Under an inherited direction the ellipsis eats the wrong end of a name written the other way round: a
+   Latin name in an Arabic page lost its first letters and kept its last ("...hi Armyndharis"). */
 .chats-page .chat-item-name {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -245,6 +248,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .chat-item-time {
@@ -266,6 +270,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
   max-width: 180px;
 }
 
@@ -423,6 +428,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 /* Prettified phone (or "Group" / "Private contact" label for non-personal JIDs). Primary subtitle
@@ -993,6 +999,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .preview-filesize {
@@ -1467,6 +1474,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
   max-width: 250px;
 }
 
@@ -1576,6 +1584,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .replying-to-body {
@@ -1584,6 +1593,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .btn-close-reply {
@@ -2606,6 +2616,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .group-info-member .number {

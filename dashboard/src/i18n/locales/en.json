@@ -1026,7 +1026,7 @@
     "single": {
       "title": "Check Single Account",
       "phoneLabel": "Phone Number",
-      "phonePlaceholder": "e.g. 919876543210 or 6281234567890 (with country code)",
+      "phonePlaceholder": "e.g. 919876543210 or 6281234567890",
       "check": "Check",
       "checking": "Checking...",
       "autoPrefix": "Auto-prefix <strong>+91</strong> for 10-digit numbers (keep 12-digit numbers as-is)",

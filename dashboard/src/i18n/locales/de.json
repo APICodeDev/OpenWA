@@ -1026,7 +1026,7 @@
     "single": {
       "title": "Einzelnes Konto prüfen",
       "phoneLabel": "Telefonnummer",
-      "phonePlaceholder": "z. B. 919876543210 oder 6281234567890 (mit Ländervorwahl)",
+      "phonePlaceholder": "z. B. 919876543210 oder 6281234567890",
       "check": "Prüfen",
       "checking": "Wird geprüft...",
       "autoPrefix": "<strong>+91</strong> bei 10-stelligen Nummern automatisch voranstellen (12-stellige Nummern bleiben unverändert)",

@@ -1026,7 +1026,7 @@
     "single": {
       "title": "Periksa Satu Akun",
       "phoneLabel": "Nomor Telepon",
-      "phonePlaceholder": "mis. 919876543210 atau 6281234567890 (dengan kode negara)",
+      "phonePlaceholder": "mis. 919876543210 atau 6281234567890",
       "check": "Periksa",
       "checking": "Memeriksa...",
       "autoPrefix": "Tambahkan awalan <strong>+91</strong> otomatis untuk nomor 10 digit (nomor 12 digit tidak diubah)",

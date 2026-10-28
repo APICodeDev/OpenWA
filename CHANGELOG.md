@@ -66,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve whatsapp-web.js readiness when an earlier QR render completes.
 - Cancel stale Message Tester actions after logout, key changes or leaving the page.
 - Load every page of the chat list in the dashboard; an account with more than 1000 chats saw only the first 1000.
+- Cut a long chat name in the dashboard on the side its own script ends, so a Latin name on an Arabic or Hebrew page no longer loses its first letters.
+- Shorten the id of an unnamed group on the dashboard Top chats chart to its first and last digits, and fit the Number Checker phone placeholder in every language.
 - Bound Redis cache commands and discard expired operations during reconnect.
 - Preserve literal request values in custom ingress acknowledgments.
 - Honor inclusive millisecond lower bounds in built-in search.
