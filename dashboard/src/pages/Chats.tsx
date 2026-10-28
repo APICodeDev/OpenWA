@@ -179,6 +179,9 @@ export function Chats() {
   // Chats list
   const [chats, setChats] = useState<Chat[]>([]);
   const [loadingChats, setLoadingChats] = useState<boolean>(false);
+  // Why the list on screen is not the session's: its last foreground read failed. A list that could not be read
+  // is told apart from one that is empty, which the sidebar alone would render the same way.
+  const [chatsFailure, setChatsFailure] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [chatFilter, setChatFilter] = useState<ChatListFilter>('all');
 
@@ -372,25 +375,28 @@ export function Chats() {
     current.showErrorToast(current.t(key), err instanceof Error ? err.message : undefined);
   }, []);
 
-  // 1. Fetch available connected sessions on mount
-  useEffect(() => {
-    const loadSessions = async () => {
-      try {
-        setLoadingSessions(true);
-        const list = await sessionApi.list();
-        const readySessions = list.filter(s => s.status === 'ready');
-        setSessions(readySessions);
-        if (readySessions.length > 0) {
-          setSelectedSessionId(readySessions[0].id);
-        }
-      } catch (err) {
-        showLoadError('chats.errors.loadSessions', err);
-      } finally {
-        setLoadingSessions(false);
+  // 1. Fetch available connected sessions on mount. A failed read is not "no connected sessions": the gateway may
+  // simply be restarting, so the page says it could not read them and offers the read again.
+  const [sessionsFailure, setSessionsFailure] = useState<string | null>(null);
+  const loadSessions = useCallback(async () => {
+    try {
+      setLoadingSessions(true);
+      setSessionsFailure(null);
+      const list = await sessionApi.list();
+      const readySessions = list.filter(s => s.status === 'ready');
+      setSessions(readySessions);
+      if (readySessions.length > 0) {
+        setSelectedSessionId(readySessions[0].id);
       }
-    };
+    } catch (err) {
+      setSessionsFailure(err instanceof Error ? err.message : '');
+    } finally {
+      setLoadingSessions(false);
+    }
+  }, []);
+  useEffect(() => {
     void loadSessions();
-  }, [showLoadError]);
+  }, [loadSessions]);
 
   // 2. Fetch chats when active session changes. A session switch does not cancel the list still
   // loading for the session left behind, so an answer for any session but the latest call's is
@@ -449,10 +455,14 @@ export function Chats() {
       // so this session's list on screen is as fresh as this call's would have been.
       const overtaken = () => !controller.signal.aborted && sessionId === chatsSessionRef.current;
       try {
-        if (!background) setLoadingChats(true);
+        if (!background) {
+          setLoadingChats(true);
+          setChatsFailure(null);
+        }
         const data = await sessionApi.getChats(sessionId, controller.signal);
         if (stale()) return overtaken();
         chatsAppliedRef.current = request;
+        setChatsFailure(null);
         // A live frame can move a row past the snapshot a background refetch was built from while it is
         // out. That row is kept, or its preview and unread badge would roll back until the next message.
         const moved = (id: string) => (liveRowsRef.current.get(id) ?? 0) >= request;
@@ -489,7 +499,7 @@ export function Chats() {
         if (stale()) return overtaken();
         // A background refetch only refreshes summaries: keep the list it would have replaced.
         if (background) return false;
-        showLoadError('chats.errors.loadChats', err);
+        setChatsFailure(err instanceof Error ? err.message : '');
         listedSessionRef.current = sessionId;
         setChats([]);
         return false;
@@ -501,7 +511,7 @@ export function Chats() {
         if (!background && !controller.signal.aborted && sessionId === chatsSessionRef.current) setLoadingChats(false);
       }
     },
-    [showLoadError],
+    [],
   );
 
   // A reload walks every page of the list, and each live event the sidebar cannot apply locally asks for
@@ -1670,10 +1680,32 @@ export function Chats() {
         </div>
       )}
 
+      {chatsFailure !== null && !loadingChats && (
+        <div className="chats-reconnect-banner" role="alert">
+          <AlertCircle size={16} />
+          <span>
+            {t('chats.errors.loadChats')}
+            {chatsFailure && ` (${chatsFailure})`}
+          </span>
+          <button className="btn-secondary" onClick={() => void loadChats(selectedSessionId)}>
+            {t('common.retry')}
+          </button>
+        </div>
+      )}
+
       {loadingSessions ? (
         <div className="chats-loading-container">
           <Loader2 className="animate-spin" size={32} />
           <p>{t('common.loading')}</p>
+        </div>
+      ) : sessionsFailure !== null ? (
+        <div className="chats-error-state" role="alert">
+          <AlertCircle size={48} className="text-warn" />
+          <h3>{t('chats.errors.loadSessions')}</h3>
+          {sessionsFailure && <p>{sessionsFailure}</p>}
+          <button className="btn-secondary" onClick={() => void loadSessions()}>
+            {t('common.retry')}
+          </button>
         </div>
       ) : sessions.length === 0 ? (
         <div className="chats-error-state">

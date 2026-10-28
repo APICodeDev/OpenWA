@@ -63,6 +63,7 @@ import { resolveJidCandidates } from '../../engine/identity/jid-candidates';
 import { chatKind } from '../../engine/identity/wa-id';
 import { Message, MessageDirection } from '../message/entities/message.entity';
 import { ServerShuttingDownException, SessionStoppedException } from './session-engine-controls';
+import { phoneKey } from './message-mutation-guard';
 // Type-only: the module binds this class to PLUGIN_SESSION_PORT with a `useExisting` alias, which
 // TypeScript does not check, so `implements` is what keeps the two in step.
 import type { PluginSessionPort } from '../../core/plugins/plugin-host-ports';
@@ -1068,8 +1069,21 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
 
   /** See SessionEngineLifecycle.logout() for the full unlink/502 contract. */
   async logout(id: string): Promise<Session> {
+    // A start still waiting on its claim yields to the logout rather than relaunching the session it just
+    // took down. Not recorded as a stop: logout clears the phone, which keeps the session out of auto-start.
+    let request: StopRequest | undefined;
+    const issue = (): StopRequest => (request ??= this.requestStop(id, 'stop'));
+    const withdraw = (): void => {
+      if (request) this.withdrawStop(request);
+    };
+    if (this.engines.get(id)) issue();
     try {
-      const session = await this.engineLifecycle.logout(id);
+      const session = await this.engineLifecycle.logout(id, {
+        onReadFailed: withdraw,
+        onEngineFound: () => {
+          issue();
+        },
+      });
       // Torn down locally on the 200 path — hand the claim back the way stop() does.
       await this.releaseAfterTeardown(id);
       return session;
@@ -1077,8 +1091,11 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       // The 502-incomplete path tears the engine down, so its claim must not survive the call. A 400
       // "not started" refusal changed nothing and keeps whatever claim there is: release() also
       // clears a LAPSED foreign claim, which would take a crashed node's session out of takeover.
+      if (error instanceof BadRequestException) withdraw();
       if (!(error instanceof BadRequestException)) await this.releaseAfterTeardown(id);
       throw error;
+    } finally {
+      if (request) this.endStop(id, request);
     }
   }
 
@@ -1323,9 +1340,36 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     if (session.status === SessionStatus.READY) {
       throw new BadRequestException('Session is already authenticated, no pairing needed');
     }
+    // On whatsapp-web.js a code requested for a number that is already linked can make WhatsApp revoke that
+    // device. The number is the caller's to choose, so a session this key may not touch could be logged out
+    // through this one; a number another session holds is refused. The session's own number is its to re-link.
+    // Baileys adds a companion device and showed no such effect, so two of its sessions may share a number.
+    if (this.pairingMayRevoke() && (await this.otherSessionHoldsNumber(id, phoneNumber))) {
+      throw new ConflictException(
+        'That number is linked to another session. Delete that session, or log it out while it runs, before pairing this one.',
+      );
+    }
 
     const pairingCode = await engine.requestPairingCode(phoneNumber);
     return { pairingCode, status: session.status };
+  }
+
+  /** Whether the engine in use is whatsapp-web.js, where a pairing request can revoke a linked device. */
+  private pairingMayRevoke(): boolean {
+    return (this.configService?.get<string>('engine.type') ?? 'whatsapp-web.js') === 'whatsapp-web.js';
+  }
+
+  /**
+   * Whether another session stores this number as its phone, whichever way the country writes its mobile
+   * marker digit (the spellings the stored phone and the typed number can differ by).
+   */
+  private async otherSessionHoldsNumber(id: string, phoneNumber: string): Promise<boolean> {
+    const key = phoneKey(phoneNumber);
+    const others = await this.sessionRepository.find({
+      where: { id: Not(id), phone: Not(IsNull()) },
+      select: { phone: true },
+    });
+    return others.some(other => other.phone !== null && phoneKey(other.phone) === key);
   }
 
   getEngine(id: string): IWhatsAppEngine | undefined {
@@ -1402,7 +1446,8 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     await this.findOne(id);
     const engine = this.requireEngine(id);
     await engine.setOnlinePresence(available);
-    this.presence.setOwnIntent(id, available);
+    // A publish that settles after its engine was replaced must not leave a preference the replacement never had.
+    if (this.engines.isLive(id, engine)) this.presence.setOwnIntent(id, available);
   }
 
   /**

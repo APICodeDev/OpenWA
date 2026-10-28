@@ -675,7 +675,7 @@ A session stopped with `POST /stop` or `POST /force-kill` is marked to run again
 
 On multiple nodes, an explicit start may clear a peer's stop recorded before it successfully claimed ownership. It checks ownership and the stop record again after the start hook, before creating an engine; a lost claim or failed renewal answers `409` with no engine launched. A stop or claim loss during engine initialization retires that engine when initialization finishes.
 
-**Errors:** `400` session already started / already starting, or this node already holds `MAX_CONCURRENT_SESSIONS` slots, counting running and starting engines and sessions waiting to relaunch after a failed reconnect (`Maximum concurrent sessions reached (N)`, answered only after the `404` and the `409` for a session running on another node; the session is not started, so retry once a slot frees or on a node with room) · `401` · `403` · `404` not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; no destructive side effect runs before the refusal — a retry after cleanup settles proceeds), or another node currently holds this session's engine (refused before any engine is launched), or, with no `code`, a `POST /stop`, a `POST /force-kill` that found a running engine to kill, or a data import (`stopOrphans`) of this session that began or finished while the start was waiting, or a delete of it still running or sent while the start was waiting and failed once it began removing (the start yields and launches nothing; after a stop, a force-kill or a delete that failed part-way a new `POST /start` clears it and starts the session, after a delete or an import that removed the session the retry answers `404`) · `503` the gateway is shutting down, or the engine's browser or socket connection died during launch and the one automatic retry failed too; no engine is left running, so the start can be retried · `504` the engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable `proxyUrl`); the engine is torn down, so the start can be retried once the cause is addressed
+**Errors:** `400` session already started / already starting, or this node already holds `MAX_CONCURRENT_SESSIONS` slots, counting running and starting engines and sessions waiting to relaunch after a failed reconnect (`Maximum concurrent sessions reached (N)`, answered only after the `404` and the `409` for a session running on another node; the session is not started, so retry once a slot frees or on a node with room) · `401` · `403` · `404` not found · `409` credential teardown for the same session name still in flight (retryable; body carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; no destructive side effect runs before the refusal — a retry after cleanup settles proceeds), or another node currently holds this session's engine (refused before any engine is launched), or, with no `code`, a `POST /stop`, a `POST /logout` or `POST /force-kill` that found a running engine, or a data import (`stopOrphans`) of this session that began or finished while the start was waiting, or a delete of it still running or sent while the start was waiting and failed once it began removing (the start yields and launches nothing; after a stop, a force-kill or a delete that failed part-way a new `POST /start` clears it and starts the session, after a delete or an import that removed the session the retry answers `404`) · `503` the gateway is shutting down, or the engine's browser or socket connection died during launch and the one automatic retry failed too; no engine is left running, so the start can be retried · `504` the engine did not finish starting within its timeout (WhatsApp Web or the network unreachable, a stalled browser or resource limit, or, on whatsapp-web.js, an unreachable `proxyUrl`); the engine is torn down, so the start can be retried once the cause is addressed
 
 #### POST /api/sessions/:sessionId/stop
 
@@ -832,7 +832,7 @@ Like `stop`, a force-killed session stays down across restarts and takeover unti
 
 Request an 8-char pairing code to link via phone number (alternative to QR).
 
-> ⚠️ **On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link.** A request for a number that already has a linked session has been observed to end with WhatsApp revoking that device: the linked session logs a LOGOUT, its credentials are deleted, and it falls back to `qr_ready` with no phone. Nothing here refuses such a request: the guards check the session's state, never the number. The request runs inside the shared WhatsApp Web page and resets its linking mode before asking for a code, so the blast radius is the account rather than the session. Baileys was not affected in the same tests. Link by QR when a session of that number must stay up.
+> ⚠️ **On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link.** A request for a number that already has a linked session has been observed to end with WhatsApp revoking that device: the linked session logs a LOGOUT, its credentials are deleted, and it falls back to `qr_ready` with no phone. The gateway refuses with `409` a number that is the stored phone of another of its sessions (a Brazilian, Mexican or Argentine mobile number counts under either spelling of its marker digit), but it cannot see a link made on another gateway or only on the phone, and refuses nothing there. The request runs inside the shared WhatsApp Web page and resets its linking mode before asking for a code, so the blast radius is the account rather than the session. Baileys was not affected in the same tests and is not refused: sessions of one number may coexist there. Link by QR when a session of that number must stay up.
 
 **Auth:** API key (OPERATOR) · **Scope:** session-scoped
 
@@ -860,7 +860,7 @@ Request an 8-char pairing code to link via phone number (alternative to QR).
 
 `status` is the lowercase session status.
 
-**Errors:** `400` validation, or session not started, or already authenticated · `401` · `403` · `404` not found · `409` session not waiting to be linked yet; wait for `status` to read `qr_ready` and retry (after a code was accepted, wait for `ready` instead). On Baileys a session that already reads `qr_ready` can still answer `409` while its socket is closing, for up to the WebSocket close timeout (30 s); that is retryable and the status follows shortly. · `503` whatsapp-web.js only: the gateway stopped waiting after its attempt budget, usually because WhatsApp Web kept reloading its QR page; retryable, and the last attempt's reason rides in the message. An attempt that timed out may still have reached WhatsApp, and a retry starts the linking flow again, so the unlink warning above applies to the retry too.
+**Errors:** `400` validation, or session not started, or already authenticated · `401` · `403` · `404` not found · `409` session not waiting to be linked yet; wait for `status` to read `qr_ready` and retry (after a code was accepted, wait for `ready` instead). On Baileys a session that already reads `qr_ready` can still answer `409` while its socket is closing, for up to the WebSocket close timeout (30 s); that is retryable and the status follows shortly. On whatsapp-web.js a `409` also answers a number that is the stored phone of another session; log that session out or delete it before pairing this one. · `503` whatsapp-web.js only: the gateway stopped waiting after its attempt budget, usually because WhatsApp Web kept reloading its QR page; retryable, and the last attempt's reason rides in the message. An attempt that timed out may still have reached WhatsApp, and a retry starts the linking flow again, so the unlink warning above applies to the retry too.
 
 #### POST /api/sessions/:sessionId/presence/subscribe
 
@@ -1826,7 +1826,7 @@ rejected with `400` rather than guessing which half was meant.
 { "messageId": "true_628123456789@c.us_3EB0ABCD", "timestamp": 1719312000 }
 ```
 
-`messageId` is the WhatsApp message id from the engine. By default (`SIMULATE_TYPING`; set it to `false` to disable) a typing indicator and a humanising pause run before the send: 500 ms plus 45 ms per character, capped at `SIMULATE_TYPING_MAX_MS` (default 5000 ms), with +/-15% jitter.
+`messageId` is the WhatsApp message id from the engine. By default (`SIMULATE_TYPING`; set it to `false` to disable) a typing indicator and a humanising pause run before the send: 500 ms plus 45 ms per character, capped at `SIMULATE_TYPING_MAX_MS` (default 5000 ms), with +/-15% jitter; the pause never exceeds that cap, jitter included.
 
 **Errors:** `400` unknown body field, validation failure, or session not active / blocked by a plugin hook · `401` missing/invalid API key · `403` key role below OPERATOR · `404` the `quotedMessageId` could not be resolved (see Quoted sends) · `500` engine error · `409` conflict or engine not ready (retryable) · `501` not supported on the active engine · `422` the `Idempotency-Key` was already used for a different request (see [Idempotent sends](#idempotent-sends)) · `503` Baileys recipient lookup failed or timed out before the operation was sent, or WhatsApp rate-limited the send (code 429: nothing was sent, the `Idempotency-Key` is freed) or timed out a query it awaits (code 408: the outcome is not proven, the key stays taken)
 
@@ -2415,7 +2415,7 @@ Send messages to multiple recipients as an async batch — returns immediately a
 | messages | BulkMessageItemDto[]  | Yes      | array, max 100, nested-validated | The batch items (see below); exact duplicate entries (same `chatId`, `type`, `content` and `variables`) are collapsed before processing, first occurrence wins, order preserved; distinct messages to the same `chatId` are all sent |
 | options  | BulkMessageOptionsDto | No       | nested-validated                 | Pacing/error options (see below)                                                                                                                                                                                                     |
 
-Each `BulkMessageItemDto`: `{ chatId: string, type: 'text'|'image'|'video'|'audio'|'document', content: BulkMessageContentDto, variables?: Record<string,string> }`. `content` (all fields optional, nested-validated): `text?: string`, `image?`/`video?`/`audio?`/`document?`: `{ url?, base64?, mimetype?, filename?, ptt? }` (`ptt` applies to `audio` only), `caption?: string`, `mentions?: string[]` (per item; a batch fans out to many chats, and a WID is only taggable in a chat the participant is in).
+Each `BulkMessageItemDto`: `{ chatId: string, type: 'text'|'image'|'video'|'audio'|'document', content: BulkMessageContentDto, variables?: Record<string,string> }`. `content` (all fields optional, nested-validated): `text?: string`, `image?`/`video?`/`audio?`/`document?`: `{ url?, base64?, mimetype?, filename?, ptt? }` (`ptt` applies to `audio` only), `caption?: string`, `mentions?: string[]` (per item; a batch fans out to many chats, and a WID is only taggable in a chat the participant is in). An entry may hold a placeholder such as `{{phone}}@c.us` that the item's `variables` fill in, so one batch can tag a different participant per item; the request accepts it unchecked, and a rendered list that is not made of individual WIDs fails that item.
 
 `BulkMessageOptionsDto`: `{ delayBetweenMessages?: number (1000–60000, default 3000), randomizeDelay?: boolean (default true), stopOnError?: boolean (default false) }`.
 
@@ -2683,7 +2683,7 @@ Batch-resolve profile picture URLs for many contacts in one request (a chat side
 }
 ```
 
-`pictures` is keyed by the requested id. A per-id failure — or a lookup that exceeds the 8 s per-id deadline — yields `null` for that id rather than failing the batch. An omitted or empty `ids` returns `{ "pictures": {} }`.
+`pictures` is keyed by the requested id. Lookups run five at a time. A per-id failure yields `null` for that id rather than failing the batch. A lookup that exceeds its 8 s deadline also yields `null` for its id and ends the request there: the ids of the later chunks are absent from `pictures`, as are the ids past the 50th, so ask for them again instead of reading them as having no picture. Completed pictures are kept. An omitted or empty `ids` returns `{ "pictures": {} }`.
 
 An engine that is not ready is the exception: it describes the session rather than one id, so the whole request answers `409` and no partial result is returned.
 
@@ -3480,14 +3480,14 @@ for every **named** requester is a `403`.
 }
 ```
 
-**Errors:** `400` validation / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 #### POST /api/sessions/:sessionId/groups/:groupId/membership-requests/reject
 
 Reject pending join requests. Same body, response shape, batch-guard contract and error map as
 `.../membership-requests/approve`; rejecting an empty queue is likewise a no-op.
 
-**Errors:** `400` validation / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+**Errors:** `400` validation / session not started / a body that is a JSON list, or one sent in a content type other than `application/json` or `application/x-www-form-urlencoded`, which would otherwise act on every pending request · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights / every named requester failed) · `404` no such group · `409` engine not ready · `503` WhatsApp did not answer within the request budget; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
 ```json
 {
@@ -4808,7 +4808,7 @@ timeout does not cancel the batch; inspect the failure log before retrying it.
 }
 ```
 
-`redriven` equals `delivered`; `enqueued` is retained for response compatibility and is always `0`. A row is excluded before applying the limit when it has `attempts: 0`, holds no event data, is past the retention window or out of scope, or its webhook is removed, disabled, unsubscribed from the event or no longer in the row's session. `skipped` counts selected rows cancelled by a hook or invalidated during the call. `remaining` counts eligible rows in the same requested session, webhook and IDs after the call. Retry another batch only after resolving persistent failures or hook cancellations; `remaining > 0` alone does not mean another call will succeed.
+`redriven` equals `delivered`; `enqueued` is retained for response compatibility and is always `0`. A row is excluded before applying the limit when it has `attempts: 0`, holds no event data, is past the retention window or out of scope, or its webhook is removed, disabled, unsubscribed from the event or no longer in the row's session. `skipped` counts selected rows cancelled by a hook or invalidated during the call. `remaining` counts eligible rows in the same requested session, webhook and IDs after the call. A replay a hook cancels counts as an attempt on its row, like a failed one, and keeps its payload, so cancelled rows move behind rows with fewer attempts instead of leading every batch. Retry another batch only after resolving persistent failures or hook cancellations; `remaining > 0` alone does not mean another call will succeed.
 
 **Errors:** `400` body fails validation · `401` missing/invalid API key · `403` key role below ADMIN
 
@@ -5283,7 +5283,10 @@ Content-Type `text/plain` with the parameters `version=0.0.4` and `charset=utf-8
 When the data database cannot be read the database-derived series (`openwa_sessions*`,
 `openwa_messages*`) are OMITTED rather than reported as zero — a zero would fire an alert
 claiming every session had dropped. `openwa_stats_available` is what tells the two cases apart,
-so alert on it rather than reading a missing series as zero. `docs/10` lists every series.
+so alert on it rather than reading a missing series as zero. A scrape waits at most 2 seconds for
+that read and serves the last result it kept, up to 5 minutes after that read started, when it is late; the series are omitted when
+the read failed (which also discards the kept result) or no result is that recent, so a database that stalls costs those series and not the
+rest of the scrape. `docs/10` lists every series.
 
 ```
 # HELP openwa_up 1 if the OpenWA process is running
@@ -5311,7 +5314,7 @@ openwa_messages_total{direction="incoming"} 940
 openwa_messages_failed_total 4
 ```
 
-Values come from `StatsService.getOverview()` plus `process.memoryUsage()`/`process.uptime()`. The render is memoized for 5000 ms to avoid re-running the overview query on every scrape, and `getOverview()` is itself memoized for `STATS_CACHE_TTL_MS` (default 30 s), so the database-derived series and `openwa_stats_available` can trail the data database by up to `STATS_CACHE_TTL_MS` + 5 s plus the time the overview query takes (the memo TTL counts from when the query completes).
+Values come from `StatsService.getOverview()` plus `process.memoryUsage()`/`process.uptime()`. The render is memoized for 5000 ms to avoid re-running the overview query on every scrape, and `getOverview()` is itself memoized for `STATS_CACHE_TTL_MS` (default 30 s), so the database-derived series and `openwa_stats_available` can trail the data database by up to `STATS_CACHE_TTL_MS` + 5 s plus the time the overview query takes (the memo TTL counts from when the query completes), or by up to 5 minutes plus `STATS_CACHE_TTL_MS` when the database stops answering and the last kept result stands in for the late read.
 
 **Errors:** `401` — `METRICS_TOKEN` is configured but the bearer is missing or does not match (`{ "statusCode": 401, "message": "Invalid metrics token", "error": "Unauthorized" }`) · `404` — `METRICS_TOKEN` is unset/blank, so the endpoint is disabled (`{ "statusCode": 404, "message": "Metrics endpoint is disabled (set METRICS_TOKEN to enable)", "error": "Not Found" }`) · `429`: 10 failed token attempts from one client within a minute; only failures count, and the block lifts as the window slides (`{ "statusCode": 429, "message": "Too many failed metrics token attempts" }`).
 
@@ -5439,7 +5442,7 @@ Notes: raw return of an in-memory `Settings` object built once in the controller
 
 #### GET /api/audit
 
-List audit-log entries, newest first. API-key lifecycle changes, session lifecycle events, send-pacing and rate-limit enforcement, queue-dashboard mutations, webhook delivery redrives, integration-instance changes, plugin management (install, update, uninstall, enable, disable, configuration, session activation) and ADMIN infra operations land here. **The eight actions below are never emitted**, so filtering for any of them returns zero rows by design: `message_sent` and `message_failed` (every send and its outcome is in the `messages` table), `webhook_triggered` and `webhook_failed` (tracked in `webhook_delivery_failures` and the `openwa_webhook_delivery_failures_total` counter), `webhook_created` and `webhook_deleted` (not wired yet), `api_key_used` (it would fire on every authenticated request; failed authentication is audited as `api_key_auth_failed`), and `session_connected` (an engine-level transition already reflected in `sessions.status`; the user-initiated `session_started` and `session_stopped` are audited).
+List audit-log entries, newest first. API-key lifecycle changes, session lifecycle events, send-pacing and rate-limit enforcement, queue-dashboard mutations, webhook delivery redrives, integration-instance changes, plugin management (install, update, uninstall, enable, disable, configuration, session activation) and ADMIN infra operations land here. **The eight actions below are never emitted**, so filtering for any of them returns zero rows by design: `message_sent` and `message_failed` (every send and its outcome is in the `messages` table), `webhook_triggered` and `webhook_failed` (tracked in `webhook_delivery_failures` and the `openwa_webhook_delivery_failures_total` counter), `webhook_created` and `webhook_deleted` (not wired yet), `api_key_used` (it would fire on every authenticated request; failed authentication is audited as `api_key_auth_failed`), and `session_connected` (an engine-level transition already reflected in `sessions.status`; the user-initiated `session_started` and `session_stopped` are audited, and `session_stopped` is also written, with `via: infra_import_data` in its metadata, for each session a data import with `stopOrphans` stops, whether or not the import then commits).
 
 **Auth:** API key (ADMIN) · **Scope:** rows are confined to the calling key's `allowedSessions` — the `sessionId` query may only narrow within that list, never widen it
 
@@ -5549,7 +5552,7 @@ The `queue.webhooks` counters are live BullMQ job counts (`pending` = waiting + 
 
 `builtIn` (on `database`/`redis`/`storage`) reports whether OpenWA's own bundled container is actually running _and_ backing this service, detected live from the labelled container (on a daemon another OpenWA instance shares, its container counts too while this instance's host is spelled like the bundled one, see [13 - Horizontal Scaling](./13-horizontal-scaling.md)); when Docker is unreachable it falls back to the saved `*_BUILTIN` flag (one pinned by the environment first, else the one in `data/.env.generated`) beside a host that reaches the bundled container: a host name alone counts for nothing there, since an external server may be called `postgres`, and neither does the flag beside another host, which the process dials. `running` (on the same three) reports whether a bundled container OpenWA itself created is up, whether or not the service uses it: one Docker Compose created (it carries Compose's project label) reads `false`, so does one beside a configuration whose `POSTGRES_BUILTIN`, `REDIS_BUILTIN` or `MINIO_BUILTIN` (the environment's first, else the saved one) is not `true` (the container names are fixed per Docker daemon, so another OpenWA instance on the same daemon sees the same containers), and the key is absent while Docker is unreachable, since nothing can be seen or stopped then. In S3 mode `storage` additionally carries `bucket` and `endpoint` (each when one is configured; a bundled MinIO that is stopped still reports `http://minio:9000` here, with `builtIn` false) and `s3Available` (re-probed, throttled, while false; once true it stays true until a restart, so a later outage does not clear it); in local mode neither key is present. `engine.webVersion`/`engine.webVersionSource` (`pinned` / `auto` / `native`) appear only on `whatsapp-web.js`; `webVersion` is `null` until the auto-resolve first succeeds. `engine.browserArgs` is the effective launch argument list: `PUPPETEER_ARGS` (or the four defaults shown) with `--lang=en-US` appended unless a `--lang` flag is already present.
 
-`envPinned` lists which of the keys `PUT /api/infra/config` writes the host environment or the project `.env` sets, by name only: `DATABASE_TYPE`, `POSTGRES_BUILTIN`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`, `DATABASE_POOL_SIZE`, `POSTGRES_SCHEMA`, `DATABASE_SSL`, `DATABASE_SSL_REJECT_UNAUTHORIZED`, `REDIS_ENABLED`, `REDIS_BUILTIN`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_ENABLED`, `STORAGE_TYPE`, `MINIO_BUILTIN`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `STORAGE_LOCAL_PATH`, `ENGINE_TYPE`, `PUPPETEER_HEADLESS`, `SESSION_DATA_PATH` and `PUPPETEER_ARGS`. Those layers win over `data/.env.generated`, so a value saved for one of these keys through `PUT /api/infra/config` cannot take effect until that layer is changed. A pinned host also decides whether the bundled container backs its service, whatever `builtIn` is saved. A pinned `POSTGRES_BUILTIN`, `REDIS_BUILTIN` or `MINIO_BUILTIN` participates in container startup: `true` starts the container only while its datastore is in use and the environment does not pin its host to another server. The service uses the container only when its effective host reaches it.
+`envPinned` lists which of the keys `PUT /api/infra/config` writes the host environment or the project `.env` sets, by name only: `DATABASE_TYPE`, `POSTGRES_BUILTIN`, `DATABASE_HOST`, `DATABASE_PORT`, `DATABASE_USERNAME`, `DATABASE_PASSWORD`, `DATABASE_NAME`, `DATABASE_POOL_SIZE`, `POSTGRES_SCHEMA`, `DATABASE_SSL`, `DATABASE_SSL_REJECT_UNAUTHORIZED`, `REDIS_ENABLED`, `REDIS_BUILTIN`, `REDIS_TLS`, `REDIS_USERNAME`, `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `QUEUE_ENABLED`, `STORAGE_TYPE`, `MINIO_BUILTIN`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `STORAGE_LOCAL_PATH`, `ENGINE_TYPE`, `PUPPETEER_HEADLESS`, `SESSION_DATA_PATH` and `PUPPETEER_ARGS`. Those layers win over `data/.env.generated`, so a value saved for one of these keys through `PUT /api/infra/config` cannot take effect until that layer is changed. A pinned host also decides whether the bundled container backs its service, whatever `builtIn` is saved. A pinned `POSTGRES_BUILTIN`, `REDIS_BUILTIN` or `MINIO_BUILTIN` participates in container startup: `true` starts the container only while its datastore is in use and the environment does not pin its host to another server. The service uses the container only when its effective host reaches it.
 
 **Errors:** `401` missing/invalid key · `403` key role < ADMIN, or key is session-scoped
 
@@ -5634,7 +5637,7 @@ release number until the next release bumps it.
 
 #### GET /api/infra/config
 
-Read the effective infrastructure config used to hydrate the dashboard form. Each field resolves with the boot precedence: a value pinned by the host environment (e.g. Compose `environment:`) or the project `.env` wins over `data/.env.generated`, while a key that only ever lived in the saved file reports the freshly-saved value even before a restart applies it ("saved, pending restart"). **Secrets are never returned** — only `*Set`/`*CredentialsSet` booleans indicate that a secret is stored.
+Read the effective infrastructure config used to hydrate the dashboard form. Each field resolves with the boot precedence: a value pinned by the host environment (e.g. Compose `environment:`) or the project `.env` wins over `data/.env.generated`, while a key that only ever lived in the saved file reports the freshly-saved value even before a restart applies it ("saved, pending restart"). **Secrets are never returned** — only `*Set`/`*CredentialsSet` booleans indicate that a secret is stored. `database.database` is an empty string while the effective database type is `sqlite`, where the stored key holds a file path.
 
 **Auth:** API key (ADMIN)
 
@@ -5765,11 +5768,11 @@ Built-in flags: a section sent without `builtIn` follows its stored host or endp
 }
 ```
 
-Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. DTO validation, an unknown engine type, an invalid `database.schema`, CR/LF injection, a value that cannot be stored so that it reads back unchanged, and a merged config the production boot guard would reject (an empty or default `DATABASE_PASSWORD` or S3 key on an external datastore, or a placeholder `REDIS_PASSWORD`; message starts `Refusing to save a configuration that would be rejected at production boot.`), and a local `storage.localPath` the app cannot create or write (message starts `Refusing to save the storage path`; the next start would refuse to boot on it, and a path pinned by the host environment or the project `.env` is not judged, as the boot never reads the submitted one) are real HTTP `400` responses, and nothing is written. `profiles` lists newly-required Docker profiles.
+Write/IO errors are caught and returned as HTTP `200` with `{ "saved": false, "envPath": "", "profiles": [], "message": "Failed to save configuration: …" }`. DTO validation, an unknown engine type, an invalid `database.schema`, CR/LF injection, a value that cannot be stored so that it reads back unchanged, and a merged config the production boot guard would reject (an empty or default `DATABASE_PASSWORD` or S3 key on an external datastore, or a placeholder `REDIS_PASSWORD`; message starts `Refusing to save a configuration that would be rejected at production boot.`), and a merged config the boot environment validation rejects, such as a PostgreSQL selection without a host, a pool size that is not an integer, `REDIS_TLS=true` beside the built-in Redis or, in a save that changes `S3_ENDPOINT` or newly selects S3, an `S3_ENDPOINT` that is not an `http(s)` URL while `STORAGE_TYPE=s3` (boot only logs it; message starts `Refusing to save a configuration that fails boot validation.` and carries the boot message), and a local `storage.localPath` the app cannot create or write (message starts `Refusing to save the storage path`; the next start would refuse to boot on it, and a path pinned by the host environment or the project `.env` is not judged, as the boot never reads the submitted one) are real HTTP `400` responses, and nothing is written. `profiles` lists newly-required Docker profiles.
 
 **Errors:** `400` unknown/mistyped body field, a `database.type`/`storage.type` left out with none stored or pinned, unknown
 `engine.type`, invalid `database.schema`, CR-LF in a value, a value that cannot round-trip through the
-env file, a config the production boot secret guard would reject, or a local
+env file, a config the production boot secret guard or the boot environment validation would reject, or a local
 `storage.localPath` the app cannot create or write · `401` · `403`
 
 ---
@@ -5803,7 +5806,7 @@ Request a graceful server restart, optionally orchestrating Docker profiles (add
 }
 ```
 
-`estimatedTime` (seconds, a typical healthy value rather than a bound; teardown is force-exited 67 s after the grace at the default `WEBHOOK_SHUTDOWN_DRAIN_MS`) = base 15 + 20/postgres + 13/redis + 15/minio + 5/removal. The echoed `profilesToRemove`, and the removal count, already omit any bundled service the environment pins the app to (for example `DATABASE_HOST=postgres` set in the host environment or the project `.env`, or the container name `openwa-postgres`, in any letter case); such a service is never stopped. Likewise the echoed `profiles` omit a bundled service whose host the environment pins to anything else (for example `DATABASE_HOST=db.example.com`): the next boot dials that host, so its container is not started. `orchestration` is present only when Docker is available and at least one managed profile (`postgres`, `redis`, `minio`) remains in `profiles`; `removal` only when Docker is available and at least one managed profile remains in `profilesToRemove` after dropping pinned services and profiles that are also being started. Without Docker, a `data/.orchestration-request.json` signal file is written instead. After responding, `shutdownService.shutdown()` runs (default ~3s grace); readiness returns `503` during drain.
+`estimatedTime` (seconds, a typical healthy value rather than a bound; teardown is force-exited 67 s after the grace at the default `WEBHOOK_SHUTDOWN_DRAIN_MS`) = base 15 + 20/postgres + 13/redis + 15/minio + 5/removal. The echoed `profilesToRemove`, and the removal count, already omit any bundled service the environment pins the app to (for example `DATABASE_HOST=postgres` set in the host environment or the project `.env`, or the container name `openwa-postgres`, in any letter case); such a service is kept while the next boot uses its datastore, and stopped by the restart once that datastore is switched off (SQLite, local storage, no consumer of Redis), even when the pinned host still names it. Likewise the echoed `profiles` omit a bundled service whose host the environment pins to anything else (for example `DATABASE_HOST=db.example.com`): the next boot dials that host, so its container is not started. `orchestration` is present only when Docker is available and at least one managed profile (`postgres`, `redis`, `minio`) remains in `profiles`; `removal` only when Docker is available and at least one managed profile remains in `profilesToRemove` after dropping pinned services and profiles that are also being started. Without Docker, a `data/.orchestration-request.json` signal file is written instead. After responding, `shutdownService.shutdown()` runs (default ~3s grace); readiness returns `503` during drain.
 
 **Errors:** `401` · `403`
 
@@ -6129,7 +6132,7 @@ The catalog is fetched from `PLUGIN_CATALOG_URL`, which defaults to the OpenWA-p
 
 The dashboard installs and updates an entry by passing its `download` URL to `POST /api/plugins/install-url` or `POST /api/plugins/:id/update`, so the pin rule of those routes applies: under `NODE_ENV=production` (unless `PLUGIN_INSTALL_REQUIRE_PIN=false`) an entry whose `download` has no `#sha256=` pin cannot be installed. Every entry in the default catalog carries one.
 
-**Errors:** `400` catalog fetch failed / not a JSON array · `401` · `403`
+**Errors:** `400` catalog fetch failed / not a JSON array / an entry without a text `id`, `name` or `version`, or with a non-text optional field · `401` · `403`
 
 ---
 
@@ -6422,7 +6425,7 @@ Update an installed plugin in place from a URL, preserving config + enabled stat
 
 #### DELETE /api/plugins/:id
 
-Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, drop its registry entry, and remove its `ctx.storage` data directory (`<dataDir>/plugins/<id>` — a separate tree when `PLUGINS_DIR` points outside the data dir). Built-in plugins are protected. A plugin that is installed but not loaded — one whose code went missing — can be uninstalled too; there is simply no runtime to tear down first. `404` therefore means an id the gateway has no registry entry for.
+Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, remove its `ctx.storage` data directory (`<dataDir>/plugins/<id>` — a separate tree when `PLUGINS_DIR` points outside the data dir), and drop its registry entry last. Built-in plugins are protected. A plugin that is installed but not loaded — one whose code went missing — can be uninstalled too; there is simply no runtime to tear down first. `404` therefore means an id the gateway has no registry entry for.
 
 **Auth:** API key (ADMIN)
 
@@ -6440,7 +6443,7 @@ Uninstall a plugin: dispatch its `onUnload` lifecycle hook, delete its files, dr
 
 Note: this DELETE returns `200` with a body (not the usual `204`).
 
-**Errors:** `400` cannot uninstall (e.g. built-in) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
+**Errors:** `400` cannot uninstall (e.g. built-in, or a package or storage folder that could not be removed; the registry entry stays, so the call can be repeated) · `401` · `403` · `404` unknown id · `409` the plugin is still being restored after startup (retry shortly)
 
 ---
 
@@ -6450,7 +6453,8 @@ Re-dispatch one bounded batch of dead-lettered inbound deliveries for an integra
 **doc 25, Integration Fabric** for the DLQ and redrive design). Rows are drained fewest-attempts-first,
 then oldest-first, up to `batchSize` (100) — so a row that keeps failing moves behind never-retried
 rows instead of livelocking the window, while staying redrivable. `remaining` reports the DLQ depth
-still outstanding after this batch.
+still outstanding after this batch. Only rows written under the instance's current session binding are
+redriven and counted; rows of an earlier binding stay in the dead-letter table.
 
 **Auth:** API key (ADMIN) · **Scope:** session-scoped (a key restricted to `allowedSessions` may only
 redrive an instance whose current `sessionScope` is inside that allowlist; out of scope and missing
@@ -6522,7 +6526,7 @@ Key facts:
 }
 ```
 
-For `tools/call` the result is an MCP `CallToolResult` (`content` array of `text` or embedded base64 `resource` items — payloads over 4096 bytes become a `resource`). **Tool-level failures are returned in-band as `CallToolResult` with `isError:true`** (HTTP stays 200), including a role, session or chat refusal (`name:'ForbiddenException'`), rate-limit hits (`message:'MCP rate limit exceeded'`), and an unknown tool or arguments that fail the tool's `inputSchema` (text `MCP error -32602: …`).
+For `tools/call` the result is an MCP `CallToolResult` (`content` array of `text` or embedded base64 `resource` items — payloads over 4096 bytes of UTF-8 become a `resource`). **Tool-level failures are returned in-band as `CallToolResult` with `isError:true`** (HTTP stays 200), including a role, session or chat refusal (`name:'ForbiddenException'`), rate-limit hits (`message:'MCP rate limit exceeded'`), and an unknown tool or arguments that fail the tool's `inputSchema` (text `MCP error -32602: …`).
 
 **Errors:** `401` for a missing or invalid key and `403` for a key carrying `allowedIps`, each with a JSON-RPC error body · `406` when `Accept` does not list both `application/json` and `text/event-stream` · `415` for a non-JSON `Content-Type` · `400` for malformed JSON, or with a `-32700` JSON-RPC error body for JSON that is not a valid JSON-RPC message · in-band JSON-RPC errors `-32601` (unknown method) and `-32603` (params that fail the method's schema, such as a `tools/call` without `name`; the message carries the validation issues), at HTTP 200 · `500` if the key lookup fails for a reason other than a refused key, or if the transport throws before headers are sent · `404` when `MCP_ENABLED` is not `true`
 
@@ -6731,6 +6735,8 @@ Generate a shareable WhatsApp call link.
 
 Reject a currently ringing incoming call. **Baileys only**: the whatsapp-web.js engine answers `501`. Only a live call can be rejected: the id is valid while the call rings (a short server-side cache); afterwards it expires.
 
+A failed rejection can be retried only while the same call is still ringing; a call that ends or rings again during the attempt is not restored. If the call is accepted, rejected or missed while a rejection is pending, that outcome is reported once as the call's `call.accepted`, `call.rejected` or `call.missed` event, even when the rejection then fails or times out. A rejection that completes after a `terminate` for the same call still reports `call.rejected`. One that no longer belongs to the current call, because the connection was cleared or another caller took the call id meanwhile, reports nothing.
+
 **Auth:** API key (OPERATOR)
 
 **Path parameters**
@@ -6803,7 +6809,7 @@ including playlists and manifests, is refused with `400`.
 { "base64": "T2dnUwACAAAA...", "mimetype": "audio/ogg; codecs=opus", "bytes": 14970 }
 ```
 
-**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
+**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, the gateway is shutting down, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
 
 #### POST /api/sessions/:sessionId/media/convert/video
 
@@ -6811,7 +6817,7 @@ Convert video into an MP4 every WhatsApp client accepts: baseline H.264 with AAC
 fitted inside 1280x720, or 720x1280 for portrait (never upscaled), frame rate capped at 30 fps, index moved to the front so playback can start before the whole
 file arrives.
 
-**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
+**Errors:** `400` neither field given, a `url` that is not an absolute http(s) URL or answers non-2xx, times out or cannot be reached, or ffmpeg refused the input (its reason is included) · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role · `413` media above the size cap · `503` conversion is disabled, the ffmpeg binary is not runnable, the conversion queue is saturated, the gateway is shutting down, or a `url` fetch through the session's egress proxy failed before any response, the proxy or the target at fault
 
 **Response** `200`
 
@@ -7167,7 +7173,7 @@ Live events are pushed as a **nested** envelope (note: `data` is under `payload`
 }
 ```
 
-Error `code` values include `UNAUTHORIZED`, `INVALID_MESSAGE`, `INVALID_SESSION`, `INVALID_EVENTS`, `FORBIDDEN_SESSION`, `FORBIDDEN_EVENTS`, `TOO_MANY_SUBSCRIPTIONS`, and `RATE_LIMITED`. `RATE_LIMITED` is followed by a disconnect when a handshake exceeds the per-IP connection-attempt window or the key's concurrent-socket cap; a frame over the per-key frame budget gets `RATE_LIMITED` and is dropped undispatched, and the socket stays open. A subscribe answers `INVALID_SESSION` when `sessionId` is missing, or is neither `"*"` nor a session id of at most 128 letters, digits and hyphens. An unsubscribe answers `INVALID_SESSION` when `sessionId` is missing, empty, not a string, or neither `"*"` nor such a session id. A subscribe answers `TOO_MANY_SUBSCRIPTIONS` when it would take the connection past 4096 rooms; chat-restricted subscriptions count every literal chat address form for each session and event. When the rooms already held are the cause, unsubscribe before subscribing to more. A chat-restricted frame can also need more than 4096 on its own (its address forms times the events it names); unsubscribing cannot help there: name fewer events or subscribe with `"*"`, and a list stored before the 2000-entry bound whose address forms alone exceed 4096 has to be shortened.
+Error `code` values include `UNAUTHORIZED`, `INVALID_MESSAGE`, `INVALID_SESSION`, `INVALID_EVENTS`, `FORBIDDEN_SESSION`, `FORBIDDEN_EVENTS`, `TOO_MANY_SUBSCRIPTIONS`, `SUBSCRIPTION_CANCELLED`, and `RATE_LIMITED`. `RATE_LIMITED` is followed by a disconnect when a handshake exceeds the per-IP connection-attempt window or the key's concurrent-socket cap; a frame over the per-key frame budget gets `RATE_LIMITED` and is dropped undispatched, and the socket stays open. A subscribe answers `INVALID_SESSION` when `sessionId` is missing, or is neither `"*"` nor a session id of at most 128 letters, digits and hyphens. An unsubscribe answers `INVALID_SESSION` when `sessionId` is missing, empty, not a string, or neither `"*"` nor such a session id. A subscribe still checking the API key when an unsubscribe for the same session, or for `"*"`, arrives answers `SUBSCRIPTION_CANCELLED` and joins no rooms. A subscribe answers `TOO_MANY_SUBSCRIPTIONS` when it would take the connection past 4096 rooms; chat-restricted subscriptions count every literal chat address form for each session and event. When the rooms already held are the cause, unsubscribe before subscribing to more. A chat-restricted frame can also need more than 4096 on its own (its address forms times the events it names); unsubscribing cannot help there: name fewer events or subscribe with `"*"`, and a list stored before the 2000-entry bound whose address forms alone exceed 4096 has to be shortened.
 
 ### Subscribable events
 
@@ -7349,7 +7355,7 @@ Webhook delivery is **at-least-once**. A consumer can legitimately receive the s
 
 Outbox creation is best effort, and message persistence and outbox insertion are separate transactions. A write failure or crash between them can still lose the webhook delivery. Failure records with zero attempts are excluded from operator redrive. Capacity and shutdown rejections can still be recovered from an unsettled outbox record; shutdown during retry backoff may follow earlier POSTs. The direct dispatcher leaves its local in-flight work alone during reconciliation. Graceful shutdown drains current queue jobs for at most 10 s; direct sends, an operator redrive replay in flight, and an outbox replay in flight with its plugin hooks, get up to `WEBHOOK_SHUTDOWN_DRAIN_MS` (default 5s). That replay sends at most one more POST, bounded by `WEBHOOK_TIMEOUT`, and no further row is replayed; the next start replays what it left pending.
 
-**Opt-in events are bounded, not replayed.** `message.receipt` fires once per recipient and status, so one flush of buffered receipts can be thousands of events in a tick. Each webhook that names it has a queue of its own before the shared dispatch pool: a quarter of `WEBHOOK_DISPATCH_CONCURRENCY` deliveries run at once, divided among the session's webhooks that name `message.receipt` and never fewer than one running delivery per webhook, and up to three quarters of `WEBHOOK_DISPATCH_MAX_QUEUED` more receipts wait their turn. With the defaults a flush of 500 is delivered in full and at least 750 of a flush of 2000 (754 with one webhook, 751 with four). A flush drains at that quarter of the pool: 750 receipts to a receiver that takes 30 ms each take about 6 s, or about 24 s when four webhooks share the quarter. Any further receipt is dropped for that webhook: it leaves no outbox or failure row, is not replayed, and is counted in `openwa_webhook_delivery_failures_total` once for each webhook it is dropped for. It is logged once per burst and webhook (`webhook_opt_in_dropping` when the webhook starts dropping, then `webhook_opt_in_dropped` with the count). A webhook's queue is its own, so a receiver of it that never answers holds only that webhook's places: the session's other webhooks and its other events are not slowed. Between sessions the isolation has a limit, because the dispatch pool is shared. A receiver that never answers holds its places for a `WEBHOOK_TIMEOUT`; a session holds up to four at once, or one per webhook when it has more than four. That share is fixed when a webhook's queue is created and kept while the queue has events, so a session that adds receipt webhooks while a queue is busy can briefly hold more places than this. An event of another session waits for a slot once such sessions together hold all `WEBHOOK_DISPATCH_CONCURRENCY` of them, which at the defaults is four sessions: it then waits one `WEBHOOK_TIMEOUT` with four or five, two with eight. The receipts waiting in all queues together are not capped. Receipts still waiting at shutdown are dropped without being counted.
+**Opt-in events are bounded, not replayed.** `message.receipt` fires once per recipient and status, so one flush of buffered receipts can be thousands of events in a tick. Each webhook that names it has a queue of its own before the shared dispatch pool: a quarter of `WEBHOOK_DISPATCH_CONCURRENCY` deliveries run at once, divided among the session's webhooks that name `message.receipt` (the session as a whole never runs more than that quarter at once, however many webhooks name it), and up to three quarters of `WEBHOOK_DISPATCH_MAX_QUEUED` more receipts wait their turn. With the defaults a flush of 500 is delivered in full and at least 750 of a flush of 2000 (754 with one webhook, 751 with four). A flush drains at that quarter of the pool: 750 receipts to a receiver that takes 30 ms each take about 6 s, or about 24 s when four webhooks share the quarter. Any further receipt is dropped for that webhook: it leaves no outbox or failure row, is not replayed, and is counted in `openwa_webhook_delivery_failures_total` once for each webhook it is dropped for. It is logged once per burst and webhook (`webhook_opt_in_dropping` when the webhook starts dropping, then `webhook_opt_in_dropped` with the count). A webhook's queue is its own, so a receiver of it that never answers holds only that webhook's places: the session's other webhooks and its other events are not slowed as long as the quarter has a place for each webhook that names `message.receipt` (four at the defaults). With more webhooks, or one added after another's queue was sized, a receiver that never answers can hold the places its siblings need until its `WEBHOOK_TIMEOUT`. Between sessions the isolation has a limit, because the dispatch pool is shared. A receiver that never answers holds its places for a `WEBHOOK_TIMEOUT`; a session holds at most a quarter of the pool at once, four at the defaults, however many webhooks name `message.receipt` and whenever they were added. An event of another session waits for a slot once such sessions together hold all `WEBHOOK_DISPATCH_CONCURRENCY` of them, which at the defaults is four sessions: it then waits one `WEBHOOK_TIMEOUT` with four or five, two with eight. The receipts waiting in all queues together are not capped. Receipts still waiting at shutdown are dropped without being counted.
 
 Before downgrading to a version that does not recognize the `queued` outbox state, drain or recover those records and take a backup. Its cleanup may otherwise treat an unsettled queued record as settled. Reverting the terminal-identity migration removes its index but does not restore historical duplicates.
 
@@ -7401,24 +7407,24 @@ Every delivery includes:
 - `message.receipt`: `receipt_{sessionId}_{messageId}_{participant}_{status}`
 - `message.failed`: `failed_{sessionId}_{messageId}_{status}`
 - `message.revoked`: `rev_{sessionId}_{messageId}`
-- `message.edited`: `edit_{sessionId}_{messageId}_{occurredAt}`
-- `message.reaction`: `react_{sessionId}_{messageId}_{senderId}_{occurredAt}`
+- `message.edited`: `edit_{sessionId}_{messageId}_{occurrenceId}`
+- `message.reaction`: `react_{sessionId}_{messageId}_{senderId}_{occurrenceId}`
 - `session.qr`: `qr_{sessionId}_{hash(qr)}`
-- `session.status`: `sess_{sessionId}_{status}_{occurredAt}`
-- `session.authenticated`: `auth_{sessionId}_{hash(data)}_{occurredAt}`
-- `session.disconnected`: `disc_{sessionId}_{hash(reason)}_{occurredAt}`
-- `session.reconnect_loop`: `loop_{sessionId}_{attempts}_{occurredAt}`
-- `group.join` / `group.leave`: `grp_{groupId}_{hash(participantIds)}_{join|leave}_{occurredAt}`
-- `group.update`: `grp_{groupId}_update_{hash(changes)}_{occurredAt}`
-- `group.join_request`: `grp_{groupId}_{hash(participantIds)}_join_request_{occurredAt}` (salted like `group.join` — a rejected user can legitimately ask again)
-- `call.received`: `call_{sessionId}_{callId}` (a call id is unique per call, so no `occurredAt` salt)
-- `call.accepted` / `call.rejected` / `call.missed`: `call_{sessionId}_{callId}_{outcome}` (each call ends once, so no `occurredAt` salt)
-- `session.restriction`: `restr_{sessionId}_{kind}_{active}_{occurredAt}`
-- `presence.update`: `pres_{sessionId}_{chatId}_{hash(participants)}_{occurredAt}`
-- `event.response`: `rsvp_{sessionId}_{responseMessageId}` (every answer is its own message with its own id, so no `occurredAt` salt)
+- `session.status`: `sess_{sessionId}_{status}_{occurrenceId}`
+- `session.authenticated`: `auth_{sessionId}_{hash(data)}_{occurrenceId}`
+- `session.disconnected`: `disc_{sessionId}_{hash(reason)}_{occurrenceId}`
+- `session.reconnect_loop`: `loop_{sessionId}_{attempts}_{occurrenceId}`
+- `group.join` / `group.leave`: `grp_{groupId}_{hash(participantIds)}_{join|leave}_{occurrenceId}`
+- `group.update`: `grp_{groupId}_update_{hash(changes)}_{occurrenceId}`
+- `group.join_request`: `grp_{groupId}_{hash(participantIds)}_join_request_{occurrenceId}` (salted like `group.join` — a rejected user can legitimately ask again)
+- `call.received`: `call_{sessionId}_{callId}` (a call id is unique per call, so no `occurrenceId` salt)
+- `call.accepted` / `call.rejected` / `call.missed`: `call_{sessionId}_{callId}_{outcome}` (each call ends once, so no `occurrenceId` salt)
+- `session.restriction`: `restr_{sessionId}_{kind}_{active}_{occurrenceId}`
+- `presence.update`: `pres_{sessionId}_{chatId}_{hash(participants)}_{occurrenceId}`
+- `event.response`: `rsvp_{sessionId}_{responseMessageId}` (every answer is its own message with its own id, so no `occurrenceId` salt)
 - any other event (for example `status.received`): `evt_{event with . replaced by _}_{hash(data)}`
 
-Recurring lifecycle events (and `message.reaction` / `message.edited` / `presence.update`) carry the same content across occurrences — the same phone on every reconnect, a constant disconnect reason, a re-applied emoji, or editing the same message multiple times — so they are salted with an `occurredAt` timestamp captured **once per dispatch and reused across that dispatch's retries**. This gives distinct occurrences distinct keys while keeping retries of one occurrence stable. Message keys are scoped by `sessionId` because WhatsApp message ids are unique per account, not globally.
+Recurring lifecycle events (and `message.reaction` / `message.edited` / `presence.update`) carry the same content across occurrences — the same phone on every reconnect, a constant disconnect reason, a re-applied emoji, or editing the same message multiple times — so they are salted with an `occurrenceId`, a random id minted **once per dispatch and reused across that dispatch's retries**; it is not a timestamp, so two occurrences within the same millisecond still get distinct keys. This gives distinct occurrences distinct keys while keeping retries of one occurrence stable. Message keys are scoped by `sessionId` because WhatsApp message ids are unique per account, not globally.
 
 ### Retries with exponential backoff
 

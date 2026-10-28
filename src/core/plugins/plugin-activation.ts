@@ -1,4 +1,13 @@
 /**
+ * The all-sessions scope is spelled null, undefined or '*' depending on where it was stored; this maps
+ * every spelling to '*' and leaves a concrete session id as it is, so two scopes compare by key.
+ */
+export const sessionScopeKey = (scope: string | null | undefined): string => (!scope || scope === '*' ? '*' : scope);
+
+/** Whether `scope` is the all-sessions scope, in any of its spellings. */
+export const isAllSessionsScope = (scope: string | null | undefined): boolean => sessionScopeKey(scope) === '*';
+
+/**
  * Per-session activation gate. A plugin declares whether it is session-scoped (the default); the
  * operator then activates it for all sessions (`['*']`) or an explicit set. A global plugin
  * (`sessionScoped === false`, e.g. a metrics logger) ignores this and is always active.

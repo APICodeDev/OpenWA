@@ -804,8 +804,9 @@ OPENWA_DATA_DIR=/srv/openwa/data \
 > replaces the target's and is the one the restored app reads. A path that copy names has to stay in
 > the data directory unless it is the default (a leftover `./uploads` included): the restore stops,
 > naming the key and before it copies anything, at one that leads elsewhere, whether outside the
-> directory, through `..`, a link or a link that does not resolve, or inside or around another
-> directory it refills from the archive. Set that key in the environment or `./.env` to restore
+> directory, through `..`, a link or a link that does not resolve, inside or around another
+> directory it refills from the archive, or at the path of a file it writes after the directories
+> (the admin key file, `.env.generated`, `database.sql`). Set that key in the environment or `./.env` to restore
 > there. A relative `./data/...` path in `./.env` or `.env.generated`, such as the
 > `PLUGINS_DIR=./data/plugins` that `.env.example` sets or the `STORAGE_LOCAL_PATH=./data/media` the
 > app writes on first run, names a path in the app's data directory and is read under

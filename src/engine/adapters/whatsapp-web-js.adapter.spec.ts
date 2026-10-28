@@ -1303,6 +1303,16 @@ describe('WhatsAppWebJsAdapter channels (#625 — wwebjs Client has no getChanne
     expect(result).toEqual([{ id: 'M1', body: 'hello', timestamp: 1700000000, hasMedia: false }]);
   });
 
+  it('getChannelMessages finds a channel whose id carries only the renamed `$1` field, as getChannelById does', async () => {
+    const fetchMessages = jest.fn().mockResolvedValue([]);
+    const getChannels = jest.fn().mockResolvedValue([{ id: { $1: CHANNEL }, name: 'News', fetchMessages }]);
+    const adapter = readyAdapter({ getChannels });
+
+    await expect(adapter.getChannelById(CHANNEL)).resolves.toMatchObject({ id: CHANNEL });
+    await expect(adapter.getChannelMessages(CHANNEL, 10)).resolves.toEqual([]);
+    expect(fetchMessages).toHaveBeenCalledWith({ limit: 10 });
+  });
+
   it('getChannelMessages surfaces a not-found channel as ChannelNotFoundError (→ 404), not a silent []', async () => {
     const getChannels = jest
       .fn()
@@ -5695,6 +5705,50 @@ describe('LID mapping persistence to LidMappingStore (#583 R3)', () => {
       readyWithStore({ getNumberId, sendMessage }, makeStore(remember)).sendTextMessage('529934031058@c.us', 'hi'),
     ).resolves.toBeDefined();
   });
+
+  it.each(['resolves false', 'rejects'])(
+    'reports the pair again with the next send when the mapping write %s, without probing again',
+    async failure => {
+      const remember = jest.fn().mockResolvedValue(true);
+      if (failure === 'rejects') remember.mockRejectedValueOnce(new Error('db down'));
+      else remember.mockResolvedValueOnce(false);
+      const getNumberId = jest.fn().mockResolvedValue({ _serialized: '555000111@lid' });
+      const sendMessage = jest.fn<Promise<typeof sentMessage>, [string, ...unknown[]]>().mockResolvedValue(sentMessage);
+      const adapter = readyWithStore({ getNumberId, sendMessage }, makeStore(remember));
+
+      await adapter.sendTextMessage('628111@c.us', 'first');
+      await adapter.sendTextMessage('628111@c.us', 'second');
+      await adapter.sendTextMessage('628111@c.us', 'third');
+
+      expect(getNumberId).toHaveBeenCalledTimes(1);
+      expect(remember).toHaveBeenCalledTimes(2);
+      expect(remember).toHaveBeenNthCalledWith(2, '555000111', '628111', 's1');
+      expect(sendMessage.mock.calls.map(call => call[0])).toEqual(['555000111@lid', '555000111@lid', '555000111@lid']);
+    },
+  );
+
+  it('does not report a newer resolution again when an older mapping write fails late', async () => {
+    let settleOlder!: (stored: boolean) => void;
+    const getNumberId = jest
+      .fn()
+      .mockResolvedValueOnce({ _serialized: '555000111@lid' })
+      .mockResolvedValueOnce({ _serialized: '555000222@lid' });
+    const remember = jest
+      .fn()
+      .mockReturnValueOnce(new Promise<boolean>(resolve => (settleOlder = resolve)))
+      .mockResolvedValue(true);
+    const sendMessage = jest.fn<Promise<typeof sentMessage>, [string, ...unknown[]]>().mockResolvedValue(sentMessage);
+    const adapter = readyWithStore({ getNumberId, sendMessage }, makeStore(remember));
+
+    await Promise.all([adapter.sendTextMessage('628111@c.us', 'a'), adapter.sendTextMessage('628111@c.us', 'b')]);
+    settleOlder(false);
+    await new Promise(resolve => setImmediate(resolve));
+    await adapter.sendTextMessage('628111@c.us', 'c');
+
+    expect(getNumberId).toHaveBeenCalledTimes(2);
+    expect(remember).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[2][0]).toBe('555000222@lid');
+  });
 });
 
 describe('extractWwebjsCall (call_log → { video, missed }, salvaged from #494)', () => {
@@ -6756,6 +6810,53 @@ describe('WhatsAppWebJsAdapter navigation re-inject grace (#1081)', () => {
     jest.setSystemTime(Date.now() + 4 * 60 * 60 * 1000);
     client.pupPage.emit('framenavigated', navFrame());
     await expect(adapter.probeLiveness()).resolves.toBe(true);
+  });
+
+  it.each([false, true])('keeps a newer navigation after an older probe settles; previous=%s', async previous => {
+    jest.useFakeTimers();
+    const { adapter, client } = wireAdapter();
+    if (previous) client.pupPage.emit('framenavigated', navFrame());
+    let resolve!: (state: WAState) => void;
+    client.getState.mockReturnValueOnce(
+      new Promise<WAState>(done => {
+        resolve = done;
+      }),
+    );
+    const probe = adapter.probeLiveness();
+    client.pupPage.emit('framenavigated', navFrame());
+    resolve(WAState.CONNECTED);
+    await expect(probe).resolves.toBe(true);
+    await expect(adapter.getChats()).rejects.toBeInstanceOf(EngineNotReadyError);
+  });
+
+  it('keeps a newer recovery episode when overlapping probes settle out of order', async () => {
+    jest.useFakeTimers();
+    const { adapter, client } = wireAdapter();
+    let first!: (state: WAState) => void;
+    let second!: (state: WAState) => void;
+    client.getState
+      .mockReturnValueOnce(
+        new Promise<WAState>(done => {
+          first = done;
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise<WAState>(done => {
+          second = done;
+        }),
+      );
+    const older = adapter.probeLiveness();
+    client.pupPage.emit('framenavigated', navFrame());
+    const current = adapter.probeLiveness();
+    second(WAState.CONNECTED);
+    await expect(current).resolves.toBe(true);
+    const lifecycle = (adapter as unknown as { lifecycle: WwebjsLifecycle }).lifecycle;
+    expect(lifecycle.isInNavigationReinjectWindow()).toBe(false);
+    client.pupPage.emit('framenavigated', navFrame());
+    first(WAState.CONNECTED);
+    await expect(older).resolves.toBe(true);
+    expect(lifecycle.isInNavigationReinjectWindow()).toBe(true);
+    await expect(adapter.getChats()).rejects.toBeInstanceOf(EngineNotReadyError);
   });
 
   it('does not report a transport-matching error as death inside the window (in-flight race)', () => {

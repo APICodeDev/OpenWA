@@ -897,6 +897,10 @@
   color: var(--text-muted);
 }
 
+.chats-page .chats-error-state button {
+  margin-top: 1.5rem;
+}
+
 .chats-page .text-warn {
   color: var(--warning-text);
 }

@@ -964,8 +964,11 @@ adapter boundary — none silently stubs.
   return a code, but on whatsapp-web.js the request runs in the shared WhatsApp Web page and checks
   no precondition: measured twice, a request for a number that already had a linked session was
   followed within about a minute by WhatsApp revoking that device, whatsapp-web.js deleting its
-  credentials and the session returning to `qr_ready`. Baileys writes only its own credentials and
-  showed no such effect. Link by QR when the session of that number must stay up.
+  credentials and the session returning to `qr_ready`. The gateway now answers `409` on whatsapp-web.js
+  for a number that is the stored phone of another of its sessions (the mobile-marker spellings of a
+  Brazilian, Mexican or Argentine number count as one), but it cannot see a link made on another gateway
+  or only on the phone. Baileys writes only its own credentials, showed no such effect and is not
+  refused. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
   four `chatModify` actions (archive, clear, delete, unread) need the chat's last known message, which
   the patch carries. `sendSeen` without message ids is `readMessages([key])` for the newest _received_

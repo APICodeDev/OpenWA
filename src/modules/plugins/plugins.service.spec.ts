@@ -161,6 +161,25 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     }
   });
 
+  it('has the plugin state in the live directory the moment the update swaps it in', async () => {
+    // Boot recovery drops the backup once a live directory exists, so state that is copied after the swap
+    // is lost by a crash between the two. Observe the live directory right after the staging rename.
+    service.install({ buffer: pkg({ version: '1.0.0' }) });
+    await pluginStorage.createPluginStorage('svc-plg').set('cursor', { lastId: 'msg-42' });
+    const live = path.join(pluginsDir, 'svc-plg');
+    const realRename = fs.renameSync.bind(fs);
+    let atSwap: string[] | undefined;
+    const rename = jest.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+      realRename(from, to);
+      if (to === live && String(from).endsWith('.svc-plg.new')) atSwap = fs.readdirSync(live);
+    });
+
+    await service.updatePackage('svc-plg', pkg({ version: '2.0.0' }));
+    rename.mockRestore();
+
+    expect(atSwap).toEqual(expect.arrayContaining([expect.stringMatching(/^key-.*\.json$/)]));
+  });
+
   it('preserves a legacy (pre-encoding) ctx.storage file across an in-place package update', async () => {
     service.install({ buffer: pkg({ version: '1.0.0' }) });
     const storage = pluginStorage.createPluginStorage('svc-plg');
@@ -1186,6 +1205,21 @@ describe('PluginsService remote catalog', () => {
     fetchMock.mockImplementationOnce(() => Promise.resolve(Buffer.from(json)));
   };
 
+  it('keeps unknown extra fields and every optional field of the right type', async () => {
+    serveOnce(
+      '[{"id":"a","name":"A","version":"1.0.0","description":"d","keywords":["x"],"stars":5,"download":"https://x/a.zip"}]',
+    );
+    await expect(service().getCatalog()).resolves.toMatchObject([{ id: 'a', stars: 5, keywords: ['x'] }]);
+  });
+
+  it('accepts null in optional fields', async () => {
+    serveOnce('[{"id":"a","name":"A","version":"1.0.0","homepage":null,"keywords":null}]');
+    const [entry] = await service().getCatalog();
+    expect(entry).toMatchObject({ id: 'a', installed: false });
+    expect(entry).not.toHaveProperty('homepage');
+    expect(entry).not.toHaveProperty('keywords');
+  });
+
   it('annotates a well-formed catalog', async () => {
     serveOnce('[{"id":"a","name":"A","version":"1.0.0"}]');
     await expect(service().getCatalog()).resolves.toEqual([
@@ -1193,15 +1227,21 @@ describe('PluginsService remote catalog', () => {
     ]);
   });
 
-  it.each(['[null]', '[{"id":"a","name":"A","version":"1.0.0"},5]', '[[]]'])(
-    'answers 400, not 500, for a catalog with a non-object entry (%s)',
-    async json => {
-      serveOnce(json);
-      const err: unknown = await service()
-        .getCatalog()
-        .catch((e: unknown) => e);
-      expect(err).toBeInstanceOf(BadRequestException);
-      expect((err as BadRequestException).message).toMatch(/Invalid plugin catalog JSON/);
-    },
-  );
+  it.each([
+    '[null]',
+    '[{"id":"a","name":"A","version":"1.0.0"},5]',
+    '[[]]',
+    '[{"id":"a","name":{},"version":"1.0.0"}]',
+    '[{"id":"a","name":"A","version":"1.0.0","description":7}]',
+    '[{"id":"a","name":"A"}]',
+    '[{"id":"","name":"A","version":"1.0.0"}]',
+    '[{"id":"a","name":"A","version":"1.0.0","keywords":"x"}]',
+  ])('answers 400, not 500, for a catalog with a malformed entry (%s)', async json => {
+    serveOnce(json);
+    const err: unknown = await service()
+      .getCatalog()
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BadRequestException);
+    expect((err as BadRequestException).message).toMatch(/Invalid plugin catalog JSON/);
+  });
 });

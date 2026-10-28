@@ -486,7 +486,14 @@ export class ChatStateStoreService implements ChatStateStore, OnModuleInit {
     next.updatedAt = at.getTime();
     this.bumpWriteSeq(sessionId);
     this.index(k, next);
-    return this.persist(sessionId, chatId, next, at);
+    const persisted = await this.persist(sessionId, chatId, next, at);
+    if (!persisted) {
+      // The value was never stored, so a later patch equal to it must not be read as a no-op, nor a fold
+      // delete its twins on the strength of it: the next write reads the table again.
+      this.states.delete(k);
+      this.completeSessions.delete(sessionId);
+    }
+    return persisted;
   }
 
   private async persist(

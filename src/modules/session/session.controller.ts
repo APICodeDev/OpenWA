@@ -326,7 +326,7 @@ export class SessionController {
       'effect runs before this refusal. Also returned when another node currently holds this ' +
       "session's engine: only the owner may start it, and the claim is refused before any engine " +
       'is launched, so no second connection to the account is opened. Also returned, with no `code`, ' +
-      'when a stop, a force-kill that found a running engine to kill, or a data import (`stopOrphans`) ' +
+      'when a stop, a logout or force-kill that found a running engine, or a data import (`stopOrphans`) ' +
       'of this session began or finished while the start was waiting, or a delete of it was still ' +
       'running: the start yields and launches nothing. After a stop or force-kill, a new POST /start ' +
       'clears it and starts the session; after a delete, or an import that removed the session, the ' +
@@ -516,14 +516,23 @@ export class SessionController {
       'On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link. A request ' +
       'for a number that already has a linked session has been observed to end with WhatsApp revoking that ' +
       'device: the linked session logs out, its credentials are deleted and it falls back to `qr_ready`. ' +
-      'Nothing refuses such a request, because the guards check the session state and never the number. ' +
-      'Baileys was not affected in the same tests. Link by QR when a session of that number must stay up.',
+      'On that engine a number that is the stored phone of another session of this gateway (the Brazilian, ' +
+      'Mexican and Argentine mobile spellings of one number count as the same) is refused with `409` and WhatsApp ' +
+      'is not asked; the gateway cannot see a link made on another gateway or only on the phone. ' +
+      'Baileys was not affected in the same tests and accepts the request: its sessions are companion devices ' +
+      'and may share a number. Link by QR when a session of that number must stay up.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiResponse({ status: 201, description: 'Pairing code generated', type: PairingCodeResponseDto })
   @ApiResponse({ status: 400, description: 'Session not started or already authenticated' })
   @ApiResponse({ status: 404, description: 'Session not found' })
-  @ApiResponse({ status: 409, description: PAIRING_NOT_READY_409 })
+  @ApiResponse({
+    status: 409,
+    description:
+      PAIRING_NOT_READY_409 +
+      ' On whatsapp-web.js also answered, with nothing sent to WhatsApp, when the requested number is the stored ' +
+      'phone of another session of this gateway: delete that session, or log it out while it runs, first.',
+  })
   @ApiResponse({ status: 503, description: PAIRING_TRANSPORT_503 })
   async requestPairingCode(
     @Param('sessionId', ParseUUIDPipe) id: string,

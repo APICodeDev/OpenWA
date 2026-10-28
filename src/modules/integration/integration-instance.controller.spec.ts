@@ -1024,3 +1024,55 @@ describe('IntegrationInstanceController update audit', () => {
     expect(audit.logInfo).not.toHaveBeenCalledWith(AuditAction.INTEGRATION_INSTANCE_UPDATED, expect.anything());
   });
 });
+
+describe('a session-restricted key provisioning an instance', () => {
+  it.each(['create', 'config', 'move', 'disable', 'remove'] as const)(
+    'leaves the operator all-sessions activation in place on %s',
+    async operation => {
+      const plugin = {
+        manifest: { id: 'adapter', ingress: [{ route: 'event' }], permissions: ['webhook:ingress'] },
+        activeSessions: ['*'],
+      };
+      let row = { id: 'adapter:a', pluginId: 'adapter', instanceId: 'a', enabled: true, sessionScope: 'A', config: {} };
+      let present = true;
+      const instances = {
+        resolve: jest.fn(() => Promise.resolve(present ? row : null)),
+        create: jest.fn(() => Promise.resolve(row)),
+        update: jest.fn((_plugin: string, _instance: string, patch: Partial<typeof row>) => {
+          row = { ...row, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+          return Promise.resolve(row);
+        }),
+        remove: jest.fn(() => {
+          present = false;
+          return Promise.resolve(true);
+        }),
+        list: jest.fn(() => Promise.resolve(present ? [row] : [])),
+        maskedView: (instance: unknown) => instance,
+      } as unknown as PluginInstanceService;
+      const loader = {
+        getPlugin: () => plugin,
+        setPluginSessionConfig: jest.fn(),
+        setPluginSessions: (_id: string, active: string[]) => {
+          plugin.activeSessions = active;
+        },
+      } as unknown as PluginLoaderService;
+      const audit = { logInfo: jest.fn(), logWarn: jest.fn() } as unknown as AuditService;
+      const controller = new IntegrationInstanceController(
+        instances,
+        loader,
+        audit,
+        new ScopeBindingService(instances, loader, audit, sessions),
+      );
+      const key = { allowedSessions: ['A', 'C'], allowedChats: [] } as unknown as ApiKey;
+
+      if (operation === 'create') await controller.create('adapter', { instanceId: 'a', sessionScope: 'A' }, key);
+      if (operation === 'config')
+        await controller.patch('adapter', 'a', { config: { endpoint: 'https://a.invalid' } }, key);
+      if (operation === 'move') await controller.patch('adapter', 'a', { sessionScope: 'C' }, key);
+      if (operation === 'disable') await controller.patch('adapter', 'a', { enabled: false }, key);
+      if (operation === 'remove') await controller.remove('adapter', 'a', key);
+
+      expect(plugin.activeSessions).toContain('*');
+    },
+  );
+});
