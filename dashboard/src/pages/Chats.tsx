@@ -233,6 +233,13 @@ export function Chats() {
   const openRoomKey = activeChat ? readKey(selectedSessionId, activeChat.id) : '';
   if (contactInfoFor !== '' && contactInfoFor !== openRoomKey) setContactInfoFor('');
   const showContactInfo = contactInfoFor !== '' && contactInfoFor === openRoomKey;
+  const contactInfoLabel = activeChat?.isGroup ? t('chats.group.info') : t('chats.contactInfo');
+  // Closing the panel unmounts its close button, so focus goes back to the button that toggles it.
+  const contactToggleRef = useRef<HTMLButtonElement | null>(null);
+  const closeContactInfo = () => {
+    setContactInfoFor('');
+    contactToggleRef.current?.focus();
+  };
 
   // Chats/Channels/Status tab selection. Switching tabs closes whatever conversation is open so a
   // press on another tab doesn't leave a Chats-tab room rendered underneath a Channels/Status list.
@@ -1767,8 +1774,10 @@ export function Chats() {
       if (document.querySelector('[role="dialog"], [role="menu"]')) return;
       if (activeStatusContactId !== null) setActiveStatusContactId(null);
       else if (activeChannel) setActiveChannel(null);
-      else if (activeChat && showContactInfo) setContactInfoFor('');
-      else if (activeChat) setActiveChat(null);
+      else if (activeChat && showContactInfo) {
+        setContactInfoFor('');
+        contactToggleRef.current?.focus();
+      } else if (activeChat) setActiveChat(null);
       else if (showNewChat) setShowNewChat(false);
       else return;
       event.preventDefault();
@@ -1796,6 +1805,8 @@ export function Chats() {
 
   return (
     <div className="chats-page">
+      {/* The page header gave way to the full-height layout; its title stays for screen readers. */}
+      <h1 className="visually-hidden">{t('nav.chats')}</h1>
       {/* Real-time connection permanently dropped — let the user re-establish it instead of
           silently showing stale chats. */}
       {connectionFailed && (
@@ -1916,6 +1927,7 @@ export function Chats() {
           <div className="chats-room">
             {activeChat ? (
               <div className="room-container">
+                <h2 className="visually-hidden">{activeChatTitle}</h2>
                 {/* Room header */}
                 <header className="room-header">
                   <button className="room-back" onClick={() => setActiveChat(null)} aria-label={t('common.back')}>
@@ -1926,7 +1938,7 @@ export function Chats() {
                     type="button"
                     className="room-contact"
                     onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
-                    title={t('chats.contactInfo')}
+                    title={contactInfoLabel}
                     aria-expanded={showContactInfo}
                   >
                     <ChatAvatar
@@ -1998,11 +2010,12 @@ export function Chats() {
                       )}
                     </div>
                     <button
+                      ref={contactToggleRef}
                       type="button"
                       className={`icon-btn ${showContactInfo ? 'active' : ''}`}
                       onClick={() => setContactInfoFor(showContactInfo ? '' : openRoomKey)}
-                      title={t('chats.contactInfo')}
-                      aria-label={t('chats.contactInfo')}
+                      title={contactInfoLabel}
+                      aria-label={contactInfoLabel}
                       aria-pressed={showContactInfo}
                     >
                       <PanelRight size={22} />
@@ -2154,18 +2167,18 @@ export function Chats() {
 
           {/* Contact panel beside the room, toggled from its header. */}
           {activeChat && showContactInfo && (
-            <aside className="contact-info-panel" aria-label={t('chats.contactInfo')}>
+            <aside className="contact-info-panel" aria-label={contactInfoLabel}>
               <header className="contact-info-header">
                 <button
                   type="button"
                   className="icon-btn"
-                  onClick={() => setContactInfoFor('')}
+                  onClick={closeContactInfo}
                   aria-label={t('common.close')}
                   title={t('common.close')}
                 >
                   <X size={20} />
                 </button>
-                <span>{t('chats.contactInfo')}</span>
+                <span>{contactInfoLabel}</span>
               </header>
               <div className="contact-info-body">
                 <ChatAvatar

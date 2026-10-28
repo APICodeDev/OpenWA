@@ -475,6 +475,39 @@ test('the contact panel opens from the room header and Escape closes it before t
   assert.ok(container.querySelector('.room-header'), 'Escape closed the room along with the panel');
 });
 
+test('the page and the open room keep a heading, and closing the panel returns focus to its toggle', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  assert.ok(screen.getByRole('heading', { level: 1, name: 'Chats' }), 'the page has no h1');
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(screen.getByRole('heading', { level: 2, name: 'Alice' }), 'the room has no heading'));
+
+  const focusedName = () => document.activeElement?.getAttribute('aria-label');
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  const panel = await waitFor(() => container.querySelector('.contact-info-panel') as HTMLElement);
+  fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
+  assert.equal(container.querySelector('.contact-info-panel'), null, 'the close button left the panel open');
+  assert.equal(focusedName(), 'Contact info', 'closing the panel dropped focus');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  await waitFor(() => assert.ok(container.querySelector('.contact-info-panel')));
+  (container.querySelector('.contact-info-panel button') as HTMLElement).focus();
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(container.querySelector('.contact-info-panel'), null, 'Escape left the panel open');
+  assert.equal(focusedName(), 'Contact info', 'Escape dropped focus');
+});
+
+test("a group's panel is its group info, not contact info", async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listGroup = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Team'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  assert.ok(!screen.queryByRole('button', { name: 'Contact info' }), 'a group offers contact info');
+  fireEvent.click(screen.getByRole('button', { name: 'Group info' }));
+  assert.ok(await screen.findByRole('complementary', { name: 'Group info' }), 'the group panel is not named for it');
+});
+
 test('the contact panel isolates the chat id left to right, so an RTL page keeps "@c.us" at its end', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   const { container } = renderPage();
