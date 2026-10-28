@@ -41,7 +41,6 @@ test('text cut with an ellipsis takes its direction from its own characters', ()
     '.chats-page .room-contact-info h3',
     '.chats-page .preview-filename',
     '.chats-page .quote-body',
-    '.chats-page .replying-to-title',
     '.chats-page .replying-to-body',
     '.chats-page .group-info-member .name',
   ];
@@ -50,4 +49,34 @@ test('text cut with an ellipsis takes its direction from its own characters', ()
     assert.match(rule, /text-overflow:\s*ellipsis/, `${selector} is expected to be cut with an ellipsis`);
     assert.match(rule, /unicode-bidi:\s*plaintext/, selector);
   }
+});
+
+test('the reply title is a sentence with a name inside, so it keeps the page direction', () => {
+  // Read by its first strong letter, "{{name}} kişisine yanıt veriliyor" with an Arabic name would resolve right
+  // to left and draw its words backwards.
+  const rule = body('pages/Chats.css', '.chats-page .replying-to-title');
+  assert.match(rule, /text-overflow:\s*ellipsis/);
+  assert.doesNotMatch(rule, /unicode-bidi/);
+});
+
+test('cut text that a flex column stretches hugs the start edge, where its siblings are', () => {
+  // unicode-bidi: plaintext also aligns the text by its own direction, so a stretched box would put a Latin name
+  // at the left edge of an Arabic page while the lines beside it sit at the right.
+  const hugging = [
+    '.chats-page .chat-item-info > .chat-item-name',
+    '.chats-page .chat-item-info > .chat-item-snippet',
+    '.chats-page .room-contact-info h3',
+    '.chats-page .preview-filename',
+    '.chats-page .replying-to-body',
+  ];
+  for (const selector of hugging) {
+    const rule = body('pages/Chats.css', selector);
+    assert.match(rule, /align-self:\s*flex-start/, selector);
+    assert.match(rule, /max-width:\s*100%/, `${selector} needs a cap, or the ellipsis never shows`);
+  }
+  assert.match(body('pages/Chats.css', '.chats-page .quote-body'), /width:\s*fit-content/);
+});
+
+test('chart plots stay left to right on a right to left page', () => {
+  assert.match(body('components/DashboardCharts.css', '.dashboard-charts .recharts-surface'), /direction:\s*ltr/);
 });

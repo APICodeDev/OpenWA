@@ -68,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Load every page of the chat list in the dashboard; an account with more than 1000 chats saw only the first 1000.
 - Cut a long chat name in the dashboard on the side its own script ends, so a Latin name on an Arabic or Hebrew page no longer loses its first letters.
 - Shorten the id of an unnamed group on the dashboard Top chats chart to its first and last digits, and fit the Number Checker phone placeholder in every language.
+- Keep the dashboard charts left to right on right to left pages, where the Top chats labels were drawn across their bars.
 - Bound Redis cache commands and discard expired operations during reconnect.
 - Read the top chats of `GET /api/stats/messages` on SQLite through the `createdAt` index, where it scanned the whole messages table (3 s over 59,000 messages for a one-day window, with every request waiting), and skip the row lookup for group messages in the top chats of `GET /api/stats/sessions/{sessionId}`.
 - Preserve literal request values in custom ingress acknowledgments.
