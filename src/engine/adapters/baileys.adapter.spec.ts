@@ -64,6 +64,8 @@ class FakeSock extends EventEmitter {
   public groupAcceptInvite = jest.fn();
   public groupSettingUpdate = jest.fn().mockResolvedValue(undefined);
   public groupToggleEphemeral = jest.fn().mockResolvedValue(undefined);
+  // Resolves with the relayed protocol message's id.
+  public updateMemberLabel = jest.fn().mockResolvedValue('3EB0LABEL');
   public groupGetInviteInfo = jest.fn();
   public groupMemberAddMode = jest.fn().mockResolvedValue(undefined);
   public profilePictureUrl = jest.fn();
@@ -5848,6 +5850,12 @@ describe('BaileysAdapter group management', () => {
     ['revokeGroupInviteCode', (a: BaileysAdapter) => a.revokeGroupInviteCode('123-456@g.us'), 'groupRevokeInvite'],
     // Was the one group write with no refusal mapping: a refused leave answered an opaque 500.
     ['leaveGroup', (a: BaileysAdapter) => a.leaveGroup('123-456@g.us'), 'groupLeave'],
+    // A relayed message, not an IQ: the refusal is the group lookup the relay runs first.
+    [
+      'setGroupMemberLabel',
+      (a: BaileysAdapter) => a.setGroupMemberLabel('123-456@g.us', 'Site A'),
+      'updateMemberLabel',
+    ],
   ])('%s maps an admin-refused operation to EngineRefusedError (403)', async (_name, call, sockMethod) => {
     (fakeSock as unknown as Record<string, jest.Mock>)[sockMethod].mockRejectedValueOnce(
       Object.assign(new Error('not-authorized'), { data: 401 }),
@@ -5881,6 +5889,11 @@ describe('BaileysAdapter group management', () => {
       'groupMemberAddMode',
     ],
     ['setGroupEphemeral', (a: BaileysAdapter) => a.setGroupEphemeral('123-456@g.us', 86400), 'groupToggleEphemeral'],
+    [
+      'setGroupMemberLabel',
+      (a: BaileysAdapter) => a.setGroupMemberLabel('123-456@g.us', 'Site A'),
+      'updateMemberLabel',
+    ],
     ['getGroupInviteCode', (a: BaileysAdapter) => a.getGroupInviteCode('123-456@g.us'), 'groupInviteCode'],
     ['revokeGroupInviteCode', (a: BaileysAdapter) => a.revokeGroupInviteCode('123-456@g.us'), 'groupRevokeInvite'],
     ['leaveGroup', (a: BaileysAdapter) => a.leaveGroup('123-456@g.us'), 'groupLeave'],
@@ -6072,6 +6085,30 @@ describe('BaileysAdapter group management', () => {
     expect(fakeSock.groupToggleEphemeral).toHaveBeenCalledWith('123-456@g.us', 86400);
     await adapter.setGroupEphemeral('123-456@g.us', 0);
     expect(fakeSock.groupToggleEphemeral).toHaveBeenCalledWith('123-456@g.us', 0);
+  });
+
+  it('setGroupMemberLabel relays the label to the group jid (empty clears) and resolves void', async () => {
+    const adapter = await ready();
+    await expect(adapter.setGroupMemberLabel('123-456@g.us', 'Site A Management')).resolves.toBeUndefined();
+    expect(fakeSock.updateMemberLabel).toHaveBeenCalledWith('123-456@g.us', 'Site A Management');
+    await adapter.setGroupMemberLabel('123-456@g.us', '');
+    expect(fakeSock.updateMemberLabel).toHaveBeenLastCalledWith('123-456@g.us', '');
+  });
+
+  it.each([
+    [429, EngineThrottledError],
+    [408, EngineTransportError],
+  ])('setGroupMemberLabel maps WhatsApp code %i to a retryable 503', async (code, errorClass) => {
+    fakeSock.updateMemberLabel.mockRejectedValueOnce(Object.assign(new Error('throttled'), { data: code }));
+    const adapter = await ready();
+    await expect(adapter.setGroupMemberLabel('123-456@g.us', 'Site A')).rejects.toBeInstanceOf(errorClass);
+  });
+
+  it('setGroupMemberLabel lets a dead socket propagate rather than report a refusal', async () => {
+    const connectionClosed = new Boom('Connection Closed', { statusCode: 428 });
+    fakeSock.updateMemberLabel.mockRejectedValueOnce(connectionClosed);
+    const adapter = await ready();
+    await expect(adapter.setGroupMemberLabel('123-456@g.us', 'Site A')).rejects.toBe(connectionClosed);
   });
 
   it('getGroupInfo populates announce/locked/ephemeralSeconds from the metadata', async () => {

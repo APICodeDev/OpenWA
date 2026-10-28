@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
 - Add `match=contains` to `GET /api/search`, which needs `SEARCH_CONTAINS_ENABLED=true`: case- and accent-insensitive substring search on a trigram index (FTS5 on SQLite, `pg_trgm` and `unaccent` on PostgreSQL) that ranks the 1,000 most recently stored matches, so `total` is at most 1,000 in this mode; `match=word` stays the default and the SDKs accept `match`. Thanks @luisffm.
 - Add the `MessageSearch` MCP tool, which runs the global message search for agents, with `match=contains` by default only when `SEARCH_CONTAINS_ENABLED=true`. Thanks @luisffm.
+- Add `PUT /api/sessions/{sessionId}/groups/{groupId}/member-label` to set this account's member label in a group on Baileys; whatsapp-web.js answers `501` (#1918). Thanks @xwork1 for the report.
 
 ### Changed
 

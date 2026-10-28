@@ -360,6 +360,12 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
     evidence:
       'wwjs 1.34.7 exposes NO ephemeral setter — 0 hits for ephemeral in index.d.ts; only a create-time messageTimer option (Client.js:2328); adapter throws EngineNotSupportedError; baileys groupToggleEphemeral(jid, ephemeralExpiration) (Socket/groups.d.ts:40)',
   },
+  setGroupMemberLabel: {
+    wwjs: { status: 'not-available', rootCause: 'library-limitation' },
+    baileys: { status: 'supported' },
+    evidence:
+      'wwjs 1.34.7 exposes NO member-label setter: 0 hits for memberLabel or member tag in index.d.ts and src/; adapter throws EngineNotSupportedError; baileys updateMemberLabel(jid, memberLabel) (Socket/messages-send.d.ts:34) relays a GROUP_MEMBER_LABEL_CHANGE protocol message to the group with the label cut by slice(0, 30) (messages-send.js:274-295)',
+  },
   setGroupInfoAdminsOnly: {
     wwjs: { status: 'supported' },
     baileys: { status: 'supported' },

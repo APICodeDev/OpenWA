@@ -53,6 +53,15 @@ describe('GroupController join + settings', () => {
     );
   });
 
+  it('PUT :groupId/member-label forwards the label and returns the success envelope', async () => {
+    const { controller, service } = build({ setGroupMemberLabel: jest.fn().mockResolvedValue(undefined) });
+    await expect(controller.setMemberLabel('s1', '120363@g.us', { label: 'Site A' })).resolves.toEqual({
+      success: true,
+      message: 'Group member label sent',
+    });
+    expect(service.setGroupMemberLabel).toHaveBeenCalledWith('s1', '120363@g.us', 'Site A');
+  });
+
   it('PUT :groupId/settings propagates a service rejection (empty patch / 501 passthrough)', async () => {
     const { controller } = build({
       updateGroupSettings: jest

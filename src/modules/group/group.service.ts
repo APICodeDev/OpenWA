@@ -163,6 +163,11 @@ export class GroupService {
     return this.getEngine(sessionId).setGroupDescription(groupId, description);
   }
 
+  setGroupMemberLabel(sessionId: string, groupId: string, label: string): Promise<void> {
+    this.assertGroupId(groupId);
+    return this.getEngine(sessionId).setGroupMemberLabel(groupId, label);
+  }
+
   leaveGroup(sessionId: string, groupId: string) {
     return this.getEngine(sessionId).leaveGroup(groupId);
   }
@@ -207,6 +212,9 @@ export class GroupService {
    * belongs replaced or permanently deleted the account's own avatar and answered 200, while
    * whatsapp-web.js refused the same input through requireGroupChat. Guarded here rather than in either
    * adapter so both engines agree, and so no engine ever sees the wrong kind of id.
+   *
+   * The member label uses it too: Baileys relays that label as a message to whatever jid it is given, so
+   * a 1:1 id would send a group protocol message to a person.
    */
   private assertGroupId(groupId: string): void {
     if (chatKind(groupId) !== 'group') {

@@ -3223,6 +3223,47 @@ No `@HttpCode`; PUT default is `200`.
 
 **Errors:** `400` validation (`description` missing / not a string) / session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role, or the engine refused (admin rights required) · `404` no such group · `409` conflict or engine not ready (retryable) · `503` session not ready or dependency unavailable (retryable); on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
 
+#### PUT /api/sessions/:sessionId/groups/:groupId/member-label
+
+Set this account's own member label in the group: the per-group tag WhatsApp shows beside its name, so
+one number can carry a different label in each group. An empty string clears the label.
+
+**Auth:** API key (OPERATOR) · **Engines:** Baileys only; whatsapp-web.js returns `501`
+
+A key restricted to selected chats reaches only the groups on its list.
+
+**Path parameters**
+
+| Name      | Type   | Description                                   |
+| --------- | ------ | --------------------------------------------- |
+| sessionId | string | Session ID                                    |
+| groupId   | string | Group ID (`<id>@g.us`); any other id is `400` |
+
+**Request body**: `GroupMemberLabelDto`
+
+| Field | Type   | Required | Constraints                                            | Description                                                          |
+| ----- | ------ | -------- | ------------------------------------------------------ | -------------------------------------------------------------------- |
+| label | string | Yes      | `@IsString` (no `@IsNotEmpty`), ≤ 30 UTF-16 code units | Must be present and a string, but `""` is valid and clears the label |
+
+The 30 is counted in UTF-16 code units, the unit Baileys cuts the label at, so an emoji outside the
+Basic Multilingual Plane takes two of them. A longer label is refused rather than shortened.
+
+```json
+{ "label": "Site A Management" }
+```
+
+**Response** `200`
+
+The label message was handed to WhatsApp. Baileys sends it to the group as a protocol message, so
+there is no per-request confirmation, and group metadata does not carry the label, so it cannot be
+read back through this API.
+
+```json
+{ "success": true, "message": "Group member label sent" }
+```
+
+**Errors:** `400` validation (`label` missing / not a string / too long), the id does not name a group, or session not started · `401` missing/invalid `X-API-Key` · `403` key lacks OPERATOR role or the group is outside a chat-restricted key's list, or WhatsApp refused the group lookup the label message depends on (for example, the account is no longer a member) · `404` no such group · `409` conflict or engine not ready (retryable) · `501` whatsapp-web.js, which has no member-label setter · `503` WhatsApp did not answer within the request budget, so the label may or may not have been sent; on Baileys, also when WhatsApp rate-limits or times out the request (code 429 or 408): retry after a pause
+
 #### POST /api/sessions/:sessionId/groups/:groupId/leave
 
 Leave a group.

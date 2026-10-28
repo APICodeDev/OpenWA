@@ -596,6 +596,14 @@ export class WwebjsGroups {
     throw new EngineNotSupportedError('setGroupEphemeral');
   }
 
+  // whatsapp-web.js 1.34.7 has no member-label setter (no memberLabel or member tag symbol in index.d.ts
+  // or src/), so this is an honest 501 rather than a no-op.
+  // eslint-disable-next-line @typescript-eslint/require-await, @typescript-eslint/no-unused-vars
+  async setGroupMemberLabel(_groupId: string, _label: string): Promise<void> {
+    this.host.ensureReady();
+    throw new EngineNotSupportedError('setGroupMemberLabel');
+  }
+
   async getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {
     // Resolved first, like every other group operation in this file. Without it an unknown id or a
     // non-group jid answered 200 with an empty list, which reads as "this group has no pending

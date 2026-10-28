@@ -1440,6 +1440,13 @@ export interface GroupCapability {
   setGroupEphemeral(groupId: string, durationSec: number): Promise<void>;
 
   /**
+   * Set this account's own member label in the group (the per-group tag shown beside its name); an empty
+   * string clears it. Resolves once the label message is handed to WhatsApp: it travels as a group
+   * protocol message with no per-request confirmation, and group metadata does not carry the label back.
+   */
+  setGroupMemberLabel(groupId: string, label: string): Promise<void>;
+
+  /**
    * Pending join requests for a group with join-approval turned on. Admin-only on both engines;
    * a non-admin's read is refused by the engine and surfaced as-is.
    */
