@@ -71,3 +71,12 @@ test('the session picker is capped by the list column, so the layout never clips
   assert.equal(declared('.chats-page .session-picker', 'overflow'), 'hidden');
   assert.equal(declared('.chats-page .session-picker-list', 'overflow-y'), 'auto');
 });
+
+test('the page gives up the phone bar under the query that draws it, so 768px keeps its full height', () => {
+  const layout = readFileSync(join(here, '..', 'components', 'Layout.tsx'), 'utf8');
+  const mobile = /const MOBILE_QUERY = '([^']+)'/.exec(layout)?.[1];
+  assert.ok(mobile, 'Layout.tsx no longer names its phone query');
+  const offset = /@media ([^{]+)\{\s*\.chats-page\s*\{\s*height:\s*calc\(100dvh - 3\.5rem\)/.exec(css);
+  assert.ok(offset, 'the page no longer takes the phone bar off its height');
+  assert.equal(offset[1].trim(), mobile);
+});
