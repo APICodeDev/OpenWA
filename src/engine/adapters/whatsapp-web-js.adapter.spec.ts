@@ -4060,14 +4060,11 @@ describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
     expect(onPollVote).toHaveBeenCalledWith(expect.objectContaining({ selectedOptions: [] }));
   });
 
-  it('falls back to the poll key when WhatsApp Web no longer holds the poll, leaving unnamed options out', () => {
+  it('falls back to the poll key for a cleared vote when WhatsApp Web no longer holds the poll', () => {
     const { onPollVote, client } = wireVoteHandler();
 
-    // Without the creation message, PollVote builds an empty Message and keeps only local option ids.
-    client.emit(
-      'vote_update',
-      vote({ parentMessage: {}, selectedOptions: [{ name: undefined, localId: 1 }], voter: { $1: 'peer@c.us' } }),
-    );
+    // Without the creation message, PollVote builds an empty Message from the poll key alone.
+    client.emit('vote_update', vote({ parentMessage: {}, selectedOptions: [], voter: { $1: 'peer@c.us' } }));
 
     const event = (onPollVote.mock.calls as Array<[Record<string, unknown>]>)[0][0];
     expect(event).toEqual({
@@ -4078,6 +4075,18 @@ describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
       timestamp: 1786000000,
     });
     expect(event).not.toHaveProperty('pollName');
+  });
+
+  it('skips a vote whose options WhatsApp Web cannot name, rather than reporting it as a cleared vote', () => {
+    const { onPollVote, client } = wireVoteHandler();
+
+    // Without the creation message PollVote keeps only local option ids, so the choice is unknown.
+    client.emit(
+      'vote_update',
+      vote({ parentMessage: {}, selectedOptions: [{ name: undefined, localId: 1 }], voter: { $1: 'peer@c.us' } }),
+    );
+
+    expect(onPollVote).not.toHaveBeenCalled();
   });
 
   it('logs and drops a malformed vote instead of throwing into the client', () => {

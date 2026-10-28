@@ -384,16 +384,24 @@ export function registerWwebjsMessageEvents(client: Client, host: WwebjsEngineHo
       };
       const poll = vote.parentMessage as Partial<Message> | undefined;
       const pollId = poll?.id as unknown as SerializedWid | undefined;
+      // Without the creation message whatsapp-web.js keeps only the local option ids, which no route
+      // of this API takes, so an option it could not name is left out. A selection with no nameable
+      // option is no report of what was chosen, and `[]` means a cleared vote, so it is skipped.
+      const selectedOptions = (vote.selectedOptions ?? [])
+        .map(option => option.name)
+        .filter((name): name is string => typeof name === 'string');
+      if ((vote.selectedOptions?.length ?? 0) > 0 && selectedOptions.length === 0) {
+        host.logger.debug('Ignoring a poll vote whose options WhatsApp Web cannot name', {
+          pollMessageId: readWid(pollId) ?? readWid(raw.parentMsgKey),
+        });
+        return;
+      }
       const event: PollVoteEvent = {
         pollMessageId: readWid(pollId) ?? readWid(raw.parentMsgKey) ?? '',
         // Direction flag, as Message._getChatId (see message_revoke_everyone).
         chatId: (poll?.from ? (poll.fromMe ? poll.to : poll.from) : readWid(raw.parentMsgKey?.remote)) ?? '',
         voterId: readWid(raw.voter) ?? '',
-        // Without the creation message whatsapp-web.js keeps only the local option ids, which no route
-        // of this API takes, so an option it could not name is left out.
-        selectedOptions: (vote.selectedOptions ?? [])
-          .map(option => option.name)
-          .filter((name): name is string => typeof name === 'string'),
+        selectedOptions,
         ...(poll?.pollName ? { pollName: poll.pollName } : {}),
         timestamp: Math.floor((Number(vote.interractedAtTs) || Date.now()) / 1000),
       };
