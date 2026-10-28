@@ -161,6 +161,7 @@ export class IntegrationInstanceController {
         instanceId,
         { enabled: dto.enabled, sessionScope: dto.sessionScope, config: dto.config },
         this.schemaFor(pluginId),
+        this.loader.getPlugin(pluginId)?.manifest.net,
       );
       // update() answers null when the row was deleted after resolveVisible read it.
       if (!inst) throw new NotFoundException('instance not found');

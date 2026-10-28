@@ -698,6 +698,47 @@ describe('PluginsService — per-session config', () => {
     expect(loader.getPlugin('sess-cfg')?.sessionConfig?.['sess-A']).toEqual({ apiKey: 'A-secret', lang: 'en' });
   });
 
+  // A session-restricted admin may write a session's override but cannot read its secrets, which come back masked.
+  // Echoing the mask must not retarget a stored secret: it belongs to the host it was saved for.
+  describe('with a host key the plugin may call', () => {
+    const hostManifest = {
+      ...manifest,
+      id: 'sess-host',
+      net: { allowConfigHosts: ['baseUrl'] },
+      configSchema: {
+        type: 'object',
+        properties: { baseUrl: { type: 'string' }, apiKey: { type: 'string', secret: true } },
+      },
+    };
+    const slice = () => loader.getPlugin('sess-host')?.sessionConfig?.['sess-A'];
+
+    beforeEach(() => {
+      const z = new AdmZip();
+      z.addFile('manifest.json', Buffer.from(JSON.stringify(hostManifest)));
+      z.addFile('index.js', Buffer.from('module.exports = class {};'));
+      service.install({ buffer: z.toBuffer() });
+      service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://tenant.example', apiKey: 'TENANT' });
+    });
+
+    it('keeps restoring the stored secret while the write names the same host', () => {
+      service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://tenant.example/v2', apiKey: '***' });
+      expect(slice()).toEqual({ baseUrl: 'https://tenant.example/v2', apiKey: 'TENANT' });
+    });
+
+    it('drops a masked or blank secret in a write that points the host at another origin', () => {
+      for (const echoed of ['***', '']) {
+        service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://tenant.example', apiKey: 'TENANT' });
+        service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://attacker.example', apiKey: echoed });
+        expect(slice()).toEqual({ baseUrl: 'https://attacker.example' });
+      }
+    });
+
+    it('stores a secret the write brings itself, whatever the host', () => {
+      service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://other.example', apiKey: 'NEW' });
+      expect(slice()).toEqual({ baseUrl: 'https://other.example', apiKey: 'NEW' });
+    });
+  });
+
   // A write is merged over the stored base config, so a removed secret has to travel as null; an empty
   // string is not a removal.
   it('removes the base secret on an explicit null and keeps it on an empty string', () => {

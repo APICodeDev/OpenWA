@@ -62,10 +62,17 @@ function hostOf(value: unknown): string | null {
   }
 }
 
-/** Whether `layer` points a host key at an origin other than the one `beneath` names. */
+/**
+ * Whether `layer` points a host key at an origin other than the one `beneath` names. A value that is no text
+ * (a list, an object, a number) has no origin to compare, yet a plugin may still turn it into a URL
+ * (`String(['https://x.example'])` is `https://x.example`), so it counts as a redirect: only an unset, null or
+ * blank value names nothing.
+ */
 const redirectsHost = (beneath: Record<string, unknown>, layer: Record<string, unknown>, hostKeys: string[]): boolean =>
   hostKeys.some(key => {
-    const next = hostOf(layer[key]);
+    const value = layer[key];
+    if (typeof value !== 'string') return value !== undefined && value !== null;
+    const next = hostOf(value);
     return next !== null && next !== hostOf(beneath[key]);
   });
 
@@ -110,6 +117,24 @@ function mergeLayer(
   if (!hostKeys?.length || !redirectsHost(beneath, layer, hostKeys)) return deepMerge(beneath, layer);
   const properties = manifest.configSchema?.properties;
   return deepMerge(properties ? withoutSecrets(beneath, properties) : {}, layer);
+}
+
+/**
+ * The stored layer a write may restore a masked or blank secret from. A write that points a host key at
+ * another origin than the stored layer names gets none of the stored secrets back, for the reason
+ * {@link mergeLayer} gives: they belong to the host they were saved for, and a key allowed to write the layer
+ * (a session-restricted admin) would otherwise send them to a host of its choosing by echoing the mask. A
+ * masked or blank secret in such a write is then dropped, and the sender has to supply it.
+ */
+export function restorableConfig(
+  stored: Record<string, unknown> | undefined,
+  incoming: Record<string, unknown>,
+  manifest: ConfigLayerManifest,
+): Record<string, unknown> | undefined {
+  const hostKeys = manifest.net?.allowConfigHosts;
+  if (!stored || !hostKeys?.length || !redirectsHost(stored, incoming, hostKeys)) return stored;
+  const properties = manifest.configSchema?.properties;
+  return properties ? withoutSecrets(stored, properties) : {};
 }
 
 /**

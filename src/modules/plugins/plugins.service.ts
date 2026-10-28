@@ -14,6 +14,7 @@ import { pluginUpdateBackupDirName, pluginUpdateStagingDirName } from '../../cor
 import type { PluginConfigSchema } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
 import { redactSecretConfig, restoreSecretConfig } from './redact-config';
+import { restorableConfig } from '../../core/plugins/plugin-activation';
 import { parsePluginPackage } from './plugin-installer';
 import { assertDownloadSha256, assertPluginInstallUrl, fetchSafeBuffer } from './plugin-download';
 import { annotateCatalog, CatalogEntry, CatalogPlugin, isCatalogEntry } from './catalog';
@@ -274,7 +275,11 @@ export class PluginsService {
 
     try {
       const existing = plugin.sessionConfig?.[sessionId];
-      const merged = restoreSecretConfig(config, existing, plugin.manifest.configSchema);
+      const merged = restoreSecretConfig(
+        config,
+        restorableConfig(existing, config, plugin.manifest),
+        plugin.manifest.configSchema,
+      );
       this.pluginLoader.setPluginSessionConfig(id, sessionId, merged);
       return { success: true, message: `Plugin ${id} configuration for session ${sessionId} updated` };
     } catch (error) {
