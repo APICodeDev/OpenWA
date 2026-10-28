@@ -17,7 +17,8 @@ import {
 } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
-import { validateEnv } from './config/env.validation';
+import { s3EndpointError, validateEnv } from './config/env.validation';
+import { warnUnusableAllowedHosts } from './common/security/ssrf-guard';
 import { resolveStorageRoot } from './config/storage-root';
 import { applyHttpTimeouts, HttpTimeoutConfig, HttpTimeoutSink } from './config/http-timeouts';
 import { applyGlobalValidation } from './config/app-validation';
@@ -67,6 +68,18 @@ async function bootstrap() {
   // PostgreSQL container is started; an invalid config would do both and then be reported twice.
   validateEnv(process.env);
 
+  // Reported, not refused: with S3 selected and an endpoint the client cannot use, the instance runs today on its
+  // local fallback directory, so an upgrade must not turn that into a crash loop. The Infrastructure save refuses it.
+  const s3EndpointProblem = s3EndpointError(process.env);
+  if (s3EndpointProblem) {
+    bootstrapLogger.error(
+      `${s3EndpointProblem}. Until then S3 is unavailable and media is written to the local directory.`,
+    );
+  }
+
+  // Reported at boot, where the operator reads the log, rather than at the first outbound request.
+  warnUnusableAllowedHosts();
+
   // Advisory (not enforced): an unset/blank NODE_ENV is the deliberate local-dev default, but it
   // silently degrades four controls to their dev posture (the default-secret guard, wildcard CORS,
   // Swagger UI, validation error detail) — warn so a production deployment that simply forgot the
@@ -96,6 +109,7 @@ async function bootstrap() {
     apiMasterKey: process.env.API_MASTER_KEY,
     allowDevApiKey: process.env.ALLOW_DEV_API_KEY,
     redisPassword: process.env.REDIS_PASSWORD,
+    metricsToken: process.env.METRICS_TOKEN,
   });
 
   // Advisory (not enforced): without API_KEY_PEPPER, stored API-key hashes use plain SHA-256. Enabling

@@ -6,11 +6,17 @@ import { PluginCapabilityPermission, PluginContext, PluginInstance, PluginStatus
 import { PluginStorageService } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
 import { PluginCapabilityContext } from './plugin-capability-context';
-import { isPluginActiveForSession, resolveInstanceConfig, resolvePluginConfig } from './plugin-activation';
+import {
+  isPluginActiveForSession,
+  resolveInstanceConfig,
+  resolvePluginConfig,
+  sessionScopeKey,
+} from './plugin-activation';
 import { PluginWorkerHost } from './sandbox/plugin-worker-host';
 import { dispatchCapabilityVerb } from './sandbox/capability-router';
 import { PluginLogLevel } from './sandbox/protocol';
 import { shouldDispatchToPlugin } from './handover-gate';
+import { countMetaValues, metaText } from './sandbox-log-meta';
 import { makeOnWebhookSubscribe } from './webhook-subscribe.util';
 import { registerPluginSearchProvider, unregisterPluginSearchProvider } from './search-provider-registration.util';
 import { INGRESS_DISPATCH_TIMEOUT_MS } from '../../modules/integration/integration.constants';
@@ -195,8 +201,10 @@ export class PluginSandboxBridge {
     const route = plugin?.manifest.ingress?.find(candidate => candidate.route === d.route);
     // Reaching dispatch means every authenticating scheme already passed host verification. A route
     // explicitly configured with scheme:none is unauthenticated and must never be labelled verified.
-    // Missing/hot-swapped route metadata fails closed.
-    const verified = route ? route.signature.scheme !== 'none' : false;
+    // The verdict is the one recorded at admission: a plugin update can change the route's scheme while
+    // a delivery waits, and it must not relabel a payload nobody authenticated. A delivery admitted before
+    // the verdict was recorded reads the route as it stands. Missing/hot-swapped route metadata fails closed.
+    const verified = !!route && (d.payload.admission?.verified ?? route.signature.scheme !== 'none');
     const instance = await this.hostServices.getPluginInstancePort().resolve(d.pluginId, d.instanceId);
     // The live door and the reconciler refuse an unknown or disabled instance; a queued job, a retry,
     // the inline fallback and a redrive all land here instead, so the same rule is enforced once more.
@@ -205,6 +213,11 @@ export class PluginSandboxBridge {
     // Throwing hands the job to the normal retry/dead-letter path.
     if (!instance || instance.enabled === false) {
       throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' is disabled or deleted');
+    }
+    // The job carries the session the instance acted on at admission. Rebound since, the delivery would
+    // reach the handler under that session with the new session's config, so it is refused instead.
+    if (sessionScopeKey(instance.sessionScope) !== sessionScopeKey(d.sessionId)) {
+      throw new Error('instance ' + d.instanceId + ' of plugin ' + d.pluginId + ' was rebound since this delivery');
     }
     // Three layers, most specific last: the base ('*') config, then the operator's per-session
     // override from PUT /plugins/:id/sessions/:sessionId/config, then THIS instance's own config.
@@ -239,9 +252,12 @@ export class PluginSandboxBridge {
                 plugin.sessionConfig,
                 instance?.sessionScope ?? undefined,
                 plugin.manifest.sessionScoped !== false,
+                plugin.manifest,
               )
             : plugin.config,
           instance?.config,
+          plugin.manifest,
+          plugin.config,
         )
       : undefined;
     const result = await host.dispatchWebhook({
@@ -517,6 +533,7 @@ export class PluginSandboxBridge {
                 plugin.sessionConfig,
                 hookCtx.sessionId,
                 plugin.manifest.sessionScoped !== false,
+                plugin.manifest,
               ),
               // The chain this dispatch belongs to, so a capability the handler calls is guarded
               // against re-firing any event of it (not only this one) once it returns to the host.
@@ -576,23 +593,32 @@ export class PluginSandboxBridge {
         state.dropped++;
         return;
       }
-      // Like the level below, the message and meta come off the wire unchecked: a non-string message is coerced
-      // before the length check, and a meta whose JSON form exceeds the same cap is replaced by a size
-      // marker (not a truncated string, which would hide its keys from the logger's secret redaction).
+      // Like the level below, the message and meta come off the wire unchecked: a non-string message is replaced by
+      // a fixed marker (turning an array into text would write a shared reference out at every use), and a meta
+      // whose text, as the logger writes it (metaText), exceeds the same cap is replaced by a size marker (not a
+      // truncated string, which would hide its keys from the logger's secret redaction).
       // logger.error's reason travels as a string meta.error, so that one key survives the replacement.
       const truncate = (value: string): string =>
         value.length > SANDBOX_LOG_MAX_MESSAGE_LENGTH
           ? `${value.slice(0, SANDBOX_LOG_MAX_MESSAGE_LENGTH)}…[truncated]`
           : value;
-      const bounded = truncate(typeof message === 'string' ? message : String(message));
+      const bounded = truncate(typeof message === 'string' ? message : '[non-string log message]');
       let boundedMeta = meta;
       if (meta !== undefined) {
         const reason = typeof meta?.error === 'string' ? { error: truncate(meta.error) } : undefined;
-        try {
-          const metaLength = JSON.stringify(meta).length;
-          if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH) boundedMeta = { ...reason, metaTruncated: true, metaLength };
-        } catch {
-          boundedMeta = reason; // not serializable (circular or BigInt), so it cannot be logged as JSON anyway
+        // A count past the size limit (values, string characters and property name characters) marks a meta that is
+        // replaced without being written out. The text is only built, to learn its length, for a meta under the
+        // limit: building it for any other could take seconds, as a shared reference is written out at every use.
+        if (countMetaValues(meta, SANDBOX_LOG_MAX_MESSAGE_LENGTH) > SANDBOX_LOG_MAX_MESSAGE_LENGTH) {
+          boundedMeta = { ...reason, metaTruncated: true };
+        } else {
+          try {
+            const metaLength = (metaText(meta) ?? '').length;
+            if (metaLength > SANDBOX_LOG_MAX_MESSAGE_LENGTH)
+              boundedMeta = { ...reason, metaTruncated: true, metaLength };
+          } catch {
+            boundedMeta = reason; // circular, or holding a BigInt, whose text is not built on the host
+          }
         }
       }
       // The level comes off the wire unchecked (plugin code can post to parentPort directly), and the

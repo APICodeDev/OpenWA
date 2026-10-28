@@ -3,7 +3,7 @@ import { IsString, IsNotEmpty, IsOptional, IsEnum, IsIn, IsInt, IsNumber, Max, M
 import { Type } from 'class-transformer';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
-import { ToStrictNumber } from '../../../common/utils/strict-boolean';
+import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
 import {
   SEARCH_CONTAINS_MIN_TERM_LENGTH,
   SEARCH_CONTAINS_WINDOW,
@@ -18,7 +18,9 @@ import type { SearchMatch } from '../search.types';
  * Request shape for GET /search. Numeric fields are coerced from query-string strings via
  * `@Type(() => Number)` and then validated, so `?limit=abc` (Number('abc') → NaN) surfaces as a 400
  * from the global ValidationPipe, never reaching the provider as a NaN SQL param. The epoch-ms
- * bounds `dateFrom`/`dateTo` use `@IsNumber()`; `limit`/`offset` use `@IsInt()`, because they are
+ * bounds `dateFrom`/`dateTo` use `@IsNumber()` within the safe integer range: beyond it a number is no longer an
+ * exact integer and no timestamp reaches it, and the cap is the DTO's own, so it holds on both databases (a
+ * bigint column only overflows far above it, on PostgreSQL); `limit`/`offset` use `@IsInt()`, because they are
  * bound straight into `LIMIT ?`/`OFFSET ?` where better-sqlite3 rejects a fractional value with
  * SQLITE_MISMATCH: a fraction has to be a 400 here rather than a driver-level 500. `sessionIds` and
  * `chatIds` are intentionally absent: both scopes are injected by SearchService from the caller's
@@ -29,6 +31,7 @@ export class SearchQueryDto {
     description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} words)`,
     maxLength: SEARCH_QUERY_MAX_LENGTH,
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(SEARCH_QUERY_MAX_LENGTH)
@@ -51,22 +54,25 @@ export class SearchQueryDto {
 
   @ApiPropertyOptional({ description: 'Restrict to a single session' })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   sessionId?: string;
 
   @ApiPropertyOptional({
     description:
-      "Restrict to a single chat id. A phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it).",
+      "Restrict to a single chat id. With the built-in search provider, a phone also matches the chat's other stored forms (the other user dialect and any lid that resolves to it); a plugin provider receives the id as sent.",
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   chatId?: string;
 
   @ApiPropertyOptional({
     description:
-      "Sender filter. Matches `from` or a group message's `author`; a phone also matches any lid that resolves to it.",
+      "Sender filter. With the built-in search provider, matches `from` or a group message's `author`, and a phone also matches any lid that resolves to it; a plugin provider receives the id as sent.",
   })
   @IsOptional()
+  @ToStrictString()
   @IsString()
   from?: string;
 
@@ -82,18 +88,32 @@ export class SearchQueryDto {
   // it. @IsString() accepts any string; the provider matches it against stored messages.type values.
   type?: MessageType;
 
-  @ApiPropertyOptional({ description: 'Epoch-ms lower bound (inclusive)', type: Number })
+  @ApiPropertyOptional({
+    description: 'Epoch-ms lower bound (inclusive)',
+    type: Number,
+    minimum: -Number.MAX_SAFE_INTEGER,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(-Number.MAX_SAFE_INTEGER)
+  @Max(Number.MAX_SAFE_INTEGER)
   dateFrom?: number;
 
-  @ApiPropertyOptional({ description: 'Epoch-ms upper bound (inclusive)', type: Number })
+  @ApiPropertyOptional({
+    description: 'Epoch-ms upper bound (inclusive)',
+    type: Number,
+    minimum: -Number.MAX_SAFE_INTEGER,
+    maximum: Number.MAX_SAFE_INTEGER,
+  })
   @ToStrictNumber()
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
+  @Min(-Number.MAX_SAFE_INTEGER)
+  @Max(Number.MAX_SAFE_INTEGER)
   dateTo?: number;
 
   @ApiPropertyOptional({ description: 'Max hits to return', type: 'integer', minimum: 1 })

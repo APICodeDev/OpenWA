@@ -40,7 +40,7 @@ timeline
                  : Bundled Traefik removed
                  : Bring-your-own reverse proxy
 
-    section v0.5.0-v0.24.x - Incremental Releases (Released)
+    section v0.5.0-v0.25.x - Incremental Releases (Released)
         Jun-Sep 2026 : Integration Fabric provisioning
                      : Java & Go SDKs
                      : Live message edits
@@ -82,7 +82,7 @@ timeline
 | v0.10.x | Chat `kind` discriminator, 24-hour status store, Docker Hub dual-publish                             | ✅ Released |
 | v0.11.0 | SDK poll / profile-picture / status-media coverage, security & reliability hardening                 | ✅ Released |
 | v0.12.x | Session/engine decomposition (`EngineRegistry`), plugin lifecycle and configuration-precedence fixes | ✅ Released |
-| v0.13+  | Incremental releases through v0.24.x; see `CHANGELOG.md`                                             | ✅ Released |
+| v0.13+  | Incremental releases through v0.25.x; see `CHANGELOG.md`                                             | ✅ Released |
 | v1.0.0  | Enterprise Ready (K8s Operator, multi-tenant)                                                        | 📋 Planned  |
 
 > SDK / docs-site / observability features are delivered **incrementally** as they're additive — they no
@@ -529,10 +529,10 @@ flowchart LR
         V020[v0.2.0 - i18n, Real-time Chats,<br/>Webhook Delivery-state & Hardening]
     end
 
-    subgraph v0.x["✅ Released (v0.3-v0.24.x)"]
+    subgraph v0.x["✅ Released (v0.3-v0.25.x)"]
         V030[v0.3.0 - Engine Pluggability<br/>Baileys engine + plugin layer]
         V040[v0.4.0 - Single-Port Deployment<br/>Dashboard on API port, no bundled Traefik]
-        V011[v0.5.0-v0.24.x - Incremental releases<br/>see the CHANGELOG]
+        V011[v0.5.0-v0.25.x - Incremental releases<br/>see the CHANGELOG]
     end
 
     subgraph v1.x["v1.x Series - Enterprise"]
@@ -739,8 +739,11 @@ flowchart TB
     T --> D
     D --> E[boot-smoke: run the image on amd64 + arm64]
     D --> F[image-scan: Trivy, CRITICAL/HIGH, fixable only]
+    D --> R[release-tags: drop X.Y and latest when a newer release holds them]
     E --> G[promote: apply X.Y.Z, X.Y, latest to GHCR + Docker Hub]
     F --> G
+    R --> G
+    R --> I
     G --> H[verify-published: resolve every ref anonymously]
     H --> I[GitHub Release, notes from the CHANGELOG section]
 ```
@@ -753,6 +756,14 @@ GitHub Release is gated on all of it.
 
 A tag with any `-` suffix (for example `-rc.1`, `-beta.1`, `-alpha.1`) is a prerelease: it skips the
 mutable `X.Y` and `latest` channels and is flagged prerelease on GitHub.
+
+For a stable tag, `release-tags` reads which release `X.Y` and `latest` serve on each registry and leaves
+a channel alone when it already serves a newer one, so releasing a patch to an older line or re-running an
+old tag never moves a channel backwards; the exact `X.Y.Z` tag is still applied. A channel it cannot read
+fails the release rather than counting as absent; only the registry's own "manifest unknown" answer does.
+`verify-published` then expects only the tags `release-tags` selected. `release-tags` also decides whether
+the GitHub Release is marked Latest: only when this release took every `latest` channel, never for a
+prerelease or a patch to an older line.
 
 ### When a gate fails
 
