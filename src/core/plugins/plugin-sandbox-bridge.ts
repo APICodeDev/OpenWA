@@ -257,6 +257,7 @@ export class PluginSandboxBridge {
             : plugin.config,
           instance?.config,
           plugin.manifest,
+          plugin.config,
         )
       : undefined;
     const result = await host.dispatchWebhook({

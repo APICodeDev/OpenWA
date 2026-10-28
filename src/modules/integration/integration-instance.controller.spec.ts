@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { IntegrationInstanceController } from './integration-instance.controller';
 import { PluginInstanceService } from './plugin-instance.service';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
@@ -390,7 +390,7 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       'acct1',
       { sessionScope: null, config: undefined },
       undefined,
-      undefined,
+      { net: undefined, beneath: undefined },
     );
     expect(view.sessionScope).toBeNull();
     expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-1', {}); // old scope torn down
@@ -626,12 +626,27 @@ describe('IntegrationInstanceController session-scope fence', () => {
   const scopedKey = { allowedSessions: ['sess-1'] } as ApiKey;
   const unrestrictedKey = { allowedSessions: null } as unknown as ApiKey;
 
-  function build(instances: Partial<PluginInstanceService>, net?: { allowConfigHosts: string[] }) {
+  function build(
+    instances: Partial<PluginInstanceService>,
+    net?: { allowConfigHosts: string[] },
+    config?: Record<string, unknown>,
+    loaded = true,
+  ) {
     const loader = {
-      getPlugin: jest.fn().mockReturnValue({
-        manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'], net },
-        activeSessions: [],
-      }),
+      getPlugin: jest.fn().mockReturnValue(
+        loaded
+          ? {
+              manifest: {
+                id: 'chatwoot-adapter',
+                ingress: [{ route: 'chatwoot' }],
+                permissions: ['webhook:ingress'],
+                net,
+              },
+              config,
+              activeSessions: [],
+            }
+          : undefined,
+      ),
       setPluginSessionConfig: jest.fn(),
       setPluginSessions: jest.fn(),
       updatePluginConfig: jest.fn(),
@@ -751,11 +766,34 @@ describe('IntegrationInstanceController session-scope fence', () => {
     const inst = { ...baseInstance, sessionScope: 'sess-1' };
     const update = jest.fn().mockResolvedValue(inst);
     const net = { allowConfigHosts: ['baseUrl'] };
-    const { controller } = build({ resolve: jest.fn().mockResolvedValue(inst), update }, net);
+    const { controller } = build({ resolve: jest.fn().mockResolvedValue(inst), update }, net, {
+      baseUrl: 'https://base.example',
+    });
 
     await controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://x.example' } }, scopedKey);
 
-    expect(update).toHaveBeenCalledWith('chatwoot-adapter', 'acct1', expect.any(Object), undefined, net);
+    expect(update).toHaveBeenCalledWith('chatwoot-adapter', 'acct1', expect.any(Object), undefined, {
+      net,
+      beneath: { baseUrl: 'https://base.example' },
+    });
+  });
+
+  // An instance row outlives its plugin. With the manifest gone there are no host keys to check a write against,
+  // and echoing the mask would restore every stored secret beside whatever host the body names.
+  it('refuses a config write while the plugin is not loaded', async () => {
+    const inst = { ...baseInstance, sessionScope: 'sess-1' };
+    const update = jest.fn().mockResolvedValue({ ...inst, enabled: false });
+    const { controller } = build({ resolve: jest.fn().mockResolvedValue(inst), update }, undefined, undefined, false);
+
+    await expect(
+      controller.patch(
+        'chatwoot-adapter',
+        'acct1',
+        { config: { baseUrl: 'https://evil.example', apiToken: '***' } },
+        scopedKey,
+      ),
+    ).rejects.toThrow(ConflictException);
+    expect(update).not.toHaveBeenCalled();
   });
 
   it('lets a scoped key patch an in-scope instance without touching sessionScope', async () => {
@@ -770,7 +808,7 @@ describe('IntegrationInstanceController session-scope fence', () => {
       'acct1',
       { enabled: false, sessionScope: undefined, config: undefined },
       undefined,
-      undefined,
+      { net: undefined, beneath: undefined },
     );
   });
 });
@@ -1020,7 +1058,7 @@ describe('IntegrationInstanceController update audit', () => {
       'acct1',
       { enabled: false, sessionScope: 'sess-2', config: { apiToken: 'rotated-token' } },
       undefined,
-      undefined,
+      { net: undefined, beneath: undefined },
     );
   });
 

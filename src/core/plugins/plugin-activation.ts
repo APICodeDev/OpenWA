@@ -119,20 +119,36 @@ function mergeLayer(
   return deepMerge(properties ? withoutSecrets(beneath, properties) : {}, layer);
 }
 
+/** Whether `layer` sets any host key to something: a key it leaves unset, null or blank names no host. */
+const namesHost = (layer: Record<string, unknown>, hostKeys: string[]): boolean =>
+  hostKeys.some(key => {
+    const value = layer[key];
+    return typeof value === 'string' ? value.trim() !== '' : value !== undefined && value !== null;
+  });
+
 /**
  * The stored layer a write may restore a masked or blank secret from. A write that points a host key at
- * another origin than the stored layer names gets none of the stored secrets back, for the reason
+ * another origin than the stored layer is bound to gets none of the stored secrets back, for the reason
  * {@link mergeLayer} gives: they belong to the host they were saved for, and a key allowed to write the layer
  * (a session-restricted admin) would otherwise send them to a host of its choosing by echoing the mask. A
  * masked or blank secret in such a write is then dropped, and the sender has to supply it.
+ *
+ * A stored layer that names no host key is bound to the host of the layer `beneath` it, which is what it
+ * resolves to, so a write that names that same host moves nothing. A write that is no object is returned
+ * with the stored layer untouched, as it was before: it clears the layer.
  */
 export function restorableConfig(
   stored: Record<string, unknown> | undefined,
-  incoming: Record<string, unknown>,
+  incoming: Record<string, unknown> | null | undefined,
   manifest: ConfigLayerManifest,
+  beneath: Record<string, unknown> = {},
 ): Record<string, unknown> | undefined {
   const hostKeys = manifest.net?.allowConfigHosts;
-  if (!stored || !hostKeys?.length || !redirectsHost(stored, incoming, hostKeys)) return stored;
+  if (!stored || !hostKeys?.length || !isPlainObject(incoming)) return stored;
+  const bound = Object.fromEntries(
+    hostKeys.map(key => [key, hostOf(stored[key]) === null ? beneath[key] : stored[key]]),
+  );
+  if (!redirectsHost(bound, incoming, hostKeys)) return stored;
   const properties = manifest.configSchema?.properties;
   return properties ? withoutSecrets(stored, properties) : {};
 }
@@ -152,14 +168,29 @@ export function restorableConfig(
  * scope slice once siblings exist, for exactly that reason.
  *
  * A row that names another host than the layer beneath does not inherit that layer's secrets, see
- * {@link mergeLayer}.
+ * {@link mergeLayer}. A row that names no host loses its own secrets when `base` is given and the layers
+ * beneath it moved a host key away from the base.
  */
 export function resolveInstanceConfig(
   resolved: Record<string, unknown>,
   instanceConfig: Record<string, unknown> | null | undefined,
   manifest: ConfigLayerManifest,
+  base?: Record<string, unknown>,
 ): Record<string, unknown> {
-  return instanceConfig ? mergeLayer(resolved, instanceConfig, manifest) : resolved;
+  if (!instanceConfig) return resolved;
+  const hostKeys = manifest.net?.allowConfigHosts;
+  const properties = manifest.configSchema?.properties;
+  // A row that names no host key holds secrets bound to the host of the base config it was provisioned
+  // against. When the layers beneath it have moved a host key away from the base (a per-session override
+  // written by a session-restricted admin), those secrets would reach the new host, so the row keeps its
+  // other keys and loses its secrets.
+  const moved =
+    !!base && !!hostKeys?.length && !namesHost(instanceConfig, hostKeys) && redirectsHost(base, resolved, hostKeys);
+  return mergeLayer(
+    resolved,
+    moved && properties ? withoutSecrets(instanceConfig, properties) : instanceConfig,
+    manifest,
+  );
 }
 
 /**
