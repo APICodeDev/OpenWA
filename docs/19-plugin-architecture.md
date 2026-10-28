@@ -210,8 +210,8 @@ one is dropped whole) and must bring its own. A host key that holds no text (a l
 as another origin. The same rule applies on write: a write to an override or an instance that points a host key
 at another origin than the stored layer is bound to (its own host key, or the host of the layer beneath it
 when it names none) gets no stored secret back for the mask or an empty string, so the secret has to be sent
-with it. An instance row that names no host key loses its own secrets while a per-session override beneath it
-has moved a host key away from the base config.
+with it. An instance row loses its own secrets while a per-session override beneath it has moved a host key the
+row leaves unset away from the base config.
 
 ### Plugin Entry Point
 

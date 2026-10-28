@@ -133,8 +133,8 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   that keeps the same origin, or sets no host key, inherits them. A host key that holds no text counts as
   another origin, and a write that moves a host key to another origin than the stored layer is bound to (its own
   host key, or the host of the layer beneath it when it names none) gets no stored secret back for the mask, so
-  the secret has to be sent with it. An instance row that names no host key loses its own secrets while a
-  per-session override has moved a host key away from the base config, and a config `PATCH` of an instance
+  the secret has to be sent with it. An instance row loses its own secrets while a per-session override
+  has moved a host key the row leaves unset away from the base config, and a config `PATCH` of an instance
   whose plugin is not loaded answers `409`. A plugin that reaches its destination
   through a key outside `net.allowConfigHosts` (for example under `net.allow: ['*']`) is not covered, so
   keep such a secret on the instance that uses it. Capability calls are not confined to the dispatching instance's
