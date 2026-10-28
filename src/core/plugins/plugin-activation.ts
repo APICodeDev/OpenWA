@@ -145,8 +145,10 @@ export function restorableConfig(
 ): Record<string, unknown> | undefined {
   const hostKeys = manifest.net?.allowConfigHosts;
   if (!stored || !hostKeys?.length || !isPlainObject(incoming)) return stored;
+  // Only a key the stored layer leaves unset is bound to the layer beneath; any value it holds, a list or a
+  // blank text included, stays the host it is bound to, which no named host then equals.
   const bound = Object.fromEntries(
-    hostKeys.map(key => [key, hostOf(stored[key]) === null ? beneath[key] : stored[key]]),
+    hostKeys.map(key => [key, stored[key] === undefined || stored[key] === null ? beneath[key] : stored[key]]),
   );
   if (!redirectsHost(bound, incoming, hostKeys)) return stored;
   const properties = manifest.configSchema?.properties;
@@ -168,8 +170,8 @@ export function restorableConfig(
  * scope slice once siblings exist, for exactly that reason.
  *
  * A row that names another host than the layer beneath does not inherit that layer's secrets, see
- * {@link mergeLayer}. A row that names no host loses its own secrets when `base` is given and the layers
- * beneath it moved a host key away from the base.
+ * {@link mergeLayer}. A row that leaves a host key unset loses its own secrets when `base` is given and the
+ * layers beneath it moved that key away from the base; with no schema to tell its secrets it keeps nothing.
  */
 export function resolveInstanceConfig(
   resolved: Record<string, unknown>,
@@ -180,17 +182,15 @@ export function resolveInstanceConfig(
   if (!instanceConfig) return resolved;
   const hostKeys = manifest.net?.allowConfigHosts;
   const properties = manifest.configSchema?.properties;
-  // A row that names no host key holds secrets bound to the host of the base config it was provisioned
-  // against. When the layers beneath it have moved a host key away from the base (a per-session override
-  // written by a session-restricted admin), those secrets would reach the new host, so the row keeps its
-  // other keys and loses its secrets.
-  const moved =
-    !!base && !!hostKeys?.length && !namesHost(instanceConfig, hostKeys) && redirectsHost(base, resolved, hostKeys);
-  return mergeLayer(
-    resolved,
-    moved && properties ? withoutSecrets(instanceConfig, properties) : instanceConfig,
-    manifest,
-  );
+  // A host key the row leaves unset resolves from the layers beneath it, and the secrets the row holds are
+  // bound to the base host it was provisioned against. When those layers have moved such a key away from the
+  // base (a per-session override written by a session-restricted admin), the secrets would reach the new
+  // host, so the row keeps its other keys and loses its secrets. Without a schema nothing can be told secret,
+  // and so nothing is kept, as in mergeLayer. A key the row names itself is its own and is not checked.
+  const unset = hostKeys?.filter(key => !namesHost(instanceConfig, [key])) ?? [];
+  const moved = !!base && unset.length > 0 && redirectsHost(base, resolved, unset);
+  const row = moved ? (properties ? withoutSecrets(instanceConfig, properties) : {}) : instanceConfig;
+  return mergeLayer(resolved, row, manifest);
 }
 
 /**

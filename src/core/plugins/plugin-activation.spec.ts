@@ -268,6 +268,43 @@ describe('an instance row that names no host, over an override that moved the ho
     );
   });
 
+  // With no schema nothing can be told secret, so a row on a moved host keeps nothing, as the layers beneath it do.
+  it('keeps nothing when the manifest declares no schema and the override moved the host', () => {
+    const schemaless = { net: adapter.net };
+    const resolved = resolvePluginConfig(baseConfig, { s: { baseUrl: 'https://evil.example' } }, 's', true, schemaless);
+    expect(resolveInstanceConfig(resolved, row, schemaless, baseConfig)).toEqual({ baseUrl: 'https://evil.example' });
+  });
+
+  // A plugin may name several hosts. A row that names one of them still leaves the others to the layers beneath.
+  describe('with two host keys', () => {
+    const two: ConfigLayerManifest = {
+      net: { allowConfigHosts: ['baseUrl', 'mediaUrl'] },
+      configSchema: {
+        type: 'object',
+        properties: {
+          baseUrl: { type: 'string' },
+          mediaUrl: { type: 'string' },
+          apiToken: { type: 'string', secret: true },
+        },
+      },
+    };
+    const base2 = { baseUrl: 'https://chat.example.com', mediaUrl: 'https://media.example.com', apiToken: 'BASE' };
+    const row2 = { baseUrl: 'https://chat.example.com', apiToken: 'ROW-TOKEN' };
+
+    it('withholds the secrets when an override moved a key the row leaves unset', () => {
+      const resolved = resolvePluginConfig(base2, { s: { mediaUrl: 'https://evil.example' } }, 's', true, two);
+      expect(resolveInstanceConfig(resolved, row2, two, base2)).not.toHaveProperty('apiToken');
+    });
+
+    it('keeps them when the override moved only a key the row names itself', () => {
+      const resolved = resolvePluginConfig(base2, { s: { baseUrl: 'https://evil.example' } }, 's', true, two);
+      expect(resolveInstanceConfig(resolved, row2, two, base2)).toMatchObject({
+        baseUrl: 'https://chat.example.com',
+        apiToken: 'ROW-TOKEN',
+      });
+    });
+  });
+
   it('is unchanged when the caller gives no base', () => {
     expect(resolveInstanceConfig(resolvedWith({ baseUrl: 'https://evil.example' }), row, adapter)).toMatchObject({
       apiToken: 'ROW-TOKEN',
@@ -324,6 +361,17 @@ describe('restorableConfig: the stored layer a write may restore a masked secret
       expect(restorableConfig(own, { baseUrl: 'https://evil.example', apiToken: '***' }, adapter, beneath)).toEqual({
         inboxId: '3',
       });
+    });
+
+    // A stored host that is a list or blank text is not "no host": the secret was saved beside it, so a write
+    // naming the base host does not get that secret back.
+    it('does not treat a stored host that is a list or blank text as unset', () => {
+      for (const odd of [['https://cw.example'], '', 5]) {
+        const storedOdd = { baseUrl: odd, apiToken: 'OWN-TOKEN' };
+        expect(
+          restorableConfig(storedOdd, { baseUrl: 'https://cw.example', apiToken: '***' }, adapter, beneath),
+        ).not.toHaveProperty('apiToken');
+      }
     });
   });
 
