@@ -608,6 +608,23 @@ test('a contact the engine lists twice under one id is offered once, and found b
   assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was not found by his phone number');
 });
 
+test('the New chat search matches a number only for a query that reads as one', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  await screen.findByRole('button', { name: /Bob/ });
+  const search = screen.getByLabelText('Search name or number with country code');
+
+  // Bob's number holds a 2, which is no part of the name searched for.
+  fireEvent.change(search, { target: { value: 'Alice 2' } });
+  assert.equal(screen.queryAllByRole('button', { name: /Bob/ }).length, 0, 'a digit in a name matched a number');
+  assert.ok(screen.getByText('No contacts found'));
+  fireEvent.change(search, { target: { value: '+1 555-000.2222' } });
+  assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was not found by his number');
+  assert.ok(screen.getByRole('button', { name: /^Start chat with/ }), 'the typed number is not offered');
+});
+
 for (const reactStrictMode of [false, true]) {
   test(`a typed number is checked with the gateway and opens a chat under the id it resolves to${reactStrictMode ? ' (StrictMode)' : ''}`, async () => {
     const { screen, fireEvent, waitFor, within } = rtl;
@@ -977,6 +994,25 @@ test('the session switcher lists every session with its state, and only a connec
 
   fireEvent.change(screen.getByLabelText('Search sessions...'), { target: { value: 'marie' } });
   assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
+});
+
+test('the session switcher matches a number only for a query that reads as one, and a name with a digit by name', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  listOffline = true;
+  listCreated = { ...CREATED_SESSION, name: 'Support 2' };
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const search = screen.getByLabelText('Search sessions...');
+  const shown = () => screen.queryAllByRole('option').map(option => option.querySelector('.session-name')?.textContent);
+  await waitFor(() => assert.equal(shown().length, 4));
+
+  // Main and Marie Haas have a 2 in their number, which is no part of the name searched for.
+  fireEvent.change(search, { target: { value: 'Support 2' } });
+  assert.deepEqual(shown(), ['Support 2']);
+  fireEvent.change(search, { target: { value: '+1 (555) 987-65' } });
+  assert.deepEqual(shown(), [SECOND_SESSION.name]);
 });
 
 test('the session switcher follows live session status: a session that connects can be picked, one that drops cannot', async () => {
