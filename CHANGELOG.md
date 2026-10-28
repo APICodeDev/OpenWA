@@ -319,6 +319,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The message list reads its page rows by primary key on SQLite, which cuts a 100 row read of a 300k row session from about 70 ms to 5 ms.
 - Fix the PHP SDK reading a `Retry-After` header of 309 or more digits as 0 seconds; it is now capped like a smaller oversized value.
 - Do not mark a patch release on an older line as the GitHub Latest release, which the update check reads.
+- Answer a body over `BODY_SIZE_LIMIT`, malformed JSON, a body nested past the bound and an undecodable path parameter under `/api` and `/mcp` with 413 or 400 when the bundled dashboard is served, where they answered `404 Cannot POST` ([#1921](https://github.com/rmyndharis/OpenWA/issues/1921)). Thanks @ScalingMBA for the report.
 
 ### Dependencies
 
