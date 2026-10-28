@@ -10,6 +10,7 @@ import {
   IsBoolean,
   IsObject,
   Validate,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { IsMentionWidConstraint } from './is-mention-wid.validator';
@@ -119,6 +120,7 @@ export class SendTextMessageDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiProperty({
@@ -225,6 +227,7 @@ export class SendMediaMessageDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiPropertyOptional({

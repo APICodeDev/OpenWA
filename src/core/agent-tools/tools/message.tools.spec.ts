@@ -328,6 +328,24 @@ describe('messageTools', () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['MessageSendText', { text: 'hi' }],
+    ['MessageSendLocation', { latitude: 1, longitude: 2 }],
+    ['MessageReact', { messageId: 'm1', emoji: '👍' }],
+  ])('%s refuses a chat id that is no JID before the service sees it', async (name, rest) => {
+    // The tool calls the service directly, so no ValidationPipe holds the rule for it; an id the engine
+    // cannot decode otherwise ends as a 500 and counts against the session's send breaker.
+    const service = { sendText: jest.fn(), sendLocation: jest.fn(), reactToMessage: jest.fn() };
+    const tools = makeTools(service as unknown as MessageService);
+
+    await expect(run(tools.get(name)!, { sessionId: 's1', chatId: '6281270008896', ...rest })).rejects.toMatchObject({
+      response: { message: [expect.stringContaining('localpart@host') as unknown as string] },
+    });
+    expect(service.sendText).not.toHaveBeenCalled();
+    expect(service.sendLocation).not.toHaveBeenCalled();
+    expect(service.reactToMessage).not.toHaveBeenCalled();
+  });
+
   it('forwards a caller-supplied link preview, and enforces the title WhatsApp requires', async () => {
     // REST declares customLinkPreview; the tool did not, so an agent's object was stripped before the
     // handler ran and the send went out with whatever preview the engine chose on its own.

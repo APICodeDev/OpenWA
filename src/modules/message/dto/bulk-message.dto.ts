@@ -15,6 +15,7 @@ import {
   ArrayMaxSize,
   ValidatorConstraint,
   ValidatorConstraintInterface,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Validate } from 'class-validator';
@@ -22,6 +23,8 @@ import { ToStrictArray, ToStrictBoolean, ToStrictString } from '../../../common/
 import {
   BATCH_ID_MAX_LENGTH,
   CHAT_ID_MAX_LENGTH,
+  CHAT_JID_MESSAGE,
+  CHAT_JID_PATTERN,
   MENTIONS_DESCRIPTION,
   MENTIONS_MAX,
   MENTION_WID_MAX_LENGTH,
@@ -150,6 +153,7 @@ class BulkMessageItemDto {
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiProperty({ description: 'Message type', enum: ['text', 'image', 'video', 'audio', 'document'] })
