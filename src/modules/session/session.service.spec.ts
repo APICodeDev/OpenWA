@@ -4,6 +4,7 @@ import { PresenceStore } from './presence-store.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { Repository, DataSource, In, IsNull, LessThanOrEqual, Not, Or, QueryFailedError } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import {
   NotFoundException,
   ConflictException,
@@ -81,6 +82,7 @@ import {
   GroupEvent,
   IncomingCallEvent,
   InboundTicket,
+  StoredChatMessageLookup,
 } from '../../engine/interfaces/whatsapp-engine.interface';
 import { BaileysSessionStore } from '../../engine/adapters/baileys-session-store';
 import {
@@ -8981,8 +8983,9 @@ describe('SessionService', () => {
       const result = await service.sendSeen('sess-uuid-1', '123@c.us');
 
       // Second argument is the optional messageIds, absent here — the engine falls back to the
-      // newest message it still holds.
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined, undefined);
+      // newest message it still holds, else to the stored lookup it is handed. The third, the senders
+      // of a group's named messages, is absent too.
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', undefined, undefined, expect.any(Function));
       expect(result).toBe(true);
     });
 
@@ -8997,7 +9000,7 @@ describe('SessionService', () => {
       await service.sendSeen('sess-uuid-1', '123@c.us', ['M1', 'M2']);
 
       // A one to one receipt needs no sender, so the rows are not read.
-      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2'], undefined);
+      expect(mockEngine.sendSeen).toHaveBeenCalledWith('123@c.us', ['M1', 'M2'], undefined, expect.any(Function));
       expect(messageRepository.find).not.toHaveBeenCalled();
     });
 
@@ -9042,7 +9045,7 @@ describe('SessionService', () => {
         await service.sendSeen('sess-uuid-1', GROUP);
 
         expect(messageRepository.find).not.toHaveBeenCalled();
-        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, undefined, undefined);
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, undefined, undefined, expect.any(Function));
       });
 
       it('still reads the chat when the rows cannot be read', async () => {
@@ -9051,7 +9054,7 @@ describe('SessionService', () => {
 
         await expect(service.sendSeen('sess-uuid-1', GROUP, ['M1'])).resolves.toBe(true);
 
-        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, ['M1'], undefined);
+        expect(mockEngine.sendSeen).toHaveBeenCalledWith(GROUP, ['M1'], undefined, expect.any(Function));
       });
     });
 
@@ -9076,7 +9079,7 @@ describe('SessionService', () => {
 
       const result = await service.markUnread('sess-uuid-1', '123@c.us');
 
-      expect(mockEngine.markUnread).toHaveBeenCalledWith('123@c.us');
+      expect(mockEngine.markUnread).toHaveBeenCalledWith('123@c.us', expect.any(Function));
       expect(result).toBe(true);
     });
 
@@ -9116,7 +9119,7 @@ describe('SessionService', () => {
 
       const result = await service.deleteChat('sess-uuid-1', '1234567890-123@g.us');
 
-      expect(mockEngine.deleteChat).toHaveBeenCalledWith('1234567890-123@g.us');
+      expect(mockEngine.deleteChat).toHaveBeenCalledWith('1234567890-123@g.us', expect.any(Function));
       expect(result).toBe(true);
     });
 
@@ -9270,6 +9273,36 @@ describe('SessionService', () => {
       expect(deletedHooks()).toHaveLength(0);
     });
 
+    // #1891: the engine can key a write to the stored newest message, and still decline or fail.
+    it.each([
+      ['clearChatMessages', 'declines', (id: string, chat: string) => service.clearChatMessages(id, chat)],
+      ['deleteChat', 'fails', (id: string, chat: string) => service.deleteChat(id, chat)],
+    ] as const)(
+      '%s keeps the stored rows when the engine read the stored message and then %s',
+      async (method, outcome, run) => {
+        (messageRepository.findOne as jest.Mock).mockResolvedValueOnce({
+          waMessageId: 'S1',
+          chatId: '123@c.us',
+          direction: MessageDirection.INCOMING,
+          timestamp: 1690000000,
+        });
+        mockEngine[method].mockImplementationOnce(async (_chat: string, stored?: StoredChatMessageLookup) => {
+          await stored?.();
+          if (outcome === 'fails') throw new Error('timed out');
+          return false;
+        });
+
+        const call = run('sess-uuid-1', '123@c.us');
+        if (outcome === 'fails') await expect(call).rejects.toThrow('timed out');
+        else await expect(call).resolves.toBe(false);
+
+        expect(messageRepository.findOne).toHaveBeenCalled();
+        expect(messageRepository.find).not.toHaveBeenCalled();
+        expect(messageRepository.delete).not.toHaveBeenCalled();
+        expect(deletedHooks()).toHaveLength(0);
+      },
+    );
+
     it('a failed removal after the engine succeeded is logged and the call still succeeds', async () => {
       (messageRepository.find as jest.Mock).mockRejectedValueOnce(new Error('db down'));
       const logError = jest.spyOn((service as unknown as { logger: { error: jest.Mock } }).logger, 'error');
@@ -9281,6 +9314,202 @@ describe('SessionService', () => {
         'db down',
         expect.objectContaining({ action: 'chat_local_purge_failed' }),
       );
+    });
+  });
+
+  // ── the stored newest message a chat write falls back to (#1891) ──
+
+  describe('stored last message lookup', () => {
+    beforeEach(async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      await service.start('sess-uuid-1');
+    });
+
+    /** The lookup the service handed the engine for `run`, called once. */
+    const lookupOf = async (
+      method: 'markUnread' | 'clearChatMessages' | 'deleteChat' | 'sendSeen',
+      run: () => Promise<unknown>,
+    ): Promise<unknown> => {
+      mockEngine[method].mockResolvedValueOnce(false);
+      await run();
+      const calls = mockEngine[method].mock.calls as unknown[][];
+      const lookup = calls[calls.length - 1].find(arg => typeof arg === 'function') as StoredChatMessageLookup;
+      return lookup();
+    };
+    const whereOf = (): unknown =>
+      ((messageRepository.findOne as jest.Mock).mock.calls as [{ where: unknown }][])[0][0].where;
+
+    it("reads a 1:1 chat's newest stored message under every id form of it", async () => {
+      (lidMappingStore.findLidsForPhone as jest.Mock).mockResolvedValue(['999']);
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        waMessageId: 'S1',
+        chatId: '123@c.us',
+        direction: MessageDirection.OUTGOING,
+        author: null,
+        timestamp: 1690000000,
+      });
+
+      // The chat's lid comes from the table-backed lookup, which the engine's cache can lack.
+      await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
+        id: 'S1',
+        fromMe: true,
+        timestamp: 1690000000,
+        lid: '999@lid',
+      });
+      const base = {
+        sessionId: 'sess-uuid-1',
+        chatId: In(['123@c.us', '123@s.whatsapp.net', '999@lid']),
+        waMessageId: Not(IsNull()),
+        timestamp: Not(IsNull()),
+      };
+      expect(whereOf()).toEqual([base]);
+      expect(messageRepository.findOne).toHaveBeenCalledWith(
+        expect.objectContaining({ order: { timestamp: 'DESC', createdAt: 'DESC' } }),
+      );
+    });
+
+    it('in a group, takes an own message or a received one with its sender, and its lid from the table', async () => {
+      (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+        Promise.resolve(phone === '628222' ? ['555'] : []),
+      );
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce({
+        waMessageId: 'G1',
+        chatId: '1234567890-123@g.us',
+        direction: MessageDirection.INCOMING,
+        author: '628222@c.us',
+        timestamp: 1690000001,
+      });
+
+      await expect(
+        lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1234567890-123@g.us')),
+      ).resolves.toEqual({
+        id: 'G1',
+        fromMe: false,
+        author: '628222@c.us',
+        authorLid: '555@lid',
+        timestamp: 1690000001,
+      });
+      expect(lidMappingStore.findLidsForPhone).toHaveBeenCalledWith('628222');
+      const base = {
+        sessionId: 'sess-uuid-1',
+        chatId: In(['1234567890-123@g.us']),
+        waMessageId: Not(IsNull()),
+        timestamp: Not(IsNull()),
+      };
+      expect(whereOf()).toEqual([
+        { ...base, direction: MessageDirection.INCOMING, author: Not(IsNull()) },
+        { ...base, direction: MessageDirection.OUTGOING },
+      ]);
+    });
+
+    it('takes the lid the row is filed under when the table maps the phone to two, and none from a phone row', async () => {
+      (lidMappingStore.findLidsForPhone as jest.Mock).mockResolvedValue(['998', '999']);
+      const row = (chatId: string) => ({
+        waMessageId: 'S1',
+        chatId,
+        direction: MessageDirection.INCOMING,
+        author: null,
+        timestamp: 1690000000,
+      });
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce(row('999@lid'));
+      await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
+        id: 'S1',
+        fromMe: false,
+        timestamp: 1690000000,
+        lid: '999@lid',
+      });
+
+      // Filed under the phone, the row names neither lid, so the engine gets none to guess from.
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce(row('123@c.us'));
+      await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
+        id: 'S1',
+        fromMe: false,
+        timestamp: 1690000000,
+      });
+    });
+
+    it('for a read receipt, takes only a received message', async () => {
+      await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '123@c.us'))).resolves.toBeNull();
+      expect(whereOf()).toEqual([expect.objectContaining({ direction: MessageDirection.INCOMING })]);
+    });
+
+    // The query itself, on a real database: the id-form `In`, the group sender rule and the ordering.
+    describe('against a real database', () => {
+      let db: DataSource;
+      let messages: Repository<Message>;
+
+      beforeAll(async () => {
+        db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [Message], synchronize: true });
+        await db.initialize();
+        messages = db.getRepository(Message);
+        const row = (
+          chatId: string,
+          waMessageId: string | null,
+          direction: MessageDirection,
+          timestamp: number,
+          author?: string,
+        ) => ({ sessionId: 'sess-uuid-1', chatId, waMessageId, direction, timestamp, author, from: 'a', to: 'b' });
+        await messages.insert([
+          row('123@c.us', 'OUT', MessageDirection.OUTGOING, 100),
+          row('999@lid', 'IN', MessageDirection.INCOMING, 200),
+          row('123@c.us', null, MessageDirection.INCOMING, 300),
+          row('777@c.us', 'OTHER', MessageDirection.INCOMING, 400),
+          row('1-2@g.us', 'G-ANON', MessageDirection.INCOMING, 500),
+          row('1-2@g.us', 'G-OWN', MessageDirection.OUTGOING, 300),
+          row('1-2@g.us', 'G-IN', MessageDirection.INCOMING, 250, '628222@c.us'),
+          row('456@c.us', 'TWO-OLD', MessageDirection.OUTGOING, 100),
+          row('462@lid', 'TWO-NEW', MessageDirection.INCOMING, 200),
+          row('461@lid', 'TWO-OLDER', MessageDirection.INCOMING, 50),
+        ] as QueryDeepPartialEntity<Message>[]);
+      });
+
+      afterAll(async () => {
+        await db.destroy();
+      });
+
+      beforeEach(() => {
+        Object.assign(service as unknown as Record<string, unknown>, { messageRepository: messages });
+        (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+          Promise.resolve(phone === '123' ? ['999'] : phone === '456' ? ['461', '462'] : []),
+        );
+      });
+
+      it("finds a 1:1 chat's newest message under its lid twin and skips rows without an id", async () => {
+        await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
+          id: 'IN',
+          fromMe: false,
+          timestamp: 200,
+          lid: '999@lid',
+        });
+      });
+
+      it('takes the lid the newest row is filed under when the phone maps to two', async () => {
+        await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '456@c.us'))).resolves.toEqual({
+          id: 'TWO-NEW',
+          fromMe: false,
+          timestamp: 200,
+          lid: '462@lid',
+        });
+      });
+
+      it('in a group, skips a received message without its sender, and a receipt takes only a received one', async () => {
+        await expect(
+          lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1-2@g.us')),
+        ).resolves.toMatchObject({ id: 'G-OWN', fromMe: true, timestamp: 300 });
+        await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '1-2@g.us'))).resolves.toMatchObject({
+          id: 'G-IN',
+          fromMe: false,
+          author: '628222@c.us',
+          timestamp: 250,
+        });
+      });
+    });
+
+    it('is not read until the engine asks for it', async () => {
+      mockEngine.deleteChat.mockResolvedValueOnce(false);
+      await service.deleteChat('sess-uuid-1', '123@c.us');
+      expect(messageRepository.findOne).not.toHaveBeenCalled();
     });
   });
 

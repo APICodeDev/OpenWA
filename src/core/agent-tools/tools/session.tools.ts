@@ -121,7 +121,8 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
           .optional()
           .describe(
             'Specific message IDs to acknowledge. Baileys acknowledges individual messages, so without ' +
-              'this only the newest received message still held in memory gets a receipt.',
+              'this only the newest received message gets a receipt: the one held in memory, else the ' +
+              'newest received one the gateway stored.',
           ),
       }),
       handler: input =>

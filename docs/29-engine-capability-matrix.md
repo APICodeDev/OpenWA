@@ -970,12 +970,20 @@ adapter boundary — none silently stubs.
   or only on the phone. Baileys writes only its own credentials, showed no such effect and is not
   refused. Link by QR when the session of that number must stay up.
 - **`archiveChat` / `clearChatMessages` / `deleteChat` / `sendSeen` / `markUnread` (baileys).** The
-  four `chatModify` actions (archive, clear, delete, unread) need the chat's last known message, which
-  the patch carries. `sendSeen` without message ids is `readMessages([key])` for the newest _received_
-  (not `fromMe`) message, since Baileys drops own keys from a receipt. A chat with no such message
-  resolves `false` rather than throwing, so a chat the session has seen no message in, or one holding
-  only this account's own sends, answers `POST chats/read` with `{"success": false}`, where
-  whatsapp-web.js marks it read from the page-side chat object without needing any local history.
+  four `chatModify` actions (archive, clear, delete, unread) are keyed to the chat's newest message:
+  the one the session holds in memory, else the newest one the gateway stored (#1891). The patch is
+  indexed by the same jid as that message's key: a message in memory under the jid it arrived with,
+  a stored one under the lid its row is filed under, or the chat's only reported lid, else its phone
+  jid; an own group message goes without its participant. A key that does not belong to the chat is
+  not used. With no usable message, clear and delete resolve `false`, and archive and unread are sent
+  without a range for a chat the session knows (a chat record, a persisted state row or a stored
+  message) whose jid belongs to it, and resolve `false` otherwise; unread also resolves `false` for an
+  archived chat, which the phone leaves unmarked without a range. `sendSeen`
+  without message ids is `readMessages([key])` for the newest _received_ (not `fromMe`) message, in
+  memory or stored, since Baileys drops own keys from a receipt. A chat with no such message resolves
+  `false`, so one holding only this account's own sends answers `POST chats/read` with
+  `{"success": false}`, where whatsapp-web.js marks it read from the page-side chat object without
+  needing any local history.
   With message ids, a group id the message store never held (history backfill) takes its receipt's
   participant from the author the gateway stored for it; one with no stored author is left out of the
   receipt, and the answer is `false` when no id could be named.
