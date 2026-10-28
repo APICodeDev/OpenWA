@@ -113,24 +113,32 @@ const PILL_TEXT_FILLS = [
   '.chats-page .message-prompt-button.selected',
 ];
 
+// The accent text is drawn on a tint the same way, in the session switcher's avatar.
+const TEXT_FILLS: Array<[string, string[]]> = [
+  ['--chat-pill-active-text', PILL_TEXT_FILLS],
+  ['--chat-accent-text', ['.chats-page .session-avatar']],
+];
+
 for (const anchor of CHAT_ANCHORS) {
-  test(`the pill green clears AA on every fill it is drawn on (${anchor})`, () => {
+  test(`chat text clears AA on every tinted fill it is drawn on (${anchor})`, () => {
     const block = chatBlock(anchor);
-    const text = rgb(chatToken(block, '--chat-pill-active-text'));
-    for (const selector of PILL_TEXT_FILLS) {
-      const fill = /(?:^|;)\s*background:\s*([^;]+)/.exec(chatRule(selector))?.[1].trim();
-      assert.ok(fill, `${selector} paints no background`);
-      const plain = /^var\((--[\w-]+)\)$/.exec(fill);
-      const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(fill);
-      assert.ok(plain || mixed, `${selector} paints ${fill}, which this test cannot resolve`);
-      const surface = plain
-        ? rgb(chatToken(block, plain[1]))
-        : rgb(chatToken(block, mixed![1])).map(
-            (c, i) =>
-              c * (Number(mixed![2]) / 100) + rgb(chatToken(block, mixed![3]))[i] * (1 - Number(mixed![2]) / 100),
-          );
-      const ratio = contrast(text, surface);
-      assert.ok(ratio >= 4.5, `${anchor} --chat-pill-active-text is ${ratio.toFixed(2)}:1 on ${selector}`);
+    for (const [token, selectors] of TEXT_FILLS) {
+      const text = rgb(chatToken(block, token));
+      for (const selector of selectors) {
+        const fill = /(?:^|;)\s*background:\s*([^;]+)/.exec(chatRule(selector))?.[1].trim();
+        assert.ok(fill, `${selector} paints no background`);
+        const plain = /^var\((--[\w-]+)\)$/.exec(fill);
+        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(fill);
+        assert.ok(plain || mixed, `${selector} paints ${fill}, which this test cannot resolve`);
+        const surface = plain
+          ? rgb(chatToken(block, plain[1]))
+          : rgb(chatToken(block, mixed![1])).map(
+              (c, i) =>
+                c * (Number(mixed![2]) / 100) + rgb(chatToken(block, mixed![3]))[i] * (1 - Number(mixed![2]) / 100),
+            );
+        const ratio = contrast(text, surface);
+        assert.ok(ratio >= 4.5, `${anchor} ${token} is ${ratio.toFixed(2)}:1 on ${selector}`);
+      }
     }
   });
 }

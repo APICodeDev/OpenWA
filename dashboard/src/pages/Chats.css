@@ -192,7 +192,7 @@
   border-radius: 50%;
   background: color-mix(in srgb, var(--chat-accent) 12%, var(--chat-panel));
   border: 1px solid color-mix(in srgb, var(--chat-accent) 25%, transparent);
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
   font-weight: 600;
   font-size: 1rem;
   display: flex;
@@ -414,7 +414,7 @@
 
 .chats-page .session-check {
   margin-inline-start: auto;
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
   flex-shrink: 0;
 }
 
@@ -750,7 +750,7 @@
 
 .chats-page .action-avatar {
   background: var(--chat-accent);
-  color: #fff;
+  color: #0f172a;
 }
 
 .chats-page .chat-item-info {
@@ -1041,7 +1041,7 @@
 }
 
 .chats-page .chat-archive-entry svg {
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
 }
 
 .chats-page .chat-archive-entry:hover {
@@ -1052,7 +1052,7 @@
   margin-inline-start: auto;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
 }
 
 /* The room's menu lists the row's actions too: its groups stack, and dividers part them. */
@@ -1462,7 +1462,7 @@
   padding-inline: 0.75rem;
   font-size: 0.8125rem;
   font-weight: 600;
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1832,7 +1832,7 @@
 }
 
 .chats-page .scroll-to-bottom-btn:hover {
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
 }
 
 .chats-page .scroll-to-bottom-btn:active {
@@ -2798,7 +2798,7 @@
 }
 
 .chats-page .btn-input-accessory.active {
-  color: var(--chat-accent);
+  color: var(--chat-accent-text);
 }
 
 .chats-page .btn-input-accessory:disabled {
@@ -2862,7 +2862,7 @@
   background: var(--chat-accent);
   border: none;
   border-radius: 50%;
-  color: #fff;
+  color: #0f172a;
   cursor: pointer;
   flex-shrink: 0;
   transition:
