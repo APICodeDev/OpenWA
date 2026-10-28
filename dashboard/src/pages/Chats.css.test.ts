@@ -22,3 +22,15 @@ test('the new chat search clear button is a small icon button that does not grow
   // Taller than the line of text it sits beside, so its block margin takes the difference back.
   assert.match(rule[1], /margin-block:\s*-0\.5rem/);
 });
+
+test('the active filter pill is heavier than the others, so it does not differ by colour alone', () => {
+  const weight = (selector: string): number => {
+    const rule = new RegExp(`${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`).exec(css);
+    assert.ok(rule, `no rule for ${selector}`);
+    return Number(/font-weight:\s*(\d+)/.exec(rule[1])?.[1]);
+  };
+  assert.ok(
+    weight('.chats-page .chat-filter-pill.active') > weight('.chats-page .chat-filter-pill'),
+    'the active pill has the weight of the others',
+  );
+});

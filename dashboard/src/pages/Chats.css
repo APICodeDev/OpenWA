@@ -594,10 +594,12 @@
   background: var(--chat-hover);
 }
 
+/* Heavier as well as tinted, so the chosen filter does not stand out by colour alone. */
 .chats-page .chat-filter-pill.active {
   background: var(--chat-pill-active-bg);
   border-color: transparent;
   color: var(--chat-pill-active-text);
+  font-weight: 600;
 }
 
 /* Lists */
