@@ -755,7 +755,7 @@ describe('IntegrationInstanceController session-scope fence', () => {
 
     await controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://x.example' } }, scopedKey);
 
-    expect(update.mock.calls[0][4]).toBe(net);
+    expect(update).toHaveBeenCalledWith('chatwoot-adapter', 'acct1', expect.any(Object), undefined, net);
   });
 
   it('lets a scoped key patch an in-scope instance without touching sessionScope', async () => {
