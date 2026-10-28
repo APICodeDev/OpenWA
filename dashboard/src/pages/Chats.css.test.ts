@@ -115,3 +115,11 @@ test('the room is never narrower than its composer, so the emoji button cannot s
   // The list column is what gives way when the room needs the width.
   assert.notEqual(value('.chats-page .chats-sidebar', 'flex-shrink'), '0');
 });
+
+test('the band that swaps the panes beside the expanded navigation has no lower edge a zoomed width falls through', () => {
+  // With a 768px maximum below it, a 769px minimum left 768.5px, a zoomed width, matched by neither.
+  const band = /@media ([^{]+)\{\s*\.main-content:not\(\.expanded\) \.chats-page \.chats-sidebar\s*\{/.exec(css);
+  assert.ok(band, 'the band no longer swaps the panes beside the expanded navigation');
+  assert.doesNotMatch(band[1], /min-width/);
+  assert.match(band[1], /max-width:\s*889px/);
+});
