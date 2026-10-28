@@ -5,7 +5,8 @@ import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
-import { SEARCH_CONTAINS_WINDOW } from '../search.constants';
+import { SEARCH_CONTAINS_TERMS_MAX_LENGTH, SEARCH_CONTAINS_WINDOW } from '../search.constants';
+import { ContainsTermsRefusedError } from '../search-terms';
 import {
   BuiltInFtsProvider,
   postgresUnaccentFunctionDdl,
@@ -95,6 +96,41 @@ describe('BuiltInFtsProvider match=contains (sqlite)', () => {
 
   it('rejects a query made only of terms shorter than a trigram', async () => {
     await expect(provider.search({ q: 'id to', match: 'contains' })).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('counts a Hangul syllable as one character, so a two-syllable word only narrows', async () => {
+    await ds
+      .getRepository(Message)
+      .insert([
+        row('s1', 'c5', '서울역에서 만나요', MessageDirection.INCOMING, 50),
+        row('s1', 'c6', 'invoice 한국 지사로 보냄', MessageDirection.INCOMING, 60),
+      ]);
+
+    await expect(provider.search({ q: '서울', match: 'contains' })).rejects.toBeInstanceOf(ContainsTermsRefusedError);
+    const station = await provider.search({ q: '서울역', match: 'contains' });
+    expect(station.hits.map(h => [h.chatId, h.snippet])).toEqual([['c5', '<mark>서울역</mark>에서 만나요']]);
+    expect((await provider.search({ q: 'invoice 한국', match: 'contains' })).hits.map(h => h.chatId)).toEqual(['c6']);
+  });
+
+  it('marks a Greek word whose final sigma the body writes in capitals', async () => {
+    await ds.getRepository(Message).insert(row('s1', 'c5', 'ΚΑΛΟΣ ΔΡΟΜΟΣ σήμερα', MessageDirection.INCOMING, 50));
+    const query = jest.spyOn(ds, 'query');
+
+    const res = await provider.search({ q: 'δρομος', match: 'contains' });
+
+    expect(res.hits.map(h => [h.snippet, h.score])).toEqual([['ΚΑΛΟΣ <mark>ΔΡΟΜΟΣ</mark> σήμερα', 3]]);
+    // Only the application reads final sigma as sigma: the database is sent the term as written.
+    expect(query.mock.calls.at(-1)?.[1]).toContain('"δρομος"');
+  });
+
+  it('bounds the characters of the terms together, spaces not counted', async () => {
+    const max = 'a'.repeat(SEARCH_CONTAINS_TERMS_MAX_LENGTH);
+    expect((await provider.search({ q: max, match: 'contains' })).total).toBe(0);
+    for (const q of [`${max}b`, `${max.slice(0, 40)} ${max.slice(0, 25)}x`]) {
+      await expect(provider.search({ q, match: 'contains' })).rejects.toBeInstanceOf(ContainsTermsRefusedError);
+    }
+    // A repeated term counts once, as it runs once.
+    expect((await provider.search({ q: `${max} ${max.toUpperCase()}`, match: 'contains' })).total).toBe(0);
   });
 
   it('matches a LIKE wildcard in a term literally', async () => {

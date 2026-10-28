@@ -975,9 +975,16 @@ adapter boundary — none silently stubs.
   four `chatModify` actions (archive, clear, delete, unread) are keyed to the chat's newest message:
   the one the session holds in memory, else the newest one the gateway stored (#1891). The patch is
   indexed by the same jid as that message's key: a message in memory under the jid it arrived with,
-  a stored one under the lid its row is filed under, or the chat's only reported lid, else its phone
-  jid; an own group message goes without its participant. A key that does not belong to the chat is
-  not used. With no usable message, clear and delete resolve `false`, and archive and unread are sent
+  a stored one under the lid its row is filed under, or the chat's only reported lid, else a lid the
+  session's cache holds for it, else its phone jid; an own group message goes without its participant.
+  A stored message filed under the phone of a chat the persisted table maps to two or more lids, or
+  received in a group from a sender it maps to two or more, is not used, since keying it to any one of
+  them would be a guess: the write proceeds as for a chat with no stored message. A key that does not
+  belong to the chat is not used. A chat id not spelled the way the engine keys chats (`<id>@g.us`,
+  `<lid>@lid` or a phone jid, lowercase, with no device suffix), such as `120363@G.US` or a bare
+  number, is served only by a message in memory: without one, the four writes and a `sendSeen` without
+  message ids resolve `false`. With no usable message, clear and delete resolve `false`, and archive
+  and unread are sent
   without a range for a chat the session knows (a chat record, a persisted state row or a stored
   message) whose jid belongs to it, and resolve `false` otherwise; unread also resolves `false` for an
   archived chat, which the phone leaves unmarked without a range. `sendSeen`

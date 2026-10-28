@@ -4,8 +4,10 @@ import { Type } from 'class-transformer';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { ToStrictNumber, ToStrictString } from '../../../common/utils/strict-boolean';
+import { NoNulCharacter } from '../../../common/validation/no-nul-character';
 import {
   SEARCH_CONTAINS_MIN_TERM_LENGTH,
+  SEARCH_CONTAINS_TERMS_MAX_LENGTH,
   SEARCH_CONTAINS_WINDOW,
   SEARCH_MATCH_MODES,
   SEARCH_OFFSET_MAX,
@@ -28,13 +30,15 @@ import type { SearchMatch } from '../search.types';
  */
 export class SearchQueryDto {
   @ApiProperty({
-    description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} words)`,
+    description: `Search term (required, non-empty, at most ${SEARCH_QUERY_MAX_LENGTH} characters and ${SEARCH_TERMS_MAX} words, no NUL character)`,
     maxLength: SEARCH_QUERY_MAX_LENGTH,
   })
   @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(SEARCH_QUERY_MAX_LENGTH)
+  // PostgreSQL refuses U+0000 in a bound parameter, and SQLite's FTS5 in a contains query: both a 500.
+  @NoNulCharacter()
   q!: string;
 
   @ApiPropertyOptional({
@@ -44,7 +48,9 @@ export class SearchQueryDto {
       '`word` (default) matches whole words. `contains` matches any part of a word, ignoring case and ' +
       `accents (\`voic\` finds "Invoice", \`cafe\` finds "Café"); it is opt-in on the built-in provider ` +
       '(SEARCH_CONTAINS_ENABLED=true, else 501) and needs at least one term of ' +
-      `${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters (on PostgreSQL, ${SEARCH_CONTAINS_MIN_TERM_LENGTH} letters or digits in a row). ` +
+      `${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters (on PostgreSQL, ${SEARCH_CONTAINS_MIN_TERM_LENGTH} letters or digits in a row) ` +
+      `and at most ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters in all its terms, spaces not counted (400 otherwise), so a ` +
+      'query of two-character words alone, as most Korean and many Chinese and Japanese words are, needs `word`. ' +
       `It ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality, so \`total\` is at most ` +
       `${SEARCH_CONTAINS_WINDOW}.`,
   })

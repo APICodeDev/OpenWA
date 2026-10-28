@@ -446,6 +446,7 @@ export class BaileysContacts {
       // stands in, rebuilt the way a chat write keys it.
       const last = this.host.lastInboundMessage(chatId);
       if (last && (await this.matchesChat(last.key, chatId, socket))) return [last.key];
+      if (!isEngineChatId(chatId)) return [];
       const row = await this.readStored(chatId, storedLast);
       const received = row && !row.fromMe ? this.storedTarget(chatId, row) : null;
       return received && (await this.matchesChat(received.key, chatId, socket)) ? [received.key] : [];
@@ -524,6 +525,10 @@ export class BaileysContacts {
    * With neither, `rangeless()` allows a patch without a range: it is indexed by the chat's jid, and
    * only for a chat the session knows (a message in memory or stored, or a chat record or state row
    * the listing holds) whose jid passes the same check. Otherwise the answer is null.
+   *
+   * Only the message in memory serves an id spelled any other way than the engine keys chats
+   * ({@link isEngineChatId}): the stored lookup normalizes the id and finds the chat's rows, but the
+   * patch would still be indexed by the misspelled id, which names no chat on the phone.
    */
   private async chatWriteRange(
     socket: WASocket,
@@ -534,6 +539,7 @@ export class BaileysContacts {
     const last = this.host.lastMessage(chatId);
     const inMemory = last ? this.memoryTarget(chatId, last.key, last.timestamp) : null;
     if (inMemory && (await this.matchesChat(inMemory.key, chatId, socket))) return toRange(inMemory);
+    if (!isEngineChatId(chatId)) return null;
     const row = await this.readStored(chatId, stored);
     const fromStore = row ? this.storedTarget(chatId, row) : null;
     if (fromStore && (await this.matchesChat(fromStore.key, chatId, socket))) return toRange(fromStore);
@@ -688,4 +694,17 @@ function target(
 
 function toRange(write: WriteTarget): ChatWriteRange {
   return { jid: write.jid, lastMessages: [{ key: write.key, messageTimestamp: write.timestamp }] };
+}
+
+/**
+ * Whether a chat id is spelled the way the engine keys chats: `<id>@g.us`, `<lid>@lid` or a phone in
+ * either user dialect, lowercase, with no device suffix or surrounding space. chatJid folds a phone's
+ * two dialects and nothing else, so `120363@G.US` or a bare `628111` would index a patch by a jid that
+ * names no chat.
+ */
+function isEngineChatId(chatId: string): boolean {
+  const { kind, userPart: id } = parseWaId(chatId);
+  const domains =
+    kind === 'group' ? ['g.us'] : kind === 'lid' ? ['lid'] : kind === 'user' ? ['c.us', 's.whatsapp.net'] : [];
+  return domains.some(domain => chatId === `${id}@${domain}`);
 }

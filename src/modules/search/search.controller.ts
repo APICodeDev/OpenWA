@@ -6,7 +6,12 @@ import { ChatScopeService } from '../auth/chat-scope.service';
 import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
 import { SearchService } from './search.service';
 import { SearchQueryDto } from './dto/search-query.dto';
-import { SEARCH_CONTAINS_WINDOW, SEARCH_MATCH_MODES, SEARCH_OFFSET_MAX } from './search.constants';
+import {
+  SEARCH_CONTAINS_TERMS_MAX_LENGTH,
+  SEARCH_CONTAINS_WINDOW,
+  SEARCH_MATCH_MODES,
+  SEARCH_OFFSET_MAX,
+} from './search.constants';
 import type { SearchResults } from './search.types';
 
 @ApiTags('search')
@@ -25,8 +30,9 @@ export class SearchController {
   @ApiResponse({
     status: 400,
     description:
-      'Empty or whitespace-only "q", or one over 1000 characters or 32 words; an unknown "match"; or a ' +
-      '"match=contains" query with no term of 3 or more characters (on PostgreSQL, 3 letters or digits in a row)',
+      'Empty or whitespace-only "q", or one over 1000 characters or 32 words or holding a NUL character; an ' +
+      'unknown "match"; or a "match=contains" query with no term of 3 or more characters (on PostgreSQL, 3 ' +
+      `letters or digits in a row) or with more than ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters in its terms`,
   })
   @ApiResponse({ status: 403, description: 'Chat scope denied or chat-restricted search uses a plugin provider' })
   @ApiResponse({
@@ -51,7 +57,7 @@ export class SearchController {
   @ApiQuery({
     name: 'q',
     required: true,
-    description: 'Search term (required, non-empty, at most 1000 characters and 32 words)',
+    description: 'Search term (required, non-empty, at most 1000 characters and 32 words, no NUL character)',
   })
   @ApiQuery({
     name: 'match',
@@ -59,7 +65,8 @@ export class SearchController {
     enum: SEARCH_MATCH_MODES,
     description:
       'word (default): whole words. contains: any part of a word, ignoring case and accents; ranks the ' +
-      `${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality; needs SEARCH_CONTAINS_ENABLED=true`,
+      `${SEARCH_CONTAINS_WINDOW} most recently stored matches by match quality; needs SEARCH_CONTAINS_ENABLED=true, ` +
+      `a term of 3 or more characters and at most ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters in all its terms`,
   })
   @ApiQuery({ name: 'sessionId', required: false, description: 'Restrict to a single session' })
   @ApiQuery({

@@ -21,6 +21,11 @@ describe('containsScore', () => {
     expect(containsScore('Thanks, I will pay the invoice today', ['invoice', 'to'])).toBe(5);
   });
 
+  it('reads final sigma as sigma, whichever side writes it', () => {
+    expect(containsScore('ΚΑΛΟΣ ΔΡΟΜΟΣ σήμερα', ['δρομος'])).toBe(3);
+    expect(containsScore('ΚΑΛΟΣ ΔΡΟΜΟΣ σήμερα', ['δρομοσ'])).toBe(3);
+  });
+
   it('scores 0 for a term the body does not contain', () => {
     expect(containsScore('Order shipped', ['invoice'])).toBe(0);
   });

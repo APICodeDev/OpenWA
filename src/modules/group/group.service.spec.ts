@@ -104,6 +104,18 @@ describe('GroupService', () => {
       expect(setGroupMemberLabel).toHaveBeenNthCalledWith(2, '120363000000000001@g.us', '');
     });
 
+    it.each(['120363000000000001@G.US', ' 120363000000000001@g.us '])(
+      'hands the engine the group id %j in the form Baileys relays to a group',
+      async id => {
+        const setGroupMemberLabel = jest.fn().mockResolvedValue(undefined);
+        const svc = makeService({ setGroupMemberLabel });
+
+        await svc.setGroupMemberLabel('s1', id, 'Site A');
+
+        expect(setGroupMemberLabel).toHaveBeenCalledWith('120363000000000001@g.us', 'Site A');
+      },
+    );
+
     it('lets the whatsapp-web.js 501 through', async () => {
       const svc = makeService({
         setGroupMemberLabel: jest.fn().mockRejectedValue(new EngineNotSupportedError('setGroupMemberLabel')),
