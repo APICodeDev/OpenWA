@@ -272,7 +272,12 @@ export function Chats() {
     hasNextPage: hasMoreMessages,
     isFetchingNextPage: loadingOlderMessages,
     fetchNextPage,
-  } = useChatMessages(selectedSessionId, activeChat?.id ?? null);
+  } = useChatMessages(
+    selectedSessionId,
+    activeChat?.id ?? null,
+    // Baileys has no live per-chat history read and answers 501 to it; any other or unknown engine is asked.
+    engineType !== 'baileys',
+  );
   const { appendMessage, updateMessage } = useChatMessagesActions();
   const queryClient = useQueryClient();
 

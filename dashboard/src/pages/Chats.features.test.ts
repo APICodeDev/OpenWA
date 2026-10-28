@@ -2063,6 +2063,29 @@ test('a message that reaches a chat after a change keeps its row when an earlier
   assert.ok(screen.getByText('after the mark'), 'the earlier list rolled the preview back');
 });
 
+// ── The live history read of an opened chat. ──
+
+// Baileys answers 501 to it, so every chat opened there logged a failed call in the browser console. An engine
+// the page does not know is still asked: skipping it would drop the backfill on an engine that has it.
+for (const [engine, asked] of [
+  ['baileys', false],
+  ['whatsapp-web.js', true],
+  [null, true],
+] as const) {
+  test(`opening a chat ${asked ? 'asks' : 'does not ask'} ${engine ?? 'an unknown engine'} for live history`, async () => {
+    const { screen, fireEvent, waitFor } = rtl;
+    if (engine) window.sessionStorage.setItem('openwa_engine_type', engine);
+    else window.sessionStorage.removeItem('openwa_engine_type');
+    aliceThread = [threadRow(1)];
+    renderPage();
+    fireEvent.click(await screen.findByText('Alice'));
+    await screen.findByText('message 1');
+    const history = () => fetchCalls.filter(c => c.method === 'GET' && /\/messages\/[^/]+\/history/.test(c.path));
+    if (asked) await waitFor(() => assert.equal(history().length, 1, 'the live history was not read once'));
+    else assert.equal(history().length, 0, 'the engine that answers 501 was asked for live history');
+  });
+}
+
 // ── What clearing and deleting a chat leave behind on the page. ──
 
 test('clearing a chat empties its preview and refreshes the thread that is open', async () => {
