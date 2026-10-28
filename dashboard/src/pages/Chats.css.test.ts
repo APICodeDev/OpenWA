@@ -80,3 +80,38 @@ test('the page gives up the phone bar under the query that draws it, so 768px ke
   assert.ok(offset, 'the page no longer takes the phone bar off its height');
   assert.equal(offset[1].trim(), mobile);
 });
+
+test('the room is never narrower than its composer, so the emoji button cannot slide under the send button', () => {
+  const value = (selector: string, property: string): string => {
+    const found = rulesFor(selector)
+      .map(body => new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+)`).exec(body)?.[1].trim())
+      .filter((v): v is string => Boolean(v))
+      .pop();
+    assert.ok(found, `${selector} sets no ${property}`);
+    return found;
+  };
+  const px = (length: string): number => {
+    const m = /^(-?[\d.]+)(px|rem)?$/.exec(length);
+    assert.ok(m && (m[2] || Number(m[1]) === 0), `${length} is not a px or rem length`);
+    return Number(m[1]) * (m[2] === 'rem' ? 16 : 1);
+  };
+  // Each side of a padding-inline: one value is both, two are the start and the end.
+  const sides = (shorthand: string): number => {
+    const parts = shorthand.split(/\s+/).map(px);
+    return parts.length === 1 ? 2 * parts[0] : parts[0] + parts[1];
+  };
+  const pill = '.chats-page .message-input-pill';
+  const floor =
+    sides(value('.chats-page .room-input-footer', 'padding-inline')) +
+    2 * px(value('.chats-page .input-form', 'gap')) +
+    px(value('.chats-page .btn-input-accessory', 'width')) +
+    sides(value(pill, 'padding-inline')) +
+    2 * px(value(pill, 'border').split(/\s+/)[0]) +
+    px(value(pill, 'gap')) +
+    px(value(`${pill} .message-text-input`, 'min-width')) +
+    px(value('.chats-page .btn-input-accessory.inside', 'width')) +
+    px(value('.chats-page .btn-send-message', 'width'));
+  assert.ok(px(value('.chats-page .chats-room', 'min-width')) >= floor, `the composer needs ${floor}px`);
+  // The list column is what gives way when the room needs the width.
+  assert.notEqual(value('.chats-page .chats-sidebar', 'flex-shrink'), '0');
+});

@@ -149,7 +149,8 @@
   flex-direction: column;
   background: var(--chat-panel);
   border-inline-end: 1px solid var(--chat-divider);
-  flex-shrink: 0;
+  /* Gives way, down to its minimum, when the room beside it would be narrower than its composer (see .chats-room). */
+  flex-shrink: 1;
   min-height: 0;
   /* The session picker hangs from the column (see .session-picker). */
   position: relative;
@@ -1650,7 +1651,11 @@
    ============================================================================= */
 .chats-page .chats-room {
   flex: 1;
-  min-width: 0;
+  /* The composer's floor: the footer's padding, the attach button, the pill (its padding, border and gap, the input's
+     64px and the emoji button) and the send button, with the gaps between them. Narrower, the pill shrank below its
+     controls and the emoji button slid under the send button, as it did with the contact panel open beside the room
+     and the navigation expanded at 1201 to 1240px; the list column gives way instead. */
+  min-width: 262px;
   min-height: 0;
   display: flex;
   flex-direction: column;
