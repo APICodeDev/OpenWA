@@ -319,8 +319,12 @@ describe('Idempotency Utils', () => {
       const at = '2026-07-20T00:00:00.000Z';
       const data = { sessionId: 'A', pollMessageId: 'POLL1', voterId: 'V1', selectedOptions: ['Yes'], timestamp: 100 };
       const key = generateIdempotencyKey('poll.vote', data, at);
-      expect(key).toBe('vote_A_POLL1_V1_100');
+      expect(key).toMatch(/^vote_A_POLL1_V1_100_[0-9a-f]{12}$/);
       expect(generateIdempotencyKey('poll.vote', data, '2026-07-20T01:00:00.000Z')).toBe(key);
+      // An identical redelivery dedupes, a different selection in the same second does not.
+      expect(generateIdempotencyKey('poll.vote', { ...data }, at)).toBe(key);
+      expect(generateIdempotencyKey('poll.vote', { ...data, selectedOptions: ['Yes', 'No'] }, at)).not.toBe(key);
+      expect(generateIdempotencyKey('poll.vote', { ...data, selectedOptions: [] }, at)).not.toBe(key);
       // Going back to an earlier selection later is a new change, never deduped against the first.
       expect(generateIdempotencyKey('poll.vote', { ...data, timestamp: 200 }, at)).not.toBe(key);
       // Two voters on the same poll in the same second are two events.
