@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cut a long chat name in the dashboard on the side its own script ends, so a Latin name on an Arabic or Hebrew page no longer loses its first letters.
 - Shorten the id of an unnamed group on the dashboard Top chats chart to its first and last digits, and fit the Number Checker phone placeholder in every language.
 - Bound Redis cache commands and discard expired operations during reconnect.
+- Read the top chats of `GET /api/stats/messages` on SQLite through the `createdAt` index, where it scanned the whole messages table (3 s over 59,000 messages for a one-day window, with every request waiting), and skip the row lookup for group messages in the top chats of `GET /api/stats/sessions/{sessionId}`.
 - Preserve literal request values in custom ingress acknowledgments.
 - Honor inclusive millisecond lower bounds in built-in search.
 - Stop the dashboard from asking Baileys for live chat history on every chat it opens; Baileys answers 501 to it, which logged a failed request each time.
