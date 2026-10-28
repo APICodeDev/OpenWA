@@ -20,6 +20,7 @@ import {
   ParticipantsDto,
   GroupSubjectDto,
   GroupDescriptionDto,
+  GroupMemberLabelDto,
   JoinGroupDto,
   GroupSettingsDto,
   MembershipRequestActionDto,
@@ -525,6 +526,60 @@ export class GroupController {
   ) {
     await this.groupService.setGroupDescription(sessionId, groupId, dto.description);
     return { success: true, message: 'Group description updated' };
+  }
+
+  @ChatScoped('fenced')
+  @Put(':groupId/member-label')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({
+    summary: "Set this account's member label in a group",
+    description:
+      "Sets the per-group label WhatsApp shows beside this account's name in the group; an empty string clears " +
+      'it. Baileys only: whatsapp-web.js has no member-label setter and answers 501.',
+  })
+  @ApiParam({ name: 'sessionId', description: 'Session ID' })
+  @ApiParam({ name: 'groupId', description: 'Group ID' })
+  @ApiBody({ type: GroupMemberLabelDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'The label message was handed to WhatsApp. Baileys sends it to the group as a protocol message with no ' +
+      'per-request confirmation, and group metadata does not carry the label, so it cannot be read back.',
+    type: GroupAckResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description:
+      'The body failed validation (`label` missing, not a string, or longer than 30 UTF-16 code units), the id ' +
+      'does not name a group, or the session is not started (no engine is running for it).',
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'WhatsApp refused the group lookup the label message depends on, for example because the account is ' +
+      'no longer a member of the group',
+  })
+  @ApiResponse({ status: 404, description: GROUP_NOT_FOUND_404 })
+  @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
+  @ApiResponse({
+    status: 501,
+    description:
+      'Not supported by the active engine: whatsapp-web.js has no member-label setter, so this is Baileys-only.',
+  })
+  @ApiResponse({
+    status: 503,
+    description:
+      'WhatsApp did not answer within the request budget. The label may or may not have been sent; the ' +
+      'gateway stopped waiting for the send to finish.' +
+      THROTTLED_503,
+  })
+  async setMemberLabel(
+    @Param('sessionId') sessionId: string,
+    @Param('groupId') groupId: string,
+    @Body() dto: GroupMemberLabelDto,
+  ) {
+    await this.groupService.setGroupMemberLabel(sessionId, groupId, dto.label);
+    return { success: true, message: 'Group member label sent' };
   }
 
   @ChatScoped('fenced')

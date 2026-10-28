@@ -11233,6 +11233,128 @@
         ]
       }
     },
+    "/api/sessions/{sessionId}/groups/{groupId}/member-label": {
+      "put": {
+        "description": "Sets the per-group label WhatsApp shows beside this account's name in the group; an empty string clears it. Baileys only: whatsapp-web.js has no member-label setter and answers 501.",
+        "operationId": "GroupController_setMemberLabel",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "required": true,
+            "in": "path",
+            "description": "Session ID",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "groupId",
+            "required": true,
+            "in": "path",
+            "description": "Group ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GroupMemberLabelDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The label message was handed to WhatsApp. Baileys sends it to the group as a protocol message with no per-request confirmation, and group metadata does not carry the label, so it cannot be read back.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupAckResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The body failed validation (`label` missing, not a string, or longer than 30 UTF-16 code units), the id does not name a group, or the session is not started (no engine is running for it).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The API key is missing, unknown, revoked, or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "WhatsApp refused the group lookup the label message depends on, for example because the account is no longer a member of the group. Also returned when the API key's role, session or chat scope, or IP allow-list does not allow this operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such group — the id is unknown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The session is not connected: an engine exists for it but is not `ready`, meaning disconnected, reconnecting, or still initializing, so the request never reached WhatsApp. Wait for `ready` and retry. A session that was never started answers `400` instead, and the session lifecycle routes answer `409` for a conflicting state rather than this. One window answers this while the session still reads `ready`: WhatsApp Web periodically reloads its own page and the engine re-injects into it, and for those few seconds the answer is a `409` naming the reload; retry shortly.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "Not supported by the active engine: whatsapp-web.js has no member-label setter, so this is Baileys-only.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "WhatsApp did not answer within the request budget. The label may or may not have been sent; the gateway stopped waiting for the send to finish. On Baileys, also answered when WhatsApp rate-limits or times out the request (code 429 or 408); retry after a pause.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Set this account's member label in a group",
+        "tags": [
+          "groups"
+        ]
+      }
+    },
     "/api/sessions/{sessionId}/groups/{groupId}/leave": {
       "post": {
         "operationId": "GroupController_leave",
@@ -23921,6 +24043,20 @@
         },
         "required": [
           "description"
+        ]
+      },
+      "GroupMemberLabelDto": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "This account's label in the group, shown beside its name (may be empty to clear it). Counted in UTF-16 code units, so an emoji outside the Basic Multilingual Plane takes two of the 30.",
+            "maxLength": 30,
+            "example": "Site A Management"
+          }
+        },
+        "required": [
+          "label"
         ]
       },
       "GroupPictureResponseDto": {

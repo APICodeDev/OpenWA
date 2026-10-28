@@ -878,6 +878,13 @@ class TestGroups:
         client.groups.revoke_invite_code("s", "g")
         assert "/revoke" in backend.calls[-1].url
 
+    def test_set_member_label(self):
+        backend = MockBackend().on("PUT", "/member-label", body={"success": True})
+        make_client(backend).groups.set_member_label("s", "g@g.us", "Site A")
+        assert backend.last_call.method == "PUT"
+        assert backend.last_call.url == "http://localhost:2785/api/sessions/s/groups/g@g.us/member-label"
+        assert backend.last_call.body == {"label": "Site A"}
+
 
     def test_join_group(self):
         backend = MockBackend().on("POST", "/groups/join", body={"success": True, "groupId": "g1@g.us"})

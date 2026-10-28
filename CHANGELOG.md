@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, and lets only a ready one be selected. Thanks @rjsebening.
 - Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id. Thanks @rjsebening.
 - Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
+- Add `PUT /api/sessions/{sessionId}/groups/{groupId}/member-label` to set this account's member label in a group on Baileys; whatsapp-web.js answers `501` (#1918). Thanks @xwork1 for the report.
 
 ### Changed
 

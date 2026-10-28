@@ -800,6 +800,17 @@ curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/descr
   -d '{ "description": "Internal coordination group." }'
 ```
 
+#### PUT /api/sessions/:sessionId/groups/:groupId/member-label
+
+Set this account's member label in the group, up to 30 characters; an empty string clears it (OPERATOR, Baileys only: whatsapp-web.js answers `501`).
+
+```bash
+curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/member-label" \
+  -H "X-API-Key: $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "label": "Site A Management" }'
+```
+
 #### POST /api/sessions/:sessionId/groups/:groupId/leave
 
 Leave a group (OPERATOR).

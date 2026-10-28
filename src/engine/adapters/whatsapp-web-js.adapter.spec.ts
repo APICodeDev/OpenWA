@@ -7788,6 +7788,16 @@ describe('WhatsAppWebJsAdapter group join + settings + own profile', () => {
     });
   });
 
+  describe('setGroupMemberLabel (no wwjs 1.34.7 API → honest 501)', () => {
+    it('rejects with EngineNotSupportedError (501)', async () => {
+      const err = await readyAdapter({})
+        .setGroupMemberLabel('g@g.us', 'Site A')
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(EngineNotSupportedError);
+      expect((err as EngineNotSupportedError).getStatus()).toBe(501);
+    });
+  });
+
   describe('setProfileName / setProfileStatus', () => {
     it('setProfileName resolves when the engine accepts', async () => {
       const setDisplayName = jest.fn().mockResolvedValue(true);

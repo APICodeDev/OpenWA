@@ -879,6 +879,11 @@ export interface GroupDescriptionRequest {
   description: string;
 }
 
+export interface GroupMemberLabelRequest {
+  /** At most 30 UTF-16 code units (an astral emoji counts as two). May be empty to clear. */
+  label: string;
+}
+
 export interface InviteCodeResponse {
   inviteCode: string;
   inviteLink: string;

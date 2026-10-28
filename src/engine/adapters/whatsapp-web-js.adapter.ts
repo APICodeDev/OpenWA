@@ -840,6 +840,10 @@ export class WhatsAppWebJsAdapter implements IWhatsAppEngine {
     return this.groups.setGroupEphemeral(groupId, durationSec);
   }
 
+  setGroupMemberLabel(groupId: string, label: string): Promise<void> {
+    return this.groups.setGroupMemberLabel(groupId, label);
+  }
+
   getGroupMembershipRequests(groupId: string): Promise<GroupMembershipRequest[]> {
     return this.groups.getGroupMembershipRequests(groupId);
   }
