@@ -43,6 +43,106 @@ test('dark --error-text clears AA on every error tint it lands on, in both dark 
   }
 });
 
+// The chat page's own palette (pages/Chats.css): every text token against every surface it lands on, in the
+// light set and both dark sets. Light --chat-panel is the app's white card, so it resolves through App.css.
+const CHATS_CSS = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'pages', 'Chats.css'), 'utf8');
+const chatBlock = (anchor: string): string => {
+  const from = CHATS_CSS.indexOf(anchor);
+  assert.notEqual(from, -1, `Chats.css no longer contains "${anchor}"`);
+  return CHATS_CSS.slice(from, CHATS_CSS.indexOf('}', from));
+};
+// A dark set only lists what it changes (--chat-accent is one fill in every theme), so a token it leaves out is the
+// light one.
+const chatToken = (block: string, name: string): string =>
+  block.match(new RegExp(`${name}:\\s*var\\(--bg-white\\)`))
+    ? token(blockAfter(':root {'), '--bg-white')
+    : new RegExp(`${name}:`).test(block)
+      ? token(block, name)
+      : chatToken(chatBlock('.chats-page {'), name);
+
+const CHAT_TEXT_ON: Array<[string, string[]]> = [
+  ['--chat-meta', ['--chat-panel', '--chat-hover', '--chat-active', '--chat-bubble-in']],
+  ['--chat-accent-text', ['--chat-panel', '--chat-hover', '--chat-active']],
+  ['--chat-meta-out', ['--chat-bubble-out']],
+  // The active filter pill and the group role chip, and the reply title on the composer banner.
+  ['--chat-pill-active-text', ['--chat-pill-active-bg', '--chat-panel-header']],
+  // Links in a message: the incoming blue is 4.07:1 on the light green and 3.74:1 on the dark one, so an outgoing
+  // bubble has its own.
+  ['--chat-link', ['--chat-bubble-in']],
+  ['--chat-link-out', ['--chat-bubble-out']],
+];
+const CHAT_ANCHORS = [
+  '.chats-page {',
+  "[data-theme='dark'] .chats-page {",
+  ":root:not([data-theme='light']) .chats-page {",
+];
+
+for (const anchor of CHAT_ANCHORS) {
+  test(`chat text clears AA on every surface it lands on (${anchor})`, () => {
+    const block = chatBlock(anchor);
+    for (const [text, surfaces] of CHAT_TEXT_ON) {
+      for (const surface of surfaces) {
+        const ratio = contrast(rgb(chatToken(block, text)), rgb(chatToken(block, surface)));
+        assert.ok(ratio >= 4.5, `${anchor} ${text} is ${ratio.toFixed(2)}:1 on ${surface}`);
+      }
+    }
+  });
+}
+
+const chatRule = (selector: string): string => {
+  const css = CHATS_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1].split(',').some(s => s.trim() === selector)) return m[2];
+  }
+  assert.fail(`Chats.css has no ${selector} rule`);
+};
+
+test('the outgoing bubble draws its links in their own token', () => {
+  assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
+});
+
+// The pill green is also drawn on tints the rules mix from two tokens: the prompt buttons in an incoming bubble (the
+// dark button measured 4.22:1 in the old green) with their hover and chosen states, and the admin badge in the group
+// dialog. Each fill is read from its rule, so a stronger tint has to keep the text readable too.
+const PILL_TEXT_FILLS = [
+  '.chats-page .chat-filter-pill.active',
+  '.chats-page .group-info-role',
+  '.chats-page .group-info-badge.admin',
+  '.chats-page .message-prompt-button',
+  '.chats-page .message-prompt-button:hover:not(:disabled)',
+  '.chats-page .message-prompt-button.selected',
+];
+
+// The accent text is drawn on a tint the same way, in the session switcher's avatar.
+const TEXT_FILLS: Array<[string, string[]]> = [
+  ['--chat-pill-active-text', PILL_TEXT_FILLS],
+  ['--chat-accent-text', ['.chats-page .session-avatar']],
+];
+
+for (const anchor of CHAT_ANCHORS) {
+  test(`chat text clears AA on every tinted fill it is drawn on (${anchor})`, () => {
+    const block = chatBlock(anchor);
+    for (const [token, selectors] of TEXT_FILLS) {
+      const text = rgb(chatToken(block, token));
+      for (const selector of selectors) {
+        const fill = /(?:^|;)\s*background:\s*([^;]+)/.exec(chatRule(selector))?.[1].trim();
+        assert.ok(fill, `${selector} paints no background`);
+        const plain = /^var\((--[\w-]+)\)$/.exec(fill);
+        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(fill);
+        assert.ok(plain || mixed, `${selector} paints ${fill}, which this test cannot resolve`);
+        const surface = plain
+          ? rgb(chatToken(block, plain[1]))
+          : rgb(chatToken(block, mixed![1])).map(
+              (c, i) =>
+                c * (Number(mixed![2]) / 100) + rgb(chatToken(block, mixed![3]))[i] * (1 - Number(mixed![2]) / 100),
+            );
+        const ratio = contrast(text, surface);
+        assert.ok(ratio >= 4.5, `${anchor} ${token} is ${ratio.toFixed(2)}:1 on ${selector}`);
+      }
+    }
+  });
+}
+
 // The pairs below are the ones the stylesheets build from these tokens and from two literal bubble greens.
 const PAGES = join(dirname(fileURLToPath(import.meta.url)), 'pages');
 const read = (file: string): string => readFileSync(join(PAGES, file), 'utf8');
@@ -81,39 +181,24 @@ test('--text-muted placeholders clear AA on every input surface in both themes',
   }
 });
 
-test('time stamps and read ticks on the outgoing bubble clear their ratios in both themes', () => {
-  const chats = read('Chats.css');
-  const light = rgb(/\.chats-page \.message-bubble\.outgoing \{\s*background:\s*(#[0-9a-f]{6})/i.exec(chats)![1]);
-  assert.match(chats, /\.message-bubble\.outgoing \.message-time\s*\{\s*color:\s*var\(--text-secondary\)/);
-  const secondaryLight = contrast(rgb(hexOf(blockAfter(LIGHT), '--text-secondary')), light);
-  assert.ok(secondaryLight >= 4.5, `light time stamp ${secondaryLight.toFixed(2)}:1`);
-  const lightTick = /\.chats-page \.message-status-icon\.read\s*\{[^}]*?color:\s*(#[0-9a-f]{6})/i.exec(chats);
-  assert.ok(lightTick, 'Chats.css has no light read tick colour');
-  const tickLight = contrast(rgb(lightTick[1]), light);
-  assert.ok(tickLight >= 4.5, `light read tick ${tickLight.toFixed(2)}:1`);
-  // The dark bubble and its read tick are written twice: once under [data-theme='dark'], once for the system theme.
-  const escape = (text: string): string => text.replace(/[[\]().]/g, '\\$&');
-  for (const [anchor, prefix] of [
-    [DARK, "[data-theme='dark'] "],
-    [DARK_MEDIA, ":root:not([data-theme='light']) "],
-  ]) {
-    const bubble = new RegExp(
-      `${escape(prefix)}\\.chats-page \\.message-bubble\\.outgoing \\{\\s*background:\\s*(#[0-9a-f]{6})`,
-      'i',
-    ).exec(chats);
-    assert.ok(bubble, `Chats.css has no outgoing bubble rule under ${prefix}`);
-    assert.match(
-      chats,
-      new RegExp(
-        `${escape(prefix)}\\.chats-page \\.message-status-icon\\.read\\s*\\{\\s*color:\\s*var\\(--read-tick\\)`,
-      ),
-      `Chats.css has no read tick rule under ${prefix}`,
-    );
-    const dark = rgb(bubble[1]);
-    const secondary = contrast(rgb(hexOf(blockAfter(anchor), '--text-secondary')), dark);
-    assert.ok(secondary >= 4.5, `${anchor} time stamp ${secondary.toFixed(2)}:1`);
-    const tick = contrast(rgb(hexOf(blockAfter(anchor), '--read-tick')), dark);
-    assert.ok(tick >= 4.5, `${anchor} read tick ${tick.toFixed(2)}:1 (the glyph is held to the 4.5:1 of text)`);
+// The chat page paints its bubbles from its own palette (--chat-bubble-out), in the light set and both dark sets. The
+// time is text and holds 4.5:1; the delivery ticks are drawn as icons (lucide's Check and CheckCheck in ChatThread),
+// so they hold the 3:1 of a graphic, and delivered and read also differ in aria-label and title.
+test('time stamps and read ticks on the outgoing bubble clear their ratios in every theme', () => {
+  assert.match(chatRule('.chats-page .message-bubble.outgoing .message-time'), /color:\s*var\(--chat-meta-out\)/);
+  assert.match(chatRule('.chats-page .message-status-icon.read'), /color:\s*var\(--chat-tick-read\)/);
+  assert.match(chatRule('.chats-page .message-status-icon'), /color:\s*var\(--chat-meta\)/);
+  const thread = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/chats/ChatThread.tsx'), 'utf8');
+  assert.match(thread, /read:\s*<CheckCheck\b/, 'the read tick is no longer an icon, so it needs 4.5:1');
+  for (const anchor of CHAT_ANCHORS) {
+    const block = chatBlock(anchor);
+    const bubble = rgb(chatToken(block, '--chat-bubble-out'));
+    const time = contrast(rgb(chatToken(block, '--chat-meta-out')), bubble);
+    assert.ok(time >= 4.5, `${anchor} time stamp ${time.toFixed(2)}:1`);
+    for (const tick of ['--chat-tick-read', '--chat-meta']) {
+      const ratio = contrast(rgb(chatToken(block, tick)), bubble);
+      assert.ok(ratio >= 3, `${anchor} ${tick} tick ${ratio.toFixed(2)}:1`);
+    }
   }
 });
 
@@ -289,7 +374,8 @@ test('text that uses --text-muted is not faded again with opacity', () => {
   const components = join(dirname(fileURLToPath(import.meta.url)), 'components');
   const sources: [string, string, string][] = [
     ['Layout.css', readFileSync(join(components, 'Layout.css'), 'utf8'), '.brand-version'],
-    ['Chats.css', read('Chats.css'), '.chats-page .room-contact-jid'],
+    // The raw chat id, faded in the old room header, is in the contact panel now.
+    ['Chats.css', read('Chats.css'), '.chats-page .contact-info-list dd.mono bdi'],
     ['Chats.css', read('Chats.css'), '.chats-page .chat-item-snippet .no-message'],
     ['Infrastructure.css', read('Infrastructure.css'), '.infrastructure-page .form-group small'],
     ['Infrastructure.css', read('Infrastructure.css'), '.infrastructure-page .toggle-info small'],
@@ -304,10 +390,11 @@ test('text that uses --text-muted is not faded again with opacity', () => {
 });
 
 test('muted text on a tinted row uses --text-secondary, which clears AA on the tint in both themes', () => {
+  // The chat list rows are no tint: the active one is the opaque --chat-active, on which the chat text tests above
+  // check the time and the preview (--chat-meta) in every theme.
+  assert.match(chatRule('.chats-page .chat-item-card.active'), /background:\s*var\(--chat-active\)/);
   // [stylesheet, selector, tint alpha in light, tint alpha in dark, surface under the tint]
   const rules: [string, string, number, number, string][] = [
-    ['Chats.css', '.chats-page .chat-item-card.active .chat-item-time', 0.08, 0.08, '--bg-white'],
-    ['Chats.css', '.chats-page .chat-item-card.active .chat-item-snippet', 0.08, 0.08, '--bg-white'],
     // The selected template row is --primary-soft: 12 percent in light, 18 percent in dark.
     ['Templates.css', '.templates-page .template-list-item.selected .template-list-meta', 0.12, 0.18, '--bg-light'],
     // The focused search hit is --primary-soft over the results panel, which is --bg-white.

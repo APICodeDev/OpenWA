@@ -7,7 +7,8 @@ import ts from 'typescript';
 
 // The brand green (#25d366) and the amber warning fill are light colours: white on them is 1.98:1 and 2.15:1,
 // far under the 4.5:1 AA needs, and the green as text on white is the same 1.98:1. Text and icons on those fills are
-// dark (#0f172a, 9.0:1 on the green, as .btn-primary has it), and the brand green as text is --primary-text.
+// dark (#0f172a, 9.0:1 on the green, as .btn-primary has it), and the brand green as text is --primary-text. The chat
+// page's accent (#00a884, 3.03:1 against white either way) follows the same rule, with --chat-accent-text as its text.
 
 const SRC = dirname(fileURLToPath(import.meta.url));
 
@@ -39,7 +40,7 @@ function rules(): Rule[] {
 const WHITE = /^(?:#fff|#ffffff|white)$/i;
 // Solid fills only: a translucent tint (rgba, color-mix) is a different pair and is checked by its own ratio.
 const LIGHT_FILL =
-  /^(?:var\(--primary(?:-hover)?(?:,[^)]*)?\)|var\(--warning(?:,[^)]*)?\)|#25d366|#1da851|#16a34a|#f59e0b|#d97706)$/i;
+  /^(?:var\(--(?:primary|chat-accent)(?:-hover)?(?:,[^)]*)?\)|var\(--warning(?:,[^)]*)?\)|#25d366|#1da851|#16a34a|#f59e0b|#d97706|#00a884|#008f6f)$/i;
 
 test('no rule sets white text on the brand green or amber fill', () => {
   const offenders = rules()
@@ -90,13 +91,15 @@ test('the inline scan sees white on a light fill and leaves dark text alone', ()
 
 test('the brand green is never used as a text colour', () => {
   const css = rules()
-    .filter(r => /^(?:var\(--primary(?:,[^)]*)?\)|#25d366)$/i.test(r.decl.color ?? ''))
+    .filter(r => /^(?:var\(--(?:primary|chat-accent)(?:,[^)]*)?\)|#25d366|#00a884)$/i.test(r.decl.color ?? ''))
     .map(r => `${r.at}: ${r.selectors}`);
   const inline = filesUnder(SRC, ['.tsx']).flatMap(full =>
     readFileSync(full, 'utf8')
       .split('\n')
       .map((line, i) => ({ line, at: `${full.slice(SRC.length + 1)}:${i + 1}` }))
-      .filter(({ line }) => /(?<![\w-])color:\s*['"](?:var\(--primary\)|#25d366)['"]/.test(line))
+      .filter(({ line }) =>
+        /(?<![\w-])color:\s*['"](?:var\(--(?:primary|chat-accent)\)|#25d366|#00a884)['"]/.test(line),
+      )
       .map(({ at }) => at),
   );
   assert.deepEqual([...css, ...inline], []);

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, and lets only a ready one be selected. Thanks @rjsebening.
+- Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id. Thanks @rjsebening.
+- Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
+
+### Changed
+
+- Redesign the dashboard Chats page in a WhatsApp Web style, full height without the page header, with its own light and dark palette, a patterned wallpaper behind the thread, coloured avatars, tailed bubbles and a single-pill composer; every existing chat feature stays. Thanks @rjsebening.
+- Show the dashboard Chats page's message search behind a toggle in the chat list header, still hidden for read-only keys. Thanks @rjsebening.
+- Show the raw chat id of a dashboard chat in its contact info panel instead of the room header. Thanks @rjsebening.
+- Show a dashboard chat message's time and delivery ticks inside its last line of text, with the delivery status still named for screen readers. Thanks @rjsebening.
+- Show dashboard chat list times as the clock today, Yesterday, the weekday within the last week and a short date before that. Thanks @rjsebening.
+- Move the dashboard sidebar's collapse button from the sidebar edge into its header, beside the logo or under it when collapsed, with a panel icon mirrored for right-to-left languages. Thanks @rjsebening.
+
 ### Fixed
 
 - Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.

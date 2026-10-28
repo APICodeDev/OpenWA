@@ -18,18 +18,29 @@ function body(file: string, selector: string): string {
   assert.fail(`${file} has no ${selector} rule`);
 }
 
-test('the open chat header isolates the phone number and the raw id', () => {
-  for (const selector of ['.chats-page .room-contact-phone', '.chats-page .room-contact-jid']) {
-    assert.match(body('pages/Chats.css', selector), /unicode-bidi:\s*plaintext/, selector);
-  }
+// The room header shows the number under the name, and the contact panel the raw id. Each is a value of its own,
+// isolated left to right in the markup: in an RTL page "+1 555 000 1111" would otherwise read "1111 000 555 1+" and
+// "15550001111@c.us" would move "@c.us" to the other end.
+const CHATS_TSX = readFileSync(join(SRC, 'pages/Chats.tsx'), 'utf8');
+
+test('the open chat header isolates the phone number, and the contact panel the raw id', () => {
+  assert.match(
+    CHATS_TSX,
+    /<span className="room-contact-phone">\s*<bdi dir="ltr">\{activePhoneText\}<\/bdi>/,
+    'the header number is not isolated',
+  );
+  assert.match(
+    CHATS_TSX,
+    /<dd className="mono">[\s\S]*?<bdi dir="ltr"[^>]*>\s*\{activeChat\.id\}\s*<\/bdi>/,
+    'the chat id in the contact panel is not isolated',
+  );
 });
 
-test('the header lines hug the start edge with the name instead of stretching across it', () => {
-  // A paragraph of digits or Latin letters resolves to left to right under plaintext, so inside a stretched box
-  // its text would sit on the left of an Arabic header while the name sits on the right.
-  for (const selector of ['.chats-page .room-contact-phone', '.chats-page .room-contact-jid']) {
-    assert.match(body('pages/Chats.css', selector), /align-self:\s*flex-start/, selector);
-  }
+test('the header number keeps the page direction, so it sits at the start edge with the name', () => {
+  // The isolate inside it carries the number's own direction. Under plaintext the line would resolve to left to
+  // right and, in a box the header column stretches, sit at the left edge of an Arabic header with the name at the
+  // right; the name, which is cut and so takes its own direction, hugs the start edge instead (see below).
+  assert.doesNotMatch(body('pages/Chats.css', '.chats-page .room-contact-phone'), /unicode-bidi/);
 });
 
 test('text cut with an ellipsis takes its direction from its own characters', () => {
@@ -38,7 +49,7 @@ test('text cut with an ellipsis takes its direction from its own characters', ()
   const cut = [
     '.chats-page .chat-item-name',
     '.chats-page .chat-item-snippet',
-    '.chats-page .room-contact-info h3',
+    '.chats-page .room-contact-name',
     '.chats-page .preview-filename',
     '.chats-page .quote-body',
     '.chats-page .replying-to-body',
@@ -65,7 +76,7 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   const hugging = [
     '.chats-page .chat-item-info > .chat-item-name',
     '.chats-page .chat-item-info > .chat-item-snippet',
-    '.chats-page .room-contact-info h3',
+    '.chats-page .room-contact-name',
     '.chats-page .preview-filename',
     '.chats-page .replying-to-body',
   ];
@@ -76,8 +87,23 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   }
   const quote = body('pages/Chats.css', '.chats-page .quote-body');
   assert.match(quote, /width:\s*fit-content/);
-  // A long nowrap quote is as wide as its text, so the cap has to follow the room in the box, not only 250px.
-  assert.match(quote, /max-width:\s*min\(250px,\s*100%\)/);
+  // A long nowrap quote is as wide as its text, so the cap has to follow the room in the box, not only a fixed width.
+  assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
+});
+
+test('a message body takes its direction from its own characters', () => {
+  // Under the page direction an English question in an Arabic page drew its question mark at the left.
+  assert.match(body('pages/Chats.css', '.chats-page .message-content > .message-text'), /unicode-bidi:\s*plaintext/);
+});
+
+test('the session number is cut by its own isolate, so an RTL page keeps its first digits', () => {
+  // The line around it keeps the page direction; cut there, an Arabic page lost "+4" and kept the last digits.
+  const picker = readFileSync(join(SRC, 'components/chats/SessionPicker.tsx'), 'utf8');
+  assert.match(picker, /<span className="session-phone-line">[\s\S]*?<bdi dir="ltr">/);
+  const cut = body('pages/Chats.css', '.chats-page .session-phone-line > bdi');
+  assert.match(cut, /text-overflow:\s*ellipsis/);
+  assert.match(cut, /min-width:\s*0/);
+  assert.match(body('pages/Chats.css', '.chats-page .session-phone-line'), /max-width:\s*100%/);
 });
 
 test('chart plots stay left to right on a right to left page', () => {
