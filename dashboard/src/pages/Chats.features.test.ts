@@ -491,14 +491,14 @@ test('the page and the open room keep a heading, and closing the panel returns f
   fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
   const panel = await waitFor(() => container.querySelector('.contact-info-panel') as HTMLElement);
   fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
-  assert.equal(container.querySelector('.contact-info-panel'), null, 'the close button left the panel open');
+  assert.ok(!container.querySelector('.contact-info-panel'), 'the close button left the panel open');
   assert.equal(focusedName(), 'Contact info', 'closing the panel dropped focus');
 
   fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
   await waitFor(() => assert.ok(container.querySelector('.contact-info-panel')));
   (container.querySelector('.contact-info-panel button') as HTMLElement).focus();
   fireEvent.keyDown(document, { key: 'Escape' });
-  assert.equal(container.querySelector('.contact-info-panel'), null, 'Escape left the panel open');
+  assert.ok(!container.querySelector('.contact-info-panel'), 'Escape left the panel open');
   assert.equal(focusedName(), 'Contact info', 'Escape dropped focus');
 });
 
@@ -1111,6 +1111,22 @@ test('the session switcher links to pairing another number only for a key that m
   }
 });
 
+test('focus leaving the session switcher closes it, and a blur with no target does not', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: /Main/ }));
+  const search = screen.getByLabelText('Search sessions...');
+
+  fireEvent.focusOut(search, { relatedTarget: screen.getAllByRole('option')[0] });
+  assert.ok(screen.queryByRole('listbox'), 'moving into the list closed the switcher');
+  // What Safari reports for a click on an option, which does not focus it.
+  fireEvent.focusOut(search, { relatedTarget: null });
+  assert.ok(screen.queryByRole('listbox'), 'a blur with no target closed the switcher under the click');
+  fireEvent.focusOut(search, { relatedTarget: screen.getByRole('button', { name: 'Actions for Alice' }) });
+  assert.ok(!screen.queryByRole('listbox'), 'focus left the switcher and it stayed open');
+});
+
 test('Escape closes the session switcher, not the open chat', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderPage();
@@ -1495,17 +1511,19 @@ test('a member who is no admin sees the group read-only, and a viewer key gets n
   listGroup = true;
   groupAdmin = false;
   window.sessionStorage.setItem('openwa_user_role', 'viewer');
-  renderPage();
+  const { container } = renderPage();
   await screen.findByText('Team');
+  // Every entry an open row menu offers, by name.
+  const offered = () =>
+    within(container.querySelector('.chat-row-menu-popover') as HTMLElement)
+      .getAllByRole('button')
+      .map(button => button.textContent?.trim());
   // A viewer may look at a 1:1 contact, and nothing else.
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
-  assert.ok(screen.getByRole('button', { name: 'Contact info' }));
-  assert.ok(!screen.queryByRole('button', { name: 'Block contact' }), 'a viewer was offered blocking');
-  assert.ok(!screen.queryByRole('button', { name: 'Pin chat' }), 'a viewer was offered pinning');
+  assert.deepEqual(offered(), ['Contact info'], 'a viewer was offered a write action on a 1:1 chat');
   fireEvent.keyDown(document, { key: 'Escape' });
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Team' }));
-  assert.ok(!screen.queryByRole('button', { name: 'Mark as unread' }), 'a viewer was offered mark-as-unread');
-  assert.ok(!screen.queryByRole('button', { name: 'Leave group' }), 'a viewer was offered leaving the group');
+  assert.deepEqual(offered(), ['Group info'], 'a viewer was offered a write action on a group');
   fireEvent.click(screen.getByRole('button', { name: 'Group info' }));
 
   const dialog = await screen.findByRole('dialog');

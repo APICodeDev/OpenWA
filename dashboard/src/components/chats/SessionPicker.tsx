@@ -169,7 +169,15 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
   };
 
   return (
-    <div className="session-switcher" ref={rootRef}>
+    <div
+      className="session-switcher"
+      ref={rootRef}
+      // Tabbing out closes it. A blur with no target is left to the press handler: Safari does not focus a clicked
+      // button, so closing then would unmount the option under the click.
+      onBlur={event => {
+        if (open && event.relatedTarget && !rootRef.current?.contains(event.relatedTarget)) close(false);
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
