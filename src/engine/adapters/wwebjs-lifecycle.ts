@@ -244,6 +244,8 @@ export class WwebjsLifecycle {
   // exact jest timer counts, and a timer would also outlive the single-use adapter.
   private lastMainFrameNavigationAt = 0;
   private navigationEpisodeStartedAt = 0;
+  /** Counts the navigations stamped, so a probe can tell that one landed while it was waiting. */
+  private navigationCount = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -760,6 +762,7 @@ export class WwebjsLifecycle {
       // lastLoggedOut is a runtime field the wwjs typings do not declare (same loose-cast pattern as
       // the pupBrowser/pupPage handles above).
       if ((this.client as unknown as { lastLoggedOut?: boolean } | null)?.lastLoggedOut) return;
+      this.navigationCount++;
       const now = Date.now();
       if (this.navigationEpisodeStartedAt === 0) this.navigationEpisodeStartedAt = now;
       this.lastMainFrameNavigationAt = now;
@@ -1162,6 +1165,7 @@ export class WwebjsLifecycle {
     // dead on the first tick, and hid a page that really had died.
     const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
     if (!probeable || !this.client) return false;
+    const navigationsBefore = this.navigationCount;
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1175,8 +1179,9 @@ export class WwebjsLifecycle {
       if (state === WAState.CONNECTED) {
         // Observed recovery closes the navigation episode. Without this, an episode whose re-inject
         // died silently (no 'ready' re-emit, but WA Web's socket back up) would keep a stale episode
-        // anchor forever, denying the grace to every LATER navigation via the episode cap.
-        this.clearNavigationReinjectWindow();
+        // anchor forever, denying the grace to every LATER navigation via the episode cap. Only an episode
+        // this answer can speak for: a navigation stamped while getState() was pending is a newer one.
+        if (navigationsBefore === this.navigationCount) this.clearNavigationReinjectWindow();
         return true;
       }
       return this.isInNavigationReinjectWindow();

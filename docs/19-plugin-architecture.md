@@ -202,7 +202,9 @@ host.
 
 A `configSchema` field may set `secret: true` (e.g. an API key): the value is masked on read and
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
-removes it for an explicit `null`.
+removes it for an explicit `null`. A per-session override and an integration instance's own config are
+overlaid on the base config, secret fields included, so a stored secret reaches every override that does
+not replace it, including one that sets its own host.
 
 ### Plugin Entry Point
 
@@ -385,6 +387,8 @@ export interface PluginStorage {
 }
 ```
 
+A key that is spelled like another key's encoded filename (`key-Zm9v` for `foo`) is not read as a legacy key, so it neither returns nor deletes that other key's value. `list()` returns only keys that `get`, `set` and `delete` accept.
+
 ## 19.5 Hook System
 
 ### Hook Lifecycle
@@ -519,7 +523,9 @@ and among themselves in their own order. On `execute(event, data,
 handler that returns `{ continue: false }` stops the chain. A handler that **throws** is logged and the
 chain continues with the previous data (one bad plugin can't break the chain). Same-event re-entrancy
 is blocked: a handler that re-fires the event it is handling is short-circuited (guards synchronous
-re-entry only). Plugins never call `HookManager` directly — they use `ctx.registerHook(...)`, which
+re-entry only). The guard ends with the call that opened it, so a send that a handler schedules from a
+timer or a detached promise after that call has settled runs every handler, a moderation veto included;
+a sandboxed handler that overran the hook timeout stays guarded until the worker answers. Plugins never call `HookManager` directly — they use `ctx.registerHook(...)`, which
 also applies the per-session activation gate.
 
 Chains for different messages run concurrently, so a handler can see one chat's messages out of order.
@@ -601,8 +607,10 @@ phase, waits included, is capped at 10 s; a plugin still running at the cap is t
 process. New enables are refused once teardown starts. A disable that arrives while the same plugin is
 still being disabled (shutdown overlapping a REST disable, an uninstall or an update unload) joins the
 running teardown, so `onDisable` runs once; an unload that joins this way gets no worker-side `onUnload`.
-`uninstallPlugin` disables + unloads, drops the registry entry, and deletes the plugin's directory and
-its `ctx.storage` data dir (built-ins are protected and cannot be uninstalled). The unload path
+`uninstallPlugin` disables + unloads, deletes the plugin's directory and its `ctx.storage` data dir, and
+drops the registry entry last (built-ins are protected and cannot be uninstalled). A package or storage
+folder that cannot be removed fails the uninstall and leaves the entry, so the same call can be repeated.
+The unload path
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).
 Uninstall also hands every chat the plugin had taken over back to the bot. The plugin's integration

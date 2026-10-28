@@ -1,5 +1,10 @@
+import type { Request } from 'express';
 import { GroupController } from './group.controller';
 import { GroupService } from './group.service';
+
+// The membership routes read the request to tell an empty body from one that was never parsed; the
+// body-shape cases run through real parsers in group.controller.http.spec.ts.
+const noBody = { headers: {}, body: {}, is: () => null } as unknown as Request;
 
 describe('GroupController join + settings', () => {
   const build = (service: Partial<Record<keyof GroupService, jest.Mock>>) => {
@@ -115,7 +120,7 @@ describe('GroupController membership requests', () => {
     const results = [{ id: '628111@c.us', success: true, status: 200 }];
     const { controller, service } = build({ [svcMethod]: jest.fn().mockResolvedValue(results) });
 
-    await expect(controller[route]('s1', 'g1', { participants: ['628111@c.us'] })).resolves.toEqual({
+    await expect(controller[route]('s1', 'g1', { participants: ['628111@c.us'] }, noBody)).resolves.toEqual({
       success: true,
       message: `Membership requests ${verb}`,
       results,
@@ -126,7 +131,7 @@ describe('GroupController membership requests', () => {
   it('an empty body approves ALL pending requests (participants passed as undefined)', async () => {
     const { controller, service } = build({ approveGroupMembershipRequests: jest.fn().mockResolvedValue([]) });
 
-    await controller.approveMembershipRequests('s1', 'g1', {});
+    await controller.approveMembershipRequests('s1', 'g1', {}, noBody);
 
     expect(service.approveGroupMembershipRequests).toHaveBeenCalledWith('s1', 'g1', undefined);
   });

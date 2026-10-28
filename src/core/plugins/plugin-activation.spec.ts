@@ -1,4 +1,9 @@
-import { isPluginActiveForSession, resolvePluginConfig } from './plugin-activation';
+import {
+  isAllSessionsScope,
+  isPluginActiveForSession,
+  resolvePluginConfig,
+  sessionScopeKey,
+} from './plugin-activation';
 
 describe('isPluginActiveForSession', () => {
   it('a global (non-session-scoped) plugin is always active', () => {
@@ -73,5 +78,17 @@ describe('resolvePluginConfig', () => {
     expect(out).toEqual({ a: 2 });
     expect(b).toEqual({ a: 1 });
     expect(sc).toEqual({ 'sess-1': { a: 2 } });
+  });
+});
+
+describe('the all-sessions scope', () => {
+  it.each([null, undefined, '', '*'])('is one key whichever way it is spelled (%j)', scope => {
+    expect(sessionScopeKey(scope)).toBe('*');
+    expect(isAllSessionsScope(scope)).toBe(true);
+  });
+
+  it('leaves a concrete session id as it is', () => {
+    expect(sessionScopeKey('sess-1')).toBe('sess-1');
+    expect(isAllSessionsScope('sess-1')).toBe(false);
   });
 });

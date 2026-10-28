@@ -793,7 +793,7 @@ export interface ProfilePictureResponse {
   url: string | null;
 }
 
-/** Batch profile-picture lookup: a map of contact id → picture URL (null when the lookup failed). */
+/** Batch profile-picture lookup: a map of contact id → picture URL (null when the lookup failed). An id skipped after a lookup timed out is absent from the map; ask for it again. */
 export interface ProfilePicturesResponse {
   pictures: Record<string, string | null>;
 }

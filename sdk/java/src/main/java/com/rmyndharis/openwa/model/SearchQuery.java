@@ -39,7 +39,7 @@ public record SearchQuery(
         private Integer offset;
 
         /**
-         * Required. The search term; must be non-empty at {@link #build()} time. At most 1000
+         * Required. The search resource rejects a null or blank term before dispatch. At most 1000
          * characters and 32 words; the server answers 400 above either.
          */
         public Builder q(String v) {

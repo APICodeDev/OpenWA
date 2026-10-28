@@ -785,7 +785,7 @@ class ProfilePictureResponse(TypedDict):
 
 
 class ProfilePicturesResponse(TypedDict):
-    # Map of contact id → picture URL (None when the lookup failed).
+    # Map of contact id → picture URL (None when the lookup failed). An id skipped after a lookup timed out is absent from the map; ask for it again.
     pictures: dict[str, str | None]
 
 

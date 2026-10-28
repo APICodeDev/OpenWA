@@ -1287,7 +1287,7 @@
             }
           },
           "409": {
-            "description": "A credential teardown for the same session name is still in flight (e.g. a prior logout that owns destructive cleanup). Retryable — the body carries `code: SESSION_NAME_TEARDOWN_PENDING`; wait for it to settle and retry. No destructive side effect runs before this refusal. Also returned when another node currently holds this session's engine: only the owner may start it, and the claim is refused before any engine is launched, so no second connection to the account is opened. Also returned, with no `code`, when a stop, a force-kill that found a running engine to kill, or a data import (`stopOrphans`) of this session began or finished while the start was waiting, or a delete of it was still running: the start yields and launches nothing. After a stop or force-kill, a new POST /start clears it and starts the session; after a delete, or an import that removed the session, the retry answers 404.",
+            "description": "A credential teardown for the same session name is still in flight (e.g. a prior logout that owns destructive cleanup). Retryable — the body carries `code: SESSION_NAME_TEARDOWN_PENDING`; wait for it to settle and retry. No destructive side effect runs before this refusal. Also returned when another node currently holds this session's engine: only the owner may start it, and the claim is refused before any engine is launched, so no second connection to the account is opened. Also returned, with no `code`, when a stop, a logout or force-kill that found a running engine, or a data import (`stopOrphans`) of this session began or finished while the start was waiting, or a delete of it was still running: the start yields and launches nothing. After a stop or force-kill, a new POST /start clears it and starts the session; after a delete, or an import that removed the session, the retry answers 404.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1668,7 +1668,7 @@
     },
     "/api/sessions/{sessionId}/pairing-code": {
       "post": {
-        "description": "On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link. A request for a number that already has a linked session has been observed to end with WhatsApp revoking that device: the linked session logs out, its credentials are deleted and it falls back to `qr_ready`. Nothing refuses such a request, because the guards check the session state and never the number. Baileys was not affected in the same tests. Link by QR when a session of that number must stay up.",
+        "description": "On the whatsapp-web.js engine, only request a code for a number you are prepared to re-link. A request for a number that already has a linked session has been observed to end with WhatsApp revoking that device: the linked session logs out, its credentials are deleted and it falls back to `qr_ready`. On that engine a number that is the stored phone of another session of this gateway (the Brazilian, Mexican and Argentine mobile spellings of one number count as the same) is refused with `409` and WhatsApp is not asked; the gateway cannot see a link made on another gateway or only on the phone. Baileys was not affected in the same tests and accepts the request: its sessions are companion devices and may share a number. Link by QR when a session of that number must stay up.",
         "operationId": "SessionController_requestPairingCode",
         "parameters": [
           {
@@ -1743,7 +1743,7 @@
             }
           },
           "409": {
-            "description": "The session is not waiting to be linked: the engine is still connecting, or reconnecting after a drop, so the request never reached WhatsApp. Wait for `status` to read `qr_ready` and retry. Once a code has been accepted the session moves through `authenticating` and `initializing` to `ready` and answers this until then; wait for `ready` in that case. A session that reads `ready` is already linked and answers `400` instead. One window answers this while the session still reads `qr_ready`: on the Baileys engine a socket that has begun closing stops accepting a pairing request before the status catches up, which on a silently dropped connection takes until the WebSocket's close timeout (30 s); retry, and the status follows shortly.",
+            "description": "The session is not waiting to be linked: the engine is still connecting, or reconnecting after a drop, so the request never reached WhatsApp. Wait for `status` to read `qr_ready` and retry. Once a code has been accepted the session moves through `authenticating` and `initializing` to `ready` and answers this until then; wait for `ready` in that case. A session that reads `ready` is already linked and answers `400` instead. One window answers this while the session still reads `qr_ready`: on the Baileys engine a socket that has begun closing stops accepting a pairing request before the status catches up, which on a silently dropped connection takes until the WebSocket's close timeout (30 s); retry, and the status follows shortly. On whatsapp-web.js also answered, with nothing sent to WhatsApp, when the requested number is the stored phone of another session of this gateway: delete that session, or log it out while it runs, first.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8301,7 +8301,7 @@
             }
           },
           "400": {
-            "description": "Rejected before anything was written: an invalid or unknown field, an unknown engine type, a value with a line break or one that cannot be stored, a configuration that would not boot in production, or a media storage path the app cannot write to.",
+            "description": "Rejected before anything was written: an invalid or unknown field, an unknown engine type, a value with a line break or one that cannot be stored, a configuration that would not boot in production or that the boot environment validation rejects, or a media storage path the app cannot write to.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8826,7 +8826,7 @@
     },
     "/api/sessions/{sessionId}/contacts/profile-pictures": {
       "get": {
-        "description": "One request for a whole chat sidebar — avoids the burst of parallel single fetches that would exhaust the per-IP throttle. Engine lookups run 5 at a time; per-id failures return null.",
+        "description": "Resolve a chat sidebar in one request to avoid bursts of per-contact HTTP calls. Engine lookups run 5 at a time; per-id failures return null. After a lookup times out, later chunks are skipped and their ids are absent from the response.",
         "operationId": "ContactController_getProfilePictures",
         "parameters": [
           {
@@ -15374,7 +15374,7 @@
             }
           },
           "503": {
-            "description": "Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. It also answers 503 once the gateway is shutting down. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -15466,7 +15466,7 @@
             }
           },
           "503": {
-            "description": "Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
+            "description": "Conversion is disabled, the ffmpeg binary is not runnable, or the conversion queue is saturated — retry shortly. It also answers 503 once the gateway is shutting down. The session routes its `url` fetches through an egress proxy, and the fetch failed or timed out before any response arrived, so the request was not carried out. The proxy or the target behind it may be at fault; the gateway cannot tell which. Retryable, but a `503` that persists while the proxy works points at the `url`. Without a session proxy the same failure answers `400`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -22308,7 +22308,7 @@
           },
           "database": {
             "type": "string",
-            "description": "Database name, or the SQLite file path.",
+            "description": "Database name under PostgreSQL; empty under SQLite.",
             "example": "openwa"
           },
           "schema": {
@@ -23347,7 +23347,7 @@
         "properties": {
           "pictures": {
             "type": "object",
-            "description": "Map of the requested contact ids to their picture URL. An id resolves to null when the contact has no picture, hides it, or its individual lookup failed — a per-id failure does not fail the batch. Ids beyond the first 50 are not looked up and are absent from the map.",
+            "description": "Map of the requested contact ids to their picture URL. An id resolves to null when the contact has no picture, hides it, or its lookup failed. Ids beyond the first 50, and ids skipped after a lookup timed out, are absent from the map: ask for them again.",
             "example": {
               "628123456789@c.us": "https://pps.whatsapp.net/v/t61.24694-24/12345_678_910_n.jpg"
             },

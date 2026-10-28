@@ -43,6 +43,9 @@ let twoSessions = false;
 const SESSION_3: Session = { ...SESSION, id: 'session-3', name: 'Third', phone: '15550004444' };
 let thirdSessionStatus: Session['status'] | null = null;
 
+// When set, the session list answers this status with a gateway-style error body until a test clears it.
+let sessionListStatus: number | null = null;
+
 // Hits the global search answers with.
 let searchHits: SearchHit[] = [];
 
@@ -285,6 +288,7 @@ function installFetchStub(): void {
     fetchCalls.push({ method, path, body });
 
     if (method === 'GET' && path === '/api/sessions') {
+      if (sessionListStatus) return Promise.resolve(jsonResponse({ message: 'Bad Gateway' }, sessionListStatus));
       const listed = twoSessions ? [SESSION, SESSION_2] : [SESSION];
       if (thirdSessionStatus) listed.push({ ...SESSION_3, status: thirdSessionStatus });
       return Promise.resolve(jsonResponse(listed));
@@ -439,6 +443,7 @@ afterEach(async () => {
   olderPageFails = false;
   chatsResponder = null;
   thirdSessionStatus = null;
+  sessionListStatus = null;
   searchHits = [];
   engineType = 'baileys';
   channels = [CHANNEL];
@@ -3629,4 +3634,41 @@ test("the page joins the open session's message events once connected, and moves
   } finally {
     twoSessions = false;
   }
+});
+
+// A failed read of the sessions is not "no connected sessions", which tells the operator to go connect one.
+test('a failed session list says so and offers the read again, not the no-sessions guidance', async () => {
+  const { screen, fireEvent, within } = rtl;
+  sessionListStatus = 502;
+  renderChats();
+
+  const alert = await screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Failed to load sessions/);
+  assert.match(alert.textContent ?? '', /Bad Gateway/);
+  assert.equal(
+    screen.queryByText('No connected sessions') === null,
+    true,
+    'a failed read claimed there are no sessions',
+  );
+
+  sessionListStatus = null;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByText('Alice');
+  assert.equal(screen.queryByRole('alert') === null, true);
+});
+
+// A chat list that could not be read is not an empty one: the sidebar alone would read "No chats".
+test('a failed chat list says so and offers the read again, then clears once a read lands', async () => {
+  const { screen, fireEvent, within } = rtl;
+  chatsResponder = () => Promise.resolve(jsonResponse({ message: 'gateway timeout' }, 504));
+  renderChats();
+
+  const alert = await screen.findByRole('alert');
+  assert.match(alert.textContent ?? '', /Failed to load chats/);
+  assert.match(alert.textContent ?? '', /gateway timeout/);
+
+  chatsResponder = null;
+  fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+  await screen.findByText('Alice');
+  assert.equal(screen.queryByRole('alert') === null, true, 'the failure stayed after the list was read');
 });

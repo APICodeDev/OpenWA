@@ -51,8 +51,25 @@ describe('messageTools', () => {
       includeMedia: true,
       deep: true,
     });
-    expect(getChatHistory).toHaveBeenCalledWith('s1', '628111@c.us', 50, true, true);
+    expect(getChatHistory).toHaveBeenCalledWith('s1', '628111@c.us', 50, true, true, undefined);
     expect(out).toEqual([{ id: 'm1' }]);
+  });
+
+  it('MessageHistory hands the request cancellation signal to getChatHistory', async () => {
+    const getChatHistory = jest.fn().mockResolvedValue([]);
+    const tools = makeTools({ getChatHistory } as unknown as MessageService);
+    const controller = new AbortController();
+    await invokeTool(
+      tools.get('MessageHistory')!,
+      { sessionId: 's1', chatId: '628111@c.us' },
+      'key',
+      makeAuth() as unknown as AuthService,
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
+    expect((getChatHistory.mock.calls[0] as unknown[])[5]).toBe(controller.signal);
   });
 
   it('MessageGetReactions delegates to getMessageReactions', async () => {
@@ -379,6 +396,42 @@ describe('messageTools', () => {
       url: 'http://media_server:8080/a.jpg',
     });
     expect(sendImage).toHaveBeenCalledWith('s1', expect.objectContaining({ url: 'http://media_server:8080/a.jpg' }));
+  });
+
+  describe.each([
+    ['MessageSendImage', 'sendImage'],
+    ['MessageSendVideo', 'sendVideo'],
+    ['MessageSendAudio', 'sendAudio'],
+    ['MessageSendDocument', 'sendDocument'],
+    ['MessageSendSticker', 'sendSticker'],
+  ])('%s url next to base64', (toolName, method) => {
+    const call = (extra: Record<string, unknown>) => {
+      const send = jest.fn().mockResolvedValue({ id: 'm1' });
+      const tools = makeTools({ [method]: send } as unknown as MessageService);
+      const result = run(tools.get(toolName)!, { sessionId: 's1', chatId: '628111@c.us', ...extra });
+      return { send, result };
+    };
+
+    it.each([
+      ['an empty url', ''],
+      ['a url that is not http(s)', 'ftp://example.com/a.bin'],
+    ])('sends the base64 and ignores %s, as the REST route does', async (_label, url) => {
+      const { send, result } = call({ url, base64: 'QUJD', mimetype: 'application/octet-stream' });
+      await result;
+      expect(send).toHaveBeenCalledWith('s1', expect.objectContaining({ url, base64: 'QUJD' }));
+    });
+
+    it.each([
+      ['no base64', undefined],
+      ['an empty base64', ''],
+      ['a base64 that is only a data-URI prefix', 'data:image/png;base64,'],
+    ])('still rejects a url that is not http(s) next to %s', async (_label, base64) => {
+      const { send, result } = call({ url: 'ftp://example.com/a.bin', base64 });
+      await expect(result).rejects.toMatchObject({
+        response: { message: [expect.stringContaining('url: ') as unknown as string] },
+      });
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   it('MessageForward delegates to forward', async () => {

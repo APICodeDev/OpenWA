@@ -16,6 +16,9 @@ import { isProtocolTimeout } from './wwebjs-lifecycle';
  * via closures, so the delegate never touches lifecycle state directly.
  */
 export class WwebjsLabels {
+  /** The settled tail of each chat's label writes, so the next write starts after it; gone once the chat is idle. */
+  private readonly chatWrites = new Map<string, Promise<void>>();
+
   constructor(private readonly host: WwebjsEngineHost) {}
 
   /** Post-ensureReady client handle. */
@@ -162,14 +165,30 @@ export class WwebjsLabels {
    * Labels are a WhatsApp Business feature — the write throws `[LT01]` on a personal account; channels
    * carry no labels at all. Both are surfaced as a 422 rather than an opaque 500.
    *
-   * The read and write are separate calls, so two concurrent single-label writes to the SAME chat can
-   * lose an update (last write wins, as a full-set replace). Acceptable for low-frequency label admin;
-   * serialize per (sessionId, chatId) if that ever becomes a real workload.
+   * The read and write are separate calls, and the page derives the removals from the chat's labels at the
+   * moment it runs, so two single-label writes to the SAME chat that overlap would undo each other (the
+   * later one removes the label the earlier one just added). They run one after the other per chat; a
+   * write that waited re-reads the labels, and answers 409 if the session went away meanwhile.
    */
   private async changeChatLabel(chatId: string, labelId: string, add: boolean): Promise<void> {
     if (isChannelJid(chatId)) {
       throw new ChatLabelsUnsupportedError('Channels do not support chat labels.');
     }
+    // `previous` never rejects (it is the settled tail below), so a failed write does not stop the next.
+    const previous = this.chatWrites.get(chatId) ?? Promise.resolve();
+    const write = previous.then(() => this.writeChatLabel(chatId, labelId, add));
+    const tail = write.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.chatWrites.set(chatId, tail);
+    void tail.then(() => {
+      if (this.chatWrites.get(chatId) === tail) this.chatWrites.delete(chatId);
+    });
+    await write;
+  }
+
+  private async writeChatLabel(chatId: string, labelId: string, add: boolean): Promise<void> {
     // Not the read's empty answer: addOrRemoveLabels matches no chat page-side for an unknown id and
     // resolves without writing anything, which the route would report as success.
     const current = await this.readChatLabels(chatId);

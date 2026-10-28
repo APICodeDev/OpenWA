@@ -449,6 +449,49 @@ describe('SessionService', () => {
     // The name rule lets a session be named after another session's id, whatever that id looks like
     // (an import accepts any safe key). The dirs that name points at are then the other session's
     // live credentials, so the name is kept out of the purge.
+    it.each(['better-sqlite3', 'postgres'] as const)(
+      "delete() preserves another imported session's id-keyed directories on %s",
+      async dialect => {
+        Object.assign(dataSource, { options: { type: dialect } });
+        (repository.findOne as jest.Mock).mockResolvedValue(
+          createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
+        );
+        (repository.exists as jest.Mock).mockResolvedValue(true);
+        await service.delete('sess-uuid-1');
+        expect(repository.exists).toHaveBeenCalled();
+        expect((engineFactory.purgeSessionData as jest.Mock).mock.calls).toEqual([['sess-uuid-1', undefined]]);
+      },
+    );
+
+    it.each([false, true])('executes the text ID lookup before legacy cleanup (collision: %s)', async collision => {
+      // The portable cast runs through the real TypeORM parser and SQLite driver.
+      const sql = new DataSource({
+        type: 'better-sqlite3',
+        database: ':memory:',
+        entities: [Session],
+        synchronize: true,
+      });
+      await sql.initialize();
+      try {
+        const sessions = sql.getRepository(Session);
+        if (collision) await sessions.save({ id: 'imported-bob', name: 'other-session' });
+        Object.assign(dataSource, { options: { type: 'postgres' } });
+        (repository.findOne as jest.Mock).mockResolvedValue(
+          createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
+        );
+        (repository.exists as jest.Mock).mockImplementation((options: Parameters<typeof sessions.exists>[0]) =>
+          sessions.exists(options),
+        );
+        await service.delete('sess-uuid-1');
+        await expect((repository.exists as jest.Mock).mock.results[0].value).resolves.toBe(collision);
+        expect((engineFactory.purgeSessionData as jest.Mock).mock.calls).toEqual([
+          ['sess-uuid-1', collision ? undefined : 'imported-bob'],
+        ]);
+      } finally {
+        await sql.destroy();
+      }
+    });
+
     it("delete() keeps the name out of the purge when it is another session's id", async () => {
       (repository.findOne as jest.Mock).mockResolvedValue(
         createMockSession({ id: 'sess-uuid-1', name: 'imported-bob' }),
@@ -1908,6 +1951,48 @@ describe('SessionService', () => {
 
     // The same race with a force-kill: the start sent while the engine still ran launched a new one
     // once its claim resolved and cleared the stop record the kill had just written.
+    it.each([false, true])('retires a pending start after logout (incomplete: %s)', async incomplete => {
+      const ownership = withOwnership();
+      const desired = trackDesiredState();
+      registry.set('sess-uuid-1', mockEngine as never);
+      if (incomplete) mockEngine.logout.mockRejectedValueOnce(new Error('unlink unavailable'));
+      let finishClaim: () => void = () => undefined;
+      ownership.claim.mockImplementationOnce(
+        () =>
+          new Promise<boolean>(resolve => {
+            finishClaim = () => resolve(true);
+          }),
+      );
+      const outcome = service.start('sess-uuid-1', { explicit: true }).catch((error: unknown) => error);
+      if (incomplete) await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadGatewayException);
+      else await service.logout('sess-uuid-1');
+      finishClaim();
+
+      expect(await outcome).toBeInstanceOf(SessionStoppedException);
+      expect(engineFactory.create).not.toHaveBeenCalled();
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(false);
+      expect(desired()).toBeNull();
+      await service.start('sess-uuid-1', { explicit: true });
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(true);
+    });
+
+    it('keeps a pending start eligible when logout has no engine', async () => {
+      const ownership = withOwnership();
+      trackDesiredState();
+      let finishClaim: () => void = () => undefined;
+      ownership.claim.mockImplementationOnce(
+        () =>
+          new Promise<boolean>(resolve => {
+            finishClaim = () => resolve(true);
+          }),
+      );
+      const starting = service.start('sess-uuid-1', { explicit: true });
+      await expect(service.logout('sess-uuid-1')).rejects.toBeInstanceOf(BadRequestException);
+      finishClaim();
+      await starting;
+      expect(lifecycle.isEngineActive('sess-uuid-1')).toBe(true);
+    });
+
     it('start() refuses with 409 when a forceKill() lands while its claim is pending', async () => {
       const ownership = withOwnership();
       const desired = trackDesiredState();
@@ -3296,6 +3381,7 @@ describe('SessionService', () => {
         expect(mockEngine.forceDestroy).toHaveBeenCalled(); // wedged browser reaped
         expect(intern().engines.has('sess-uuid-1')).toBe(false); // slot freed for retry
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { status: SessionStatus.DISCONNECTED });
+        expect(eventsGateway.emitSessionStatus).toHaveBeenLastCalledWith('sess-uuid-1', SessionStatus.DISCONNECTED);
         expect(scheduleReconnect).not.toHaveBeenCalled(); // no auto-reconnect from a start() timeout
       } finally {
         jest.useRealTimers();
@@ -3375,6 +3461,126 @@ describe('SessionService', () => {
         expect(intern().sessionErrors.get('sess-uuid-1')).toBeUndefined();
         expect(reconnectStates.has('sess-uuid-1')).toBe(true); // the replacement keeps its reconnect state
       } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('preserves a replacement READY status while the old timeout teardown settles', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
+      let finishDestroy: () => void = () => undefined;
+      mockEngine.forceDestroy.mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finishDestroy = resolve;
+          }),
+      );
+      const replacement = {
+        ...mockEngine,
+        initialize: jest.fn().mockImplementation((callbacks: EngineEventCallbacks) => {
+          callbacks.onReady?.('628123', 'Alice');
+          callbacks.onStateChanged?.(EngineStatus.READY);
+          return Promise.resolve();
+        }),
+        forceDestroy: jest.fn().mockResolvedValue(undefined),
+      };
+      jest.useFakeTimers();
+      try {
+        const pending = (
+          lifecycle as unknown as {
+            initializeEngine: (id: string, session: Session) => Promise<void>;
+          }
+        )
+          .initializeEngine('sess-uuid-1', createMockSession())
+          .catch((error: unknown) => error);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(mockEngine.forceDestroy).toHaveBeenCalled();
+        expect(registry.has('sess-uuid-1')).toBe(false);
+        (engineFactory.create as jest.Mock).mockReturnValueOnce(replacement);
+        await service.start('sess-uuid-1', { explicit: true });
+        (repository.update as jest.Mock).mockClear();
+        (eventsGateway.emitSessionStatus as jest.Mock).mockClear();
+        finishDestroy();
+        const error = await pending;
+        expect((error as HttpException).getStatus()).toBe(HttpStatus.GATEWAY_TIMEOUT);
+        expect(registry.get('sess-uuid-1')).toBe(replacement);
+        expect(repository.update).not.toHaveBeenCalled();
+        expect(eventsGateway.emitSessionStatus).not.toHaveBeenCalled();
+      } finally {
+        finishDestroy();
+        jest.useRealTimers();
+      }
+    });
+
+    it('propagates a failed timeout status write without announcing disconnection', async () => {
+      const failure = new Error('status write unavailable');
+      (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) =>
+        patch.status === SessionStatus.DISCONNECTED ? Promise.reject(failure) : Promise.resolve({ affected: 1 }),
+      );
+      mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
+      jest.useFakeTimers();
+      try {
+        const pending = (
+          lifecycle as unknown as {
+            initializeEngine: (id: string, session: Session) => Promise<void>;
+          }
+        )
+          .initializeEngine('sess-uuid-1', createMockSession())
+          .catch((error: unknown) => error);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(await pending).toBe(failure);
+        expect(registry.has('sess-uuid-1')).toBe(false);
+        expect(eventsGateway.emitSessionStatus).not.toHaveBeenCalledWith('sess-uuid-1', SessionStatus.DISCONNECTED);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('does not announce an old timeout after its status write response outlives a replacement', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      mockEngine.initialize.mockReturnValue(new Promise<void>(() => undefined));
+      let finishStatus: () => void = () => undefined;
+      let storedStatus = SessionStatus.CREATED;
+      (repository.update as jest.Mock).mockImplementation((_where: unknown, patch: Partial<Session>) => {
+        if (patch.status) storedStatus = patch.status;
+        if (patch.status === SessionStatus.DISCONNECTED) {
+          return new Promise(resolve => {
+            finishStatus = () => resolve({ affected: 1 });
+          });
+        }
+        return Promise.resolve({ affected: 1 });
+      });
+      const replacement = {
+        ...mockEngine,
+        initialize: jest.fn().mockImplementation((callbacks: EngineEventCallbacks) => {
+          callbacks.onReady?.('628123', 'Alice');
+          callbacks.onStateChanged?.(EngineStatus.READY);
+          return Promise.resolve();
+        }),
+        forceDestroy: jest.fn().mockResolvedValue(undefined),
+      };
+      jest.useFakeTimers();
+      try {
+        const pending = (
+          lifecycle as unknown as {
+            initializeEngine: (id: string, session: Session) => Promise<void>;
+          }
+        )
+          .initializeEngine('sess-uuid-1', createMockSession())
+          .catch((error: unknown) => error);
+        await jest.advanceTimersByTimeAsync(60_000);
+        expect(storedStatus).toBe(SessionStatus.DISCONNECTED);
+        (engineFactory.create as jest.Mock).mockReturnValueOnce(replacement);
+        await service.start('sess-uuid-1', { explicit: true });
+        expect(storedStatus).toBe(SessionStatus.READY);
+        finishStatus();
+        const error = await pending;
+        expect((error as HttpException).getStatus()).toBe(HttpStatus.GATEWAY_TIMEOUT);
+        expect(registry.get('sess-uuid-1')).toBe(replacement);
+        expect(storedStatus).toBe(SessionStatus.READY);
+        expect(eventsGateway.emitSessionStatus).toHaveBeenLastCalledWith('sess-uuid-1', SessionStatus.READY);
+      } finally {
+        finishStatus();
         jest.useRealTimers();
       }
     });
@@ -4447,6 +4653,33 @@ describe('SessionService', () => {
 
     // The success path has its own replacement check: a parked failure of the OLD attempt must not
     // run against the state a delete + start put in its place while that init was still running.
+    it.each([
+      [false, false],
+      [false, true],
+      [true, false],
+      [true, true],
+    ])('rechecks cancelled reconnect auth (row survives: %s, init rejects: %s)', async (survives, rejects) => {
+      const i = internals();
+      let finishInit: () => void = () => undefined;
+      mockEngine.initialize.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            finishInit = () => (rejects ? reject(new Error('late initialization failure')) : resolve());
+          }),
+      );
+      const state = armState();
+      const running = i.executeReconnect(ID, createMockSession(), state);
+      await flush();
+      if (survives) await service.stop(ID);
+      else await service.delete(ID);
+      (repository.findOne as jest.Mock).mockResolvedValue(survives ? createMockSession() : null);
+      (engineFactory.purgeSessionData as jest.Mock).mockClear();
+      finishInit();
+      await running;
+      if (survives) expect(engineFactory.purgeSessionData).not.toHaveBeenCalled();
+      else expect(engineFactory.purgeSessionData).toHaveBeenCalledWith(ID);
+    });
+
     it('drops a parked failure when a delete-then-start replaced the state before init resolved', async () => {
       const i = internals();
       let callbacks: EngineEventCallbacks = {};
@@ -7008,6 +7241,7 @@ describe('SessionService', () => {
 
     it('dispatches status.received with the ingested row once ingest resolves with created=true', async () => {
       const callbacks = await startAndCaptureCallbacks();
+      const postedAt = Date.now();
       (statusStore.ingest as jest.Mock).mockResolvedValueOnce({
         created: true,
         row: {
@@ -7017,8 +7251,8 @@ describe('SessionService', () => {
           type: 'text',
           caption: 'hi',
           mediaOmitted: false,
-          postedAt: 1000,
-          expiresAt: 1000 + 86400000,
+          postedAt,
+          expiresAt: postedAt + 86400000,
         },
       });
 
@@ -7046,8 +7280,8 @@ describe('SessionService', () => {
           caption: 'hi',
           hasMedia: false,
           mediaOmitted: false,
-          postedAt: 1000,
-          expiresAt: 1000 + 86400000,
+          postedAt,
+          expiresAt: postedAt + 86400000,
         }),
       );
       // …and the same payload goes over the websocket so the dashboard refreshes live.
@@ -7528,6 +7762,36 @@ describe('SessionService', () => {
 
       expect(mockEngine.setOnlinePresence).not.toHaveBeenCalled();
       expect(await service.getPresence('sess-uuid-1', 'c@c.us')).toBeNull();
+    });
+
+    it('does not replay a presence publish that settles after its engine was replaced', async () => {
+      await startAndCaptureCallbacks();
+      let finishPublish: () => void = () => undefined;
+      mockEngine.setOnlinePresence.mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finishPublish = resolve;
+          }),
+      );
+      const publishing = service.setOnlinePresence('sess-uuid-1', false);
+      await flush();
+      await service.stop('sess-uuid-1');
+      const replacement = {
+        ...mockEngine,
+        initialize: jest.fn().mockResolvedValue(undefined),
+        setOnlinePresence: jest.fn().mockResolvedValue(undefined),
+      };
+      (engineFactory.create as jest.Mock).mockReturnValue(replacement);
+      await service.start('sess-uuid-1', { explicit: true });
+      await service.setOnlinePresence('sess-uuid-1', true);
+      finishPublish();
+      await publishing;
+      replacement.setOnlinePresence.mockClear();
+      const callbacks = (replacement.initialize.mock.calls as [EngineEventCallbacks][])[0][0];
+      callbacks.onReady!('628123', 'Alice');
+      await flush();
+      expect(replacement.setOnlinePresence).toHaveBeenCalledTimes(1);
+      expect(replacement.setOnlinePresence).toHaveBeenCalledWith(true);
     });
 
     it('does not publish own presence on ready when the caller never set one', async () => {

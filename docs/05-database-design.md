@@ -734,6 +734,8 @@ The data connection also owns:
 
 Additionally, the `AddMessagesFts` migration creates the full-text-search structures over `messages` (a FTS5 virtual table on SQLite, a generated `body_ts` `tsvector` column plus GIN index on PostgreSQL) that back the `/search` endpoint.
 
+On SQLite that index can stop matching `messages` after a table rebuild, and a search then returns other messages. The `RepairSqliteMessageFts` migration checks the index against the full message content once and rebuilds it on a mismatch. With `DATABASE_SYNCHRONIZE=true` the same check runs after the schema sync on every boot; it reads all stored text, and a failure of the check is logged without stopping the boot.
+
 > [!NOTE]
 > **Tables that do _not_ exist.** Earlier drafts referenced `contacts`, `session_logs`, `webhook_logs`, `api_key_logs`, `webhook_idempotency`, and `ip_whitelist`. None of these are implemented. Contacts are read live from the engine; auditing is the single `audit_logs` table; webhook idempotency is not a persisted table; and per-key IP restrictions are stored inline on `api_keys."allowedIps"` (a `simple-array`), not in a separate `ip_whitelist` table.
 
@@ -937,7 +939,8 @@ src/database/migrations/           # data connection (pluggable)
 ├── 1791100000000-AddIntegrationDeliveryFailureDeliveryIndex.ts   # (pluginId, instanceId, deliveryId) index for the dead-letter guards
 ├── 1791200000000-AddWebhookOutboxSessionIndex.ts   # (sessionId) index for the per-session outbox delete
 ├── 1791300000000-BackfillLegacyMessageTypes.ts   # converts raw wwebjs message types to the neutral vocabulary, once
-└── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
+├── 1791400000000-AddLidMappingReportSource.ts   # distinguishes mapping reports from cached display data
+└── 1791600000000-RepairSqliteMessageFts.ts   # rebuilds the SQLite full-text index when it no longer matches messages
 ```
 
 > [!NOTE]
