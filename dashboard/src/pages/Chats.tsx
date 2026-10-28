@@ -176,6 +176,12 @@ export function Chats() {
   // Every listed session, ready or not: the switcher shows the others with their state.
   const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+  // The list as last applied, for a status frame to look a session up in. readSessions sets it with the list, not
+  // after the render: a status in the same turn as the list's answer must already find its session there.
+  const listedSessionsRef = useRef(listedSessions);
+  useEffect(() => {
+    listedSessionsRef.current = listedSessions;
+  });
   // The sessions that can be opened, and the open one while it is down, so the switcher still shows it. Derived
   // rather than kept beside the list: a copy filtered through the selection's ref dropped a session selected in the
   // same turn as a list read answered, before the ref caught up.
@@ -435,6 +441,7 @@ export function Chats() {
     if (request < reads.applied) return reads.list;
     reads.applied = request;
     reads.list = list;
+    listedSessionsRef.current = list;
     setSessionsFailure(null);
     setListedSessions(list);
     const firstReady = list.find(s => s.status === 'ready')?.id ?? '';
@@ -978,10 +985,6 @@ export function Chats() {
   // follow the live session feed the Sessions page uses (the '*' room, or one room per listed session for
   // a session-scoped key) instead of the read at mount alone. The open session stays selectable when it
   // drops, so the page does not switch away under the operator.
-  const listedSessionsRef = useRef(listedSessions);
-  useEffect(() => {
-    listedSessionsRef.current = listedSessions;
-  });
   const sessionFeedRef = useRef(createSessionFeedState());
   const [sessionFeedError, setSessionFeedError] = useState<string | null>(null);
   // A session created after the list was read reports a status the list has no row for. The list is read again,
