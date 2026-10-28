@@ -167,27 +167,28 @@ test('the main content clips sideways overflow without becoming a scroll contain
   assert.equal(decl(main.body, 'overflow-x'), 'clip');
 });
 
-test('the collapse chevron is mirrored once, by the icon Layout.tsx picks', () => {
-  assert.match(tsx, /isRtl \? \(\s*<ChevronLeft/, 'Layout.tsx no longer swaps the chevron for RTL');
-  for (const r of all.filter(r => r.selectors.some(s => s.includes('.collapse-toggle svg')))) {
-    assert.equal(decl(r.body, 'transform'), undefined, `${r.selectors.join(', ')} flips the chevron again`);
+test('the collapse icon is mirrored once, by the icon Layout.tsx picks', () => {
+  assert.match(tsx, /isRtl \?\s*\(?\s*<PanelRightClose/, 'Layout.tsx no longer swaps the collapse icon for RTL');
+  assert.match(tsx, /isRtl \?\s*\(?\s*<PanelRightOpen/, 'Layout.tsx no longer swaps the expand icon for RTL');
+  for (const r of all.filter(r => r.selectors.some(s => s.includes('.collapse-toggle') && s.includes('svg')))) {
+    assert.equal(decl(r.body, 'transform'), undefined, `${r.selectors.join(', ')} flips the icon again`);
   }
 });
 
-// A selector's weight as classes, attributes and pseudo-classes: the selectors under test carry no ids.
-const weight = (selector: string): number =>
-  (selector.match(/\.[\w-]+|\[[^\]]+\]|:[\w-]+(?:\([^)]*\))?/g) ?? []).length;
-
-test('no rule outweighs the RTL one that moves the collapse toggle to the sidebar inner edge', () => {
-  const mirror = "[dir='rtl'] .collapse-toggle";
-  assert.equal(find(mirror).length, 1, 'no RTL rule for the collapse toggle');
-  // A heavier rule that sets `right` (the collapsed sidebar once repeated the base value) wins under
-  // RTL and pushes the toggle half off the screen.
-  const heavier = all
-    .filter(r => decl(r.body, 'right') !== undefined)
-    .flatMap(r => r.selectors)
-    .filter(s => /\.collapse-toggle$/.test(s) && weight(s) >= weight(mirror) && s !== mirror);
-  assert.deepEqual(heavier, []);
+// The collapse toggle sits in the header row, pushed to its end by a logical margin, not on the sidebar edge, so it
+// follows the page direction by itself. A physical offset or an absolute position would need an RTL mirror again, and
+// a heavier rule that set `right` once won over that mirror and pushed the RTL toggle half off the screen.
+test('the collapse toggle sits in the header row with logical offsets, so a right-to-left page needs no mirror', () => {
+  const toggles = all.filter(r => r.selectors.some(s => /\.collapse-toggle$/.test(s)));
+  const base = toggles.find(r => !r.media && r.selectors.includes('.collapse-toggle'));
+  assert.ok(base, 'no base .collapse-toggle rule');
+  assert.equal(decl(base.body, 'margin-inline-start'), 'auto');
+  for (const r of toggles) {
+    for (const prop of ['position', 'left', 'right', 'margin-left', 'margin-right']) {
+      assert.equal(decl(r.body, prop), undefined, `${r.selectors.join(', ')} sets ${prop}`);
+    }
+  }
+  assert.equal(find("[dir='rtl'] .collapse-toggle").length, 0, 'an RTL rule moves the toggle again');
 });
 
 // -webkit-overflow-scrolling: touch gave iOS momentum scrolling before iOS 13, which now scrolls every overflow area that

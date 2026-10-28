@@ -2,7 +2,13 @@ import type * as BaileysLib from '@whiskeysockets/baileys';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { queryLidPhone } from './baileys-identity-query';
 import type { WAMessage, WAMessageKey, WASocket } from '@whiskeysockets/baileys';
-import { ChatSummary, Contact, MediaInput } from '../interfaces/whatsapp-engine.interface';
+import {
+  ChatSummary,
+  Contact,
+  MediaInput,
+  type StoredChatMessage,
+  type StoredChatMessageLookup,
+} from '../interfaces/whatsapp-engine.interface';
 import { assertReadableImage, resolveMediaBuffer } from './baileys-messaging';
 import { type createLogger } from '../../common/services/logger.service';
 import { BAILEYS_QUERY_BUDGET_MS, confirmedWrite, withQueryDeadline } from './baileys-query-deadline';
@@ -43,6 +49,8 @@ export interface BaileysContactsHost {
   lastMessage(chatId: string): { key: WAMessageKey; timestamp: number; jid: string } | null;
   /** The newest message the chat received, the one a read receipt can acknowledge, or null when none. */
   lastInboundMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null;
+  /** The `<lid>@lid` known for a 1:1 chat or a person under any spelling of it, or null (always for a group). */
+  lidOf(jid: string): string | null;
   /**
    * Stored copies of the named messages, in whatever order the store returns them. Ids the store
    * has never seen are absent, so neither the length nor the order tracks the input. `undefined`
@@ -383,10 +391,15 @@ export class BaileysContacts {
     return this.host.listChats();
   }
 
-  async sendSeen(chatId: string, messageIds?: string[], authors?: ReadonlyMap<string, string>): Promise<boolean> {
+  async sendSeen(
+    chatId: string,
+    messageIds?: string[],
+    authors?: ReadonlyMap<string, string>,
+    stored?: StoredChatMessageLookup,
+  ): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const keys = await this.receiptKeys(socket, chatId, messageIds, authors);
+    const keys = await this.receiptKeys(socket, chatId, messageIds, authors, stored);
     if (keys.length === 0) {
       return false; // nothing known to mark read
     }
@@ -422,14 +435,20 @@ export class BaileysContacts {
     chatId: string,
     messageIds?: string[],
     authors?: ReadonlyMap<string, string>,
+    storedLast?: StoredChatMessageLookup,
   ): Promise<WAMessageKey[]> {
     // null as well as undefined: the REST body rejects an explicit null, but this is the engine
     // boundary and an internal caller reaching it with one used to dereference it below as a 500.
     if (messageIds === undefined || messageIds === null) {
       // The newest RECEIVED message, not the preview: after an API reply the preview is an own key,
       // which Baileys drops from the receipt, so the call would answer true having sent nothing.
+      // After a restart memory holds none until the next one arrives; the gateway's stored copy
+      // stands in, rebuilt the way a chat write keys it.
       const last = this.host.lastInboundMessage(chatId);
-      return last && (await this.matchesChat(last.key, chatId, socket)) ? [last.key] : [];
+      if (last && (await this.matchesChat(last.key, chatId, socket))) return [last.key];
+      const row = await this.readStored(chatId, storedLast);
+      const received = row && !row.fromMe ? this.storedTarget(chatId, row) : null;
+      return received && (await this.matchesChat(received.key, chatId, socket)) ? [received.key] : [];
     }
     if (messageIds.length === 0) {
       return []; // an explicit empty list asks for nothing to be acknowledged, not for the newest
@@ -487,52 +506,132 @@ export class BaileysContacts {
     return jid;
   }
 
-  async markUnread(chatId: string): Promise<boolean> {
+  /**
+   * The message a chat write is keyed to, and the jid that indexes the patch, made to agree (#1891).
+   *
+   * The phone applies a clear or delete only when both name the chat the way it holds it. A message
+   * this session holds in memory carries that form itself: the patch is indexed by the jid the
+   * message arrived under, its lid on a lid-addressed chat and its phone jid otherwise. Indexing it by
+   * the listed phone jid instead named two different chats, which the server accepted and the phone
+   * ignored. A stored message carries no addressing, so it is keyed by the chat's lid whenever one is
+   * known (the stored row brings the one the engine reported for its phone), else by the phone jid.
+   *
+   * An own group message carries no `participant` (the phone ignores the range with one); a received
+   * one needs its sender, which Baileys requires.
+   *
+   * The message is the newest one in memory, else (none, or one that yields no usable key) the newest
+   * the gateway stored. Either key must belong to the chat ({@link matchesChat}), else it is not used.
+   * With neither, `rangeless()` allows a patch without a range: it is indexed by the chat's jid, and
+   * only for a chat the session knows (a message in memory or stored, or a chat record or state row
+   * the listing holds) whose jid passes the same check. Otherwise the answer is null.
+   */
+  private async chatWriteRange(
+    socket: WASocket,
+    chatId: string,
+    stored: StoredChatMessageLookup | undefined,
+    rangeless: () => boolean = () => false,
+  ): Promise<ChatWriteRange | null> {
+    const last = this.host.lastMessage(chatId);
+    const inMemory = last ? this.memoryTarget(chatId, last.key, last.timestamp) : null;
+    if (inMemory && (await this.matchesChat(inMemory.key, chatId, socket))) return toRange(inMemory);
+    const row = await this.readStored(chatId, stored);
+    const fromStore = row ? this.storedTarget(chatId, row) : null;
+    if (fromStore && (await this.matchesChat(fromStore.key, chatId, socket))) return toRange(fromStore);
+    if (!rangeless() || !(last || row || this.listedChat(chatId))) return null;
+    const jid = this.host.chatJid(chatId);
+    return (await this.matchesChat({ remoteJid: jid }, chatId, socket)) ? { jid, lastMessages: [] } : null;
+  }
+
+  private async readStored(
+    chatId: string,
+    stored: StoredChatMessageLookup | undefined,
+  ): Promise<StoredChatMessage | null> {
+    if (!stored) return null;
+    try {
+      return await stored();
+    } catch (err) {
+      this.host.logger.warn('Could not read the stored last message of a chat', {
+        chatId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  }
+
+  /** A message held in memory, keyed under the jid it arrived with; null when it cannot be used. */
+  private memoryTarget(chatId: string, key: WAMessageKey, timestamp: number): WriteTarget | null {
+    if (!key.id || !timestamp) return null;
+    const chatJid = this.host.chatJid(chatId);
+    const group = parseWaId(chatJid).kind === 'group';
+    const fromMe = key.fromMe === true;
+    if (group && !fromMe && !key.participant) return null;
+    const jid = group ? chatJid : this.host.toEngineJid(key.remoteJid ?? chatJid);
+    return target(jid, key.id, fromMe, group && !fromMe ? (key.participant ?? undefined) : undefined, timestamp);
+  }
+
+  /** A stored message, keyed by the chat's lid whenever one is known; null when it cannot be used. */
+  private storedTarget(chatId: string, row: StoredChatMessage): WriteTarget | null {
+    if (!row.id || !row.timestamp) return null;
+    const chatJid = this.host.chatJid(chatId);
+    const group = parseWaId(chatJid).kind === 'group';
+    if (group && !row.fromMe && !row.author) return null;
+    const jid = group ? chatJid : (row.lid ?? this.host.lidOf(chatJid) ?? this.host.toEngineJid(chatJid));
+    const participant =
+      group && !row.fromMe && row.author
+        ? (row.authorLid ?? this.host.lidOf(row.author) ?? this.host.toEngineJid(row.author))
+        : undefined;
+    return target(jid, row.id, row.fromMe, participant, row.timestamp);
+  }
+
+  /** The chat as the session lists it (a chat record or a persisted state row), if it does. */
+  private listedChat(chatId: string): ChatSummary | undefined {
+    const id = this.host.toNeutralJid(this.host.chatJid(chatId));
+    return this.host.listChats().find(chat => chat.id === id);
+  }
+
+  /**
+   * Without a known message the mark goes out with no range, which the phone applies to a chat in the
+   * list. It is reported as not done for an archived chat, which the phone leaves unmarked then, and
+   * for a chat the session does not know or whose jid does not check out.
+   */
+  async markUnread(chatId: string, stored?: StoredChatMessageLookup): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const last = this.host.lastMessage(chatId);
-    if (!last || !(await this.matchesChat(last.key, chatId))) {
-      return false; // Baileys' unread toggle needs the last message; can't synthesize it
-    }
+    const range = await this.chatWriteRange(socket, chatId, stored, () => this.listedChat(chatId)?.archived !== true);
+    if (!range) return false;
     await this.confirmed(
-      this.sock(socket).chatModify(
-        { markRead: false, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
-        last.jid,
-      ),
+      this.sock(socket).chatModify({ markRead: false, lastMessages: range.lastMessages }, range.jid),
       'the unread mark',
     );
     return true;
   }
 
-  async clearChatMessages(chatId: string): Promise<boolean> {
+  async clearChatMessages(chatId: string, stored?: StoredChatMessageLookup): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const last = this.host.lastMessage(chatId);
-    if (!last || !(await this.matchesChat(last.key, chatId))) {
-      return false; // Baileys' clear needs the last message; can't synthesize it
+    const range = await this.chatWriteRange(socket, chatId, stored);
+    if (!range) {
+      return false; // the clear removes messages up to the one it is keyed to; never guess one
     }
     await this.confirmed(
-      this.sock(socket).chatModify(
-        { clear: true, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
-        last.jid,
-      ),
+      this.sock(socket).chatModify({ clear: true, lastMessages: range.lastMessages }, range.jid),
       'the chat clear',
     );
     return true;
   }
 
-  async archiveChat(chatId: string, archive: boolean): Promise<boolean> {
+  /**
+   * Without a known message the change goes out with no range, which WhatsApp applies as well, but
+   * only for a chat the session knows and whose jid checks out. Baileys replays its own patch locally,
+   * so archiving an id the account has no chat with would list that chat from then on.
+   */
+  async archiveChat(chatId: string, archive: boolean, stored?: StoredChatMessageLookup): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const last = this.host.lastMessage(chatId);
-    if (!last || !(await this.matchesChat(last.key, chatId))) {
-      return false; // Baileys' archive toggle needs the last message; can't synthesize it
-    }
+    const range = await this.chatWriteRange(socket, chatId, stored, () => true);
+    if (!range) return false;
     await this.confirmed(
-      this.sock(socket).chatModify(
-        { archive, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
-        last.jid,
-      ),
+      this.sock(socket).chatModify({ archive, lastMessages: range.lastMessages }, range.jid),
       'the archive change',
     );
     return true;
@@ -559,20 +658,34 @@ export class BaileysContacts {
     return true;
   }
 
-  async deleteChat(chatId: string): Promise<boolean> {
+  async deleteChat(chatId: string, stored?: StoredChatMessageLookup): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const last = this.host.lastMessage(chatId);
-    if (!last || !(await this.matchesChat(last.key, chatId))) {
-      return false; // Baileys' delete needs the last message; can't synthesize it
+    const range = await this.chatWriteRange(socket, chatId, stored);
+    if (!range) {
+      return false; // the delete removes messages up to the one it is keyed to; never guess one
     }
     await this.confirmed(
-      this.sock(socket).chatModify(
-        { delete: true, lastMessages: [{ key: last.key, messageTimestamp: last.timestamp }] },
-        last.jid,
-      ),
+      this.sock(socket).chatModify({ delete: true, lastMessages: range.lastMessages }, range.jid),
       'the chat delete',
     );
     return true;
   }
+}
+
+type WriteTarget = { jid: string; key: WAMessageKey; timestamp: number };
+type ChatWriteRange = { jid: string; lastMessages: { key: WAMessageKey; messageTimestamp: number }[] };
+
+function target(
+  jid: string,
+  id: string,
+  fromMe: boolean,
+  participant: string | undefined,
+  timestamp: number,
+): WriteTarget {
+  return { jid, key: { remoteJid: jid, fromMe, id, ...(participant ? { participant } : {}) }, timestamp };
+}
+
+function toRange(write: WriteTarget): ChatWriteRange {
+  return { jid: write.jid, lastMessages: [{ key: write.key, messageTimestamp: write.timestamp }] };
 }
