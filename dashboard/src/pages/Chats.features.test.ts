@@ -1112,6 +1112,28 @@ test('with every session down at load, the first one that connects is selected a
   assert.equal(selectedSessionName(container), SESSION.name, 'the selection moved to the session that connected next');
 });
 
+test('a status that lands with the session list, before the list has rendered, is applied to that list', async () => {
+  const { screen, waitFor, act } = rtl;
+  mainDown = true;
+  listOffline = true;
+  const release = hold('sessions');
+  const { container } = renderPage();
+  // The list answer and the status land in one turn, so the status is handled before React renders the list:
+  // it must still find Main listed, not take it for an unknown session (whose re-read, still down here, would
+  // leave nothing selected).
+  await act(async () => {
+    release();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    lastSocket()?.receive('message', {
+      type: 'event',
+      timestamp: new Date(1_700_003_000_000).toISOString(),
+      payload: { event: 'session.status', sessionId: SESSION.id, data: { status: 'ready' } },
+    });
+  });
+  await waitFor(() => assert.equal(selectedSessionName(container), SESSION.name));
+  await screen.findByText('Alice');
+});
+
 test('a session created after the page loaded joins the switcher, and can be picked once it connects', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   const { container } = renderPage();
