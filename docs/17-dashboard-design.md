@@ -773,9 +773,10 @@ How it fits together:
 - `npm run build:all` builds the API (`dist/`) **and** the dashboard (`dashboard/dist/`). The root
   `Dockerfile` does this in its builder stage and copies `dashboard/dist` into the runtime image.
 - `ServeStaticModule` is registered conditionally in `src/app.module.ts`: it only activates when
-  `dashboard/dist/index.html` exists, serves it with SPA fallback, and `exclude`s `/api` and
-  `/socket.io` so those keep returning real API/WebSocket responses. Opt out with
-  `SERVE_DASHBOARD=false`.
+  `dashboard/dist/index.html` exists and serves the built assets. Its own SPA fallback is off:
+  `configure-app.ts` answers the dashboard documents, with the per-response CSP nonce, for GET paths
+  outside `/api`, `/socket.io`, `/mcp` and `/assets`, so those keep returning real API/WebSocket
+  responses and the body parsers' own 413 and 400. Opt out with `SERVE_DASHBOARD=false`.
 - Run it directly with `npm run prod` (build + serve) or `node dist/main` against a prebuilt image.
 
 In development the build is absent, so serve-static stays inert and the Vite dev server (port
