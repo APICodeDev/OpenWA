@@ -319,8 +319,10 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   `openwa_unaccent(body)` with `CREATE INDEX CONCURRENTLY`, so writes go on during the build (it cannot
   run inside a migration's transaction). On 300,000 messages the index took 76 MB, next to 30 MB for the
   word index. The build runs on its own connection without the runtime `statement_timeout`. Replicas
-  that start together take a session advisory lock: one builds, the others answer `501` until the
-  index is valid. A build that died (a killed pod) leaves an INVALID index, which the next build drops
+  that start together take a session advisory lock keyed to their `messages` table, so deployments in
+  different `POSTGRES_SCHEMA`s of one database do not wait on each other: one builds, the others answer
+  `501` until the index is valid, trying the lock again every 30 seconds in case the one building
+  dies or fails. A build that died (a killed pod) leaves an INVALID index, which the next build drops
   and rebuilds. The candidate query walks the existing `IDX_messages_createdAt` index, so contains search
   adds no other index.
 

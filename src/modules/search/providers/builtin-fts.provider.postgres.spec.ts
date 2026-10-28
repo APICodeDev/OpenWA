@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { LoggerService } from '../../../common/services/logger.service';
 import { DataSource } from 'typeorm';
 import { ContainsTermsRefusedError } from '../search-terms';
-import { BuiltInFtsProvider } from './builtin-fts.provider';
+import { BuiltInFtsProvider, TRIGRAM_BUILD_LOCK_KEY } from './builtin-fts.provider';
 
 /**
  * Postgres-side probe coverage. A real PG instance isn't available to the unit suite, so the
@@ -215,5 +215,80 @@ describe('BuiltInFtsProvider match=contains terms (postgres)', () => {
     const { provider, query } = containsReady();
     await expect(provider.search({ q, match: 'contains' })).resolves.toMatchObject({ total: 0 });
     expect(query).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BuiltInFtsProvider contains index build lock (postgres)', () => {
+  beforeEach(() => {
+    jest.spyOn(LoggerService.prototype, 'log').mockImplementation(() => undefined);
+    jest.spyOn(LoggerService.prototype, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => jest.restoreAllMocks());
+
+  /**
+   * A database whose build lock answers `locks` in turn and whose index exists once the lock is taken,
+   * while the catalog a search reads still lacks it: only a build attempt of the provider's own can
+   * make contains search ready.
+   */
+  const lockedOut = (locks: boolean[]) => {
+    const tryLock = jest.fn<Promise<Array<{ locked: boolean }>>, [string, unknown[]]>(() =>
+      Promise.resolve([{ locked: locks.shift() ?? false }]),
+    );
+    const runner = {
+      connect: jest.fn().mockResolvedValue(undefined),
+      release: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue([]),
+      manager: {
+        query: jest.fn((sql: string, params: unknown[]) =>
+          /pg_try_advisory_lock/.test(sql)
+            ? tryLock(sql, params)
+            : Promise.resolve([{ trgm: 'public', unaccent: 'public', fn: true, idx: true }]),
+        ),
+      },
+    };
+    const notReady = [{ trgm: 'public', unaccent: 'public', fn: false, idx: null }];
+    const ds = {
+      options: { type: 'postgres' },
+      createQueryRunner: () => runner,
+      query: jest.fn().mockResolvedValue([]),
+      manager: { query: jest.fn().mockResolvedValue(notReady) },
+    } as unknown as DataSource;
+    const provider = new BuiltInFtsProvider(ds, new ConfigService({ search: { containsEnabled: true } }));
+    Object.assign(provider, { containsBuildRetryMs: 0 });
+    return { provider, tryLock };
+  };
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+
+  it('keys the lock to the messages table and tries it again until the index is ready', async () => {
+    const { provider, tryLock } = lockedOut([false, false, true]);
+    const search = () => provider.search({ q: 'voic', match: 'contains' });
+
+    await provider.buildContainsIndex();
+    await expect(search()).rejects.toThrow(/still being built/);
+    for (
+      let i = 0;
+      i < 100 &&
+      (await search().then(
+        () => false,
+        () => true,
+      ));
+      i++
+    )
+      await settle();
+
+    await expect(search()).resolves.toMatchObject({ total: 0 });
+    expect(tryLock).toHaveBeenCalledTimes(3);
+    expect(tryLock).toHaveBeenCalledWith(expect.stringContaining("to_regclass('messages')"), [TRIGRAM_BUILD_LOCK_KEY]);
+    provider.onModuleDestroy();
+  });
+
+  it('stops trying once the module is destroyed', async () => {
+    const { provider, tryLock } = lockedOut([]);
+
+    await provider.buildContainsIndex();
+    provider.onModuleDestroy();
+    await settle();
+
+    expect(tryLock).toHaveBeenCalledTimes(1);
   });
 });

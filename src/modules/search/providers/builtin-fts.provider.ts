@@ -3,6 +3,7 @@ import {
   Injectable,
   NotImplementedException,
   OnApplicationBootstrap,
+  OnModuleDestroy,
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
@@ -58,9 +59,15 @@ const TRIGRAM_BACKFILL_BATCH = 1000;
 
 /**
  * The session-level advisory lock one replica holds while it builds the Postgres trigram index, in the
- * two-int4 form of POSTGRES_BOOT_MIGRATION_LOCK_KEYS: 0x4f5741 = "OWA", 0x7472676d = "trgm".
+ * two-int4 form: 0x7472676d ("trgm") first, a first key no other OpenWA lock uses (the boot migration
+ * lock's is 0x4f5741, "OWA"), then the oid of the `messages` table the index is built on, so deployments
+ * that share a database in different schemas (POSTGRES_SCHEMA) each build their own.
  */
-export const TRIGRAM_BUILD_LOCK_KEYS: readonly [number, number] = [0x4f5741, 0x7472676d];
+export const TRIGRAM_BUILD_LOCK_KEY = 0x7472676d;
+export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
+
+/** How long a replica that found the build lock taken waits before trying it again. */
+const TRIGRAM_BUILD_RETRY_MS = 30_000;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
 const CONTAINS_UNAVAILABLE = {
@@ -195,7 +202,7 @@ type PlaceholderFn = () => string;
  * ranks a bounded window of candidates in the application (see searchContains).
  */
 @Injectable()
-export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnApplicationBootstrap {
+export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnApplicationBootstrap, OnModuleDestroy {
   readonly id = 'builtin-fts';
   readonly label = 'Built-in database full-text search';
   private readonly logger = createLogger('BuiltInFtsProvider');
@@ -205,6 +212,11 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
 
   /** Why match=contains answers 501 right now (a CONTAINS_UNAVAILABLE message), or null once its index is ready. */
   private containsUnavailable: string | null;
+
+  /** The next attempt at a build another replica held the lock for (see retryContainsBuild). */
+  private containsBuildRetry?: NodeJS.Timeout;
+  private readonly containsBuildRetryMs = TRIGRAM_BUILD_RETRY_MS;
+  private destroyed = false;
 
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
   // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
@@ -491,8 +503,28 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
-    if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
+    if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) this.retryContainsBuild();
+    else if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
     else this.logger.log(`Trigram index ready in ${Date.now() - start} ms`);
+  }
+
+  /**
+   * Another replica holds the Postgres build lock. If it dies or its build fails, the lock is released
+   * with no valid index, and only a build attempt of this replica's own finds that, so it tries the lock
+   * again until the index is ready or the attempt fails for a cause of its own. A search in the meantime
+   * still finds an index the other replica finished (probePostgresTrigram).
+   */
+  private retryContainsBuild(): void {
+    if (this.destroyed) return;
+    this.containsBuildRetry = setTimeout(() => {
+      if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) void this.buildContainsIndex();
+    }, this.containsBuildRetryMs);
+    this.containsBuildRetry.unref();
+  }
+
+  onModuleDestroy(): void {
+    this.destroyed = true;
+    clearTimeout(this.containsBuildRetry);
   }
 
   /** Returns why this SQLite library cannot hold the index, or null once the index is complete. */
@@ -509,15 +541,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * Runs createPostgresTrigramSchema on a connection of its own: CREATE INDEX CONCURRENTLY cannot run
    * inside a transaction, which rules out a migration, and outlasts the runtime pool's statement_timeout,
    * which is lifted here. The advisory lock lets one replica build while the others answer 501 until the
-   * index is valid. Returns why the index cannot be used yet, or null once it is valid.
+   * index is valid (see retryContainsBuild). Returns why the index cannot be used yet, or null once it is
+   * valid.
    */
   private async buildPostgresTrigramIndex(): Promise<string | null> {
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
     try {
       const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
-        `SELECT pg_try_advisory_lock($1, $2) AS locked`,
-        [...TRIGRAM_BUILD_LOCK_KEYS],
+        `SELECT pg_try_advisory_lock(${TRIGRAM_BUILD_LOCK}) AS locked`,
+        [TRIGRAM_BUILD_LOCK_KEY],
       );
       if (!locked) return CONTAINS_UNAVAILABLE.building;
       try {
@@ -526,7 +559,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       } finally {
         // The connection returns to the pool: the next borrower must find its timeout and no lock.
         await runner.query('RESET statement_timeout');
-        await runner.query('SELECT pg_advisory_unlock($1, $2)', [...TRIGRAM_BUILD_LOCK_KEYS]);
+        await runner.query(`SELECT pg_advisory_unlock(${TRIGRAM_BUILD_LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
       }
     } finally {
       await runner.release();
