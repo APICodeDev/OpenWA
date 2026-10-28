@@ -34,3 +34,24 @@ test('the active filter pill is heavier than the others, so it does not differ b
     'the active pill has the weight of the others',
   );
 });
+
+// Every rule body whose selector list names the selector, in order.
+const rulesFor = (selector: string): string[] =>
+  [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(m => m[1].split(',').some(s => s.trim() === selector))
+    .map(m => m[2]);
+
+test('the chat list header is as high as the room header, whatever minimum the dashboard header has', () => {
+  const height = (selector: string): string | undefined =>
+    rulesFor(selector)
+      .map(body => /(?:^|;)\s*height:\s*([^;]+)/.exec(body)?.[1].trim())
+      .find(Boolean);
+  assert.equal(height('.chats-page .sidebar-header'), height('.chats-page .room-header'));
+  // Layout.css styles .sidebar-header, the class this header shares, with min-height: 72px.
+  const layout = readFileSync(join(here, '..', 'components', 'Layout.css'), 'utf8');
+  assert.match(layout, /\.sidebar-header\s*\{[^}]*min-height:\s*72px/, 'the dashboard header no longer sets a minimum');
+  assert.ok(
+    rulesFor('.chats-page .sidebar-header').some(body => /min-height:\s*0[;\s]/.test(body)),
+    'the dashboard minimum stretches the chat list header',
+  );
+});
