@@ -621,7 +621,7 @@ for (const reactStrictMode of [false, true]) {
       fetchCalls.some(c => c.method === 'GET' && c.path === `/api/sessions/${SESSION.id}/contacts/check/15550009999`),
       'the number was not checked with the gateway',
     );
-    await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
     assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open over the list');
   });
 }
@@ -641,6 +641,48 @@ test('the New chat search clear button returns focus to the field it cleared', a
   assert.equal(field.value, '');
   assert.ok(!screen.queryByRole('button', { name: 'Clear search' }), 'the clear button stayed');
   assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
+});
+
+test('an unnamed chat is titled by its number, formatted and isolated left to right, in the header and the panel', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  aliceNow.name = '';
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('15550001111'));
+  const title = await waitFor(() => {
+    const name = container.querySelector('.room-header .room-contact-name') as HTMLElement;
+    assert.equal(name?.textContent, '+1 555 000 1111');
+    return name;
+  });
+  assert.equal(title.querySelector('bdi')?.getAttribute('dir'), 'ltr', 'the number in the title is not isolated');
+  assert.equal(container.querySelector('.room-header .room-contact-phone') === null, true, 'the number is shown twice');
+  assert.ok(screen.getByRole('heading', { level: 2, name: '+1 555 000 1111' }), 'the room heading is not the number');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  const panel = await waitFor(() => container.querySelector('.contact-info-panel') as HTMLElement);
+  const heading = within(panel).getByRole('heading', { level: 3 });
+  assert.equal(heading.textContent, '+1 555 000 1111');
+  assert.equal(heading.querySelector('bdi')?.getAttribute('dir'), 'ltr', 'the number in the panel is not isolated');
+  assert.equal(panel.querySelector('.contact-info-sub') === null, true, 'the panel repeats the number under itself');
+});
+
+test('an unnamed privacy-id chat is titled by the number it resolves to, and its own digits are never formatted', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const lid = '262813461250072@lid';
+  Object.assign(aliceNow, { id: lid, name: '' });
+  const title = () => container.querySelector('.room-header .room-contact-name')?.textContent;
+
+  // Unresolved, it keeps the digits of its id as they are: they are no phone number.
+  let { container } = renderPage();
+  fireEvent.click(await screen.findByText('262813461250072'));
+  await waitFor(() => assert.equal(phoneRequests().length, 1, 'the privacy id was not looked up'));
+  await settle();
+  assert.equal(title(), '262813461250072');
+  rtl.cleanup();
+
+  lidPhones[lid] = '15550006666';
+  ({ container } = renderPage());
+  fireEvent.click(await screen.findByText('262813461250072'));
+  await waitFor(() => assert.equal(title(), '+1 555 000 6666'));
 });
 
 // ── The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
@@ -690,7 +732,7 @@ test('a privacy-id chat of another phone is not mistaken for the number, which o
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.equal(listedChatCards(container), before + 1, 'the new chat was not added to the list');
 });
 
@@ -703,7 +745,7 @@ test('a privacy id the engine cannot resolve right now does not stop a chat from
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
 });
 
@@ -732,7 +774,7 @@ test('an answer about a privacy id that the page cannot read does not stop a cha
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
 });
 

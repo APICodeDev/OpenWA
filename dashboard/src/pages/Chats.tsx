@@ -385,7 +385,11 @@ export function Chats() {
   );
   const activePhoneText =
     activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
-  const activeChatTitle = activeChat ? activeChat.name || activeChat.id.split('@')[0] : '';
+  // An unnamed chat is titled by its number when one is known, never by the bare digits of its id (a @lid's are no
+  // phone). Shown, that number is isolated left to right, as it is under a name.
+  const activeChatTitle = activeChat ? activeChat.name || activePhoneText || activeChat.id.split('@')[0] : '';
+  const activeChatTitleText =
+    activeChat && !activeChat.name && activePhoneText ? <bdi dir="ltr">{activePhoneText}</bdi> : activeChatTitle;
 
   // The list loaders below reach the translator and the error toast through a ref, not as
   // dependencies: both change identity on a language switch, which re-ran the session load (it
@@ -1957,7 +1961,7 @@ export function Chats() {
                       onImageError={() => activePp.refetch()}
                     />
                     <span className="room-contact-info">
-                      <span className="room-contact-name">{activeChatTitle}</span>
+                      <span className="room-contact-name">{activeChatTitleText}</span>
                       {/* Personal chats show the prettified phone number — local formatting for
                           @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
                           must never be formatted as one). Only under a saved name: an unnamed chat's
@@ -2195,16 +2199,19 @@ export function Chats() {
                   size="lg"
                   onImageError={() => activePp.refetch()}
                 />
-                <h3>{activeChatTitle}</h3>
-                <p className="contact-info-sub">
-                  {activePhoneText ? (
-                    <bdi dir="ltr">{activePhoneText}</bdi>
-                  ) : activeChat.isGroup ? (
-                    t('chats.groupSubtitle')
-                  ) : (
-                    t('chats.privateContactSubtitle')
-                  )}
-                </p>
+                <h3>{activeChatTitleText}</h3>
+                {/* The number goes under a name only; an unnamed chat's title already is the number. */}
+                {(activeChat.name || !activePhoneText) && (
+                  <p className="contact-info-sub">
+                    {activePhoneText ? (
+                      <bdi dir="ltr">{activePhoneText}</bdi>
+                    ) : activeChat.isGroup ? (
+                      t('chats.groupSubtitle')
+                    ) : (
+                      t('chats.privateContactSubtitle')
+                    )}
+                  </p>
+                )}
                 <dl className="contact-info-list">
                   {activePhoneText && (
                     <>
