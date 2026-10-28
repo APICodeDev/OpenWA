@@ -663,6 +663,21 @@ test('the New chat search clear button returns focus to the field it cleared', a
   assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
 });
 
+test('the chat list search clear button returns focus to the field it cleared', async () => {
+  const { screen, fireEvent } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const field = container.querySelector('.chat-search-input input') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'Ali' } });
+  const clear = screen.getByRole('button', { name: 'Clear search' });
+  clear.focus();
+  fireEvent.click(clear);
+
+  assert.equal(field.value, '');
+  assert.ok(!screen.queryByRole('button', { name: 'Clear search' }), 'the clear button stayed');
+  assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
+});
+
 test('an unnamed chat is titled by its number, formatted and isolated left to right, in the header and the panel', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   aliceNow.name = '';

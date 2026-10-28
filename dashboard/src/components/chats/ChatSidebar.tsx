@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   AlertCircle,
@@ -102,6 +102,7 @@ function ChatSidebar({
   // Posting a status needs an operator key; a read-only key would only reach a 403.
   const { canWrite, scoped } = useRole();
   const [showMessageSearch, setShowMessageSearch] = useState(false);
+  const searchRef = useRef<HTMLInputElement | null>(null);
 
   const formatLastMessageSnippet = (chat: Chat) => chat.lastMessage || '';
 
@@ -242,6 +243,7 @@ function ChatSidebar({
         <div className="chat-search-input">
           <Search size={18} />
           <input
+            ref={searchRef}
             type="text"
             placeholder={t('chats.searchPlaceholder')}
             value={searchQuery}
@@ -251,7 +253,11 @@ function ChatSidebar({
             <button
               type="button"
               className="search-clear"
-              onClick={() => onSearchQueryChange('')}
+              onClick={() => {
+                onSearchQueryChange('');
+                // The button leaves the page with the text, and focus would go with it.
+                searchRef.current?.focus();
+              }}
               aria-label={t('chats.clearSearch')}
               title={t('chats.clearSearch')}
             >
