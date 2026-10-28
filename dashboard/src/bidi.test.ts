@@ -31,3 +31,23 @@ test('the header lines hug the start edge with the name instead of stretching ac
     assert.match(body('pages/Chats.css', selector), /align-self:\s*flex-start/, selector);
   }
 });
+
+test('text cut with an ellipsis takes its direction from its own characters', () => {
+  // The ellipsis removes the end of the line in the direction of the box. Under the page direction a Latin name in
+  // an Arabic page (or an Arabic one in an English page) lost its first letters and kept its last.
+  const cut = [
+    '.chats-page .chat-item-name',
+    '.chats-page .chat-item-snippet',
+    '.chats-page .room-contact-info h3',
+    '.chats-page .preview-filename',
+    '.chats-page .quote-body',
+    '.chats-page .replying-to-title',
+    '.chats-page .replying-to-body',
+    '.chats-page .group-info-member .name',
+  ];
+  for (const selector of cut) {
+    const rule = body('pages/Chats.css', selector);
+    assert.match(rule, /text-overflow:\s*ellipsis/, `${selector} is expected to be cut with an ellipsis`);
+    assert.match(rule, /unicode-bidi:\s*plaintext/, selector);
+  }
+});
