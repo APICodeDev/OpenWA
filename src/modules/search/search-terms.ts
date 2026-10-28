@@ -51,12 +51,6 @@ function wordsOf(word: string): number {
 }
 
 /**
- * How many words a query holds: each run of letters or digits is one, so punctuation separates words as
- * whitespace does (`a.b.c` is three, and a quoted token of them is a three-word phrase to match), and a
- * symbol or emoji that stands apart counts as a word of its own. A whitespace-separated word said again
- * is run once and counts once, and a word with no letter, digit or symbol counts as one.
- */
-/**
  * Folds text the way the match=contains indexes compare it: accents dropped (NFD, then every combining
  * mark removed, as remove_diacritics and unaccent do for Latin text) and case lowered. Used to compare
  * terms and to place highlights, never to build SQL, which leaves folding to the database.
@@ -79,6 +73,12 @@ export function containsTerms(q: string): string[] {
   return [...terms.values()];
 }
 
+/**
+ * How many words a query holds: each run of letters or digits is one, so punctuation separates words as
+ * whitespace does (`a.b.c` is three, and a quoted token of them is a three-word phrase to match), and a
+ * symbol or emoji that stands apart counts as a word of its own. A whitespace-separated word said again
+ * is run once and counts once, and a word with no letter, digit or symbol counts as one.
+ */
 export function searchTermCount(q: string): number {
   let count = 0;
   for (const word of new Set(q.trim().split(/\s+/))) {

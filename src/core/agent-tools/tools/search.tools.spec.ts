@@ -51,6 +51,17 @@ describe('MessageSearch tool', () => {
     expect(search).toHaveBeenCalledWith({ q: 'invoice', match: 'contains' }, undefined, undefined);
   });
 
+  it('bounds dateFrom and dateTo to the safe integer range, as REST does', async () => {
+    const key = { id: 'k1', allowedSessions: null, allowedChats: null };
+
+    await expect(call(key, { q: 'invoice', dateFrom: 1e22 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(call(key, { q: 'invoice', dateTo: -1e22 })).rejects.toBeInstanceOf(BadRequestException);
+    expect(search).not.toHaveBeenCalled();
+
+    await call(key, { q: 'invoice', dateFrom: -Number.MAX_SAFE_INTEGER, dateTo: Number.MAX_SAFE_INTEGER });
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects an unknown match mode', async () => {
     await expect(call({ id: 'k1', allowedSessions: null }, { q: 'invoice', match: 'fuzzy' })).rejects.toBeInstanceOf(
       BadRequestException,

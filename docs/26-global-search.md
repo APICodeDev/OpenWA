@@ -80,7 +80,8 @@ building, `match=contains` answers `501`:
 `contains` finds everything `word` finds, plus partial words. Every whitespace-separated term must
 appear, as with `word`; a repeated term (also one that differs only in case or accents) runs once. A
 trigram index cannot look up a term it takes no trigram from, so such a term only narrows what another
-term found, and a query made of such terms alone answers `400`. What counts differs by dialect: SQLite
+term found, and a query made of such terms alone, two-character CJK words such as `東京` included,
+answers `400`. What counts differs by dialect: SQLite
 takes trigrams from any three characters, so a term needs three (`id` and `pm` only narrow, `:-)`
 searches); `pg_trgm` takes them from letters and digits only, so on Postgres a term needs three of them
 in a row (`:-)`, `...`, `😂😂😂` and `a.b` only narrow there, and alone answer `400`). The query grammar of
@@ -115,7 +116,9 @@ Postgres's `unaccent` also transliterates letters that have no decomposition: `�
 and `ё` become `L`, `ss`, `O`, `i`, `oe` and `е`. So on Postgres `lodz` finds "Łódź", `strasse` finds
 "Straße" and `orsted` finds "Ørsted", while SQLite's `remove_diacritics` keeps those letters and finds
 none of them. The application compares and highlights the way SQLite folds, so those extra Postgres hits
-come back with `score` 0 and a snippet without `<mark>`.
+come back with `score` 0 and a snippet without `<mark>`. A term under three characters narrows with `LIKE`
+on SQLite, which folds ASCII case only and keeps accents, and with `ILIKE` on `openwa_unaccent(body)` on
+Postgres, which folds both.
 
 **Requirements.** `SEARCH_CONTAINS_ENABLED=true`. On SQLite, `contains` needs FTS5 and SQLite 3.45+
 (the first with `remove_diacritics` for the trigram tokenizer); the bundled `better-sqlite3` ships both.
@@ -298,8 +301,8 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   the existing rows 1,000 rowids at a time, yielding to the event loop between batches; rows stored
   meanwhile are indexed by the triggers. A trigram index holds every three-character window of the body:
   on a synthetic corpus of 1,000,000 messages it took 289 MB, about 3.1 times the message text, and a
-  9.4 s backfill. Later boots only check it and re-add what is missing, so an interrupted backfill
-  resumes where it stopped.
+  9.4 s backfill. Later boots only check it; an index whose document count differs from `messages` (an
+  interrupted backfill, or rowids renumbered by a table rebuild) is emptied and backfilled again.
 - **PostgreSQL** creates the `pg_trgm` and `unaccent` extensions when they are missing and the role may,
   the IMMUTABLE `openwa_unaccent(text)` wrapper, and the `idx_messages_body_trgm` GIN index on
   `openwa_unaccent(body)` with `CREATE INDEX CONCURRENTLY`, so writes go on during the build (it cannot

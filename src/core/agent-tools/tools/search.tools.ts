@@ -46,13 +46,23 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         q: z.string().trim().min(1).max(SEARCH_QUERY_MAX_LENGTH).describe('Search term'),
         match: z
           .enum(SEARCH_MATCH_MODES)
-          .default(defaultMatch)
+          .optional()
           .describe(`contains: any part of a word; word: whole words only. Default: ${defaultMatch}`),
         chatId: chatIdSchema.optional().describe('Restrict to a single chat JID'),
         from: z.string().optional().describe('Filter by sender phone or JID'),
         direction: z.enum(MessageDirection).optional(),
-        dateFrom: z.number().optional().describe('Epoch-ms lower bound (inclusive)'),
-        dateTo: z.number().optional().describe('Epoch-ms upper bound (inclusive)'),
+        dateFrom: z
+          .number()
+          .min(-Number.MAX_SAFE_INTEGER)
+          .max(Number.MAX_SAFE_INTEGER)
+          .optional()
+          .describe('Epoch-ms lower bound (inclusive)'),
+        dateTo: z
+          .number()
+          .min(-Number.MAX_SAFE_INTEGER)
+          .max(Number.MAX_SAFE_INTEGER)
+          .optional()
+          .describe('Epoch-ms upper bound (inclusive)'),
         limit: z.number().int().min(1).max(SEARCH_LIMIT_MAX).optional(),
         offset: z.number().int().min(0).max(SEARCH_OFFSET_MAX).optional(),
       }),
@@ -60,7 +70,14 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         if (!search) throw new NotImplementedException('Search is disabled (SEARCH_ENABLED=false).');
         // Both scopes come from the authenticated key, never the input, exactly as SearchController
         // passes them: SearchService overwrites any caller-supplied scope at the provider boundary.
-        return search.search(input, apiKey.allowedSessions ?? undefined, await chatScope?.idsForFilter(apiKey));
+        const sessionIds = apiKey.allowedSessions ?? undefined;
+        const chatIds = await chatScope?.idsForFilter(apiKey);
+        try {
+          return await search.search({ ...input, match: input.match ?? defaultMatch }, sessionIds, chatIds);
+        } catch (error) {
+          if (input.match || defaultMatch === 'word' || !(error instanceof NotImplementedException)) throw error;
+          return search.search({ ...input, match: 'word' }, sessionIds, chatIds);
+        }
       },
     }),
   ];

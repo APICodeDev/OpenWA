@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `match=contains` to `GET /api/search`, which needs `SEARCH_CONTAINS_ENABLED=true` (off by default; the route answers `501` otherwise): case- and accent-insensitive substring search on a trigram index (FTS5 on SQLite, `pg_trgm` and `unaccent` on PostgreSQL) that ranks the 1,000 most recently stored matches, so `total` is at most 1,000 in this mode; `match=word` stays the default and the SDKs accept `match`. Thanks @luisffm.
-- Add the `MessageSearch` MCP tool, which runs the global message search for agents. It defaults to `match=contains` only with `SEARCH_CONTAINS_ENABLED=true`, and searches by word otherwise or while the contains index is not ready. Thanks @luisffm.
+- Add `match=contains` to `GET /api/search`, which needs `SEARCH_CONTAINS_ENABLED=true`: case- and accent-insensitive substring search on a trigram index (FTS5 on SQLite, `pg_trgm` and `unaccent` on PostgreSQL) that ranks the 1,000 most recently stored matches, so `total` is at most 1,000 in this mode; `match=word` stays the default and the SDKs accept `match`. Thanks @luisffm.
+- Add the `MessageSearch` MCP tool, which runs the global message search for agents, with `match=contains` by default only when `SEARCH_CONTAINS_ENABLED=true`. Thanks @luisffm.
 
 ## [0.26.0] - 2026-10-28
 

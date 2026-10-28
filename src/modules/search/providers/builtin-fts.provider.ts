@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import { setImmediate } from 'node:timers/promises';
 import { createLogger } from '../../../common/services/logger.service';
+import { awaitNoOpenTransaction } from '../../../common/utils/shared-connection';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, QueryRunner } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
@@ -388,7 +389,14 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
     }
     // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches).
-    if (!batched) {
+    if (batched) {
+      const [counts] = await this.dataSource.query<Array<{ messages: number; indexed: number }>>(
+        `SELECT (SELECT count(*) FROM "messages") AS messages, (SELECT count(*) FROM "${docsize}") AS indexed`,
+      );
+      if (Number(counts.messages) !== Number(counts.indexed)) {
+        await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
+      }
+    } else {
       const gapRow: unknown[] = await this.dataSource.query(
         `SELECT EXISTS(SELECT 1 FROM "messages" m WHERE m."body" IS NOT NULL
          AND NOT EXISTS (SELECT 1 FROM "${docsize}" d WHERE d."rowid" = m."rowid")) AS missing`,
@@ -440,10 +448,11 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       `SELECT max("rowid") AS last FROM "messages"`,
     );
     for (let from = 0; from < (last ?? 0); from += TRIGRAM_BACKFILL_BATCH) {
+      if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
       await this.dataSource.query(
         `INSERT INTO "${table}"("rowid", "body")
            SELECT m."rowid", m."body" FROM "messages" m
-           WHERE m."rowid" > ? AND m."rowid" <= ? AND m."body" IS NOT NULL
+           WHERE m."rowid" > ? AND m."rowid" <= ?
            AND NOT EXISTS (SELECT 1 FROM "${table}_docsize" d WHERE d."rowid" = m."rowid")`,
         [from, from + TRIGRAM_BACKFILL_BATCH],
       );
@@ -478,6 +487,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     if (!(await this.sqliteHasFts5())) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     const rows: Array<{ version: string }> = await this.dataSource.query(`SELECT sqlite_version() AS version`);
     if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return CONTAINS_UNAVAILABLE.sqliteTrigram;
+    if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
     await this.ensureSqliteIndex(TRIGRAM_INDEX);
     return null;
   }

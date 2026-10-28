@@ -190,8 +190,7 @@ describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
   const trigramTables = async () =>
     (await ds.query<unknown[]>(`SELECT name FROM sqlite_master WHERE name = 'messages_trgm'`)).length;
 
-  // The `rank = 1` form checks the index against the content table; valid here because no fixture body
-  // is NULL (see builtin-fts.provider.backfill.spec.ts).
+  // The `rank = 1` form checks the index against the content table, NULL bodies included.
   const integrityCheck = () => ds.query(`INSERT INTO messages_trgm(messages_trgm, rank) VALUES ('integrity-check', 1)`);
 
   const insertBulk = async (count: number, body: (i: number) => string) => {
@@ -220,6 +219,7 @@ describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
 
   it('builds over existing rows twice into a sound index the triggers then keep current', async () => {
     await insertBulk(2500, i => `Bulk receipt ${i}`);
+    await ds.query(`UPDATE messages SET body = NULL WHERE body = 'Bulk receipt 7'`);
     const provider = new BuiltInFtsProvider(ds, containsOn);
 
     await provider.buildContainsIndex();
