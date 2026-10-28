@@ -128,10 +128,11 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   inherits keys a sibling projected, and hook dispatch resolves config without per-instance
   scoping. Run one enabled wildcard instance per plugin, or scope instances concretely, until the
   projection is re-keyed per instance. The base configuration is also the layer under every instance
-  and per-session override, secret fields included: a secret saved as a shared default, or projected by a
-  wildcard instance, reaches an instance or override that sets its own host. Keep a secret on the instance
-  that uses it, and treat a key allowed to create or edit instances as able to send the shared secrets to
-  a host it chooses. Capability calls are not confined to the dispatching instance's
+  and per-session override. An instance or override that points a `net.allowConfigHosts` key at another
+  origin than the layer beneath does not inherit that layer's `secret` fields and must bring its own; one
+  that keeps the same origin, or sets no host key, inherits them. A plugin that reaches its destination
+  through a key outside `net.allowConfigHosts` (for example under `net.allow: ['*']`) is not covered, so
+  keep such a secret on the instance that uses it. Capability calls are not confined to the dispatching instance's
   scope either: separating tenants across instances of one plugin relies on the handler using the
   delivery's `sessionId`.
 - **`conversation.send` capability** — a normalized outbound send authored by the plugin and translated

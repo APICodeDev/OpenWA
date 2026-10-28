@@ -252,9 +252,11 @@ export class PluginSandboxBridge {
                 plugin.sessionConfig,
                 instance?.sessionScope ?? undefined,
                 plugin.manifest.sessionScoped !== false,
+                plugin.manifest,
               )
             : plugin.config,
           instance?.config,
+          plugin.manifest,
         )
       : undefined;
     const result = await host.dispatchWebhook({
@@ -530,6 +532,7 @@ export class PluginSandboxBridge {
                 plugin.sessionConfig,
                 hookCtx.sessionId,
                 plugin.manifest.sessionScoped !== false,
+                plugin.manifest,
               ),
               // The chain this dispatch belongs to, so a capability the handler calls is guarded
               // against re-firing any event of it (not only this one) once it returns to the host.

@@ -204,7 +204,9 @@ A `configSchema` field may set `secret: true` (e.g. an API key): the value is ma
 preserved on an unchanged write. A write keeps the stored value for the mask and for an empty string, and
 removes it for an explicit `null`. A per-session override and an integration instance's own config are
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
-not replace it, including one that sets its own host.
+not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
+another origin than the layer beneath: it does not inherit that layer's secret fields (a list that holds
+one is dropped whole) and must bring its own.
 
 ### Plugin Entry Point
 

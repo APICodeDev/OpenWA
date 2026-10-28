@@ -267,6 +267,64 @@ describe('ingress dispatch resolves config per INSTANCE, not per session scope',
   });
 });
 
+describe('ingress dispatch does not carry a base secret to another host', () => {
+  // An adapter that calls the host named in `baseUrl` with a stored token. A key that may create an
+  // instance on one session, or write that session's override, picks the host; the token is the
+  // operator's and belongs to the host it was saved for.
+  const adapter: Partial<PluginManifest> = {
+    net: { allowConfigHosts: ['baseUrl'] },
+    configSchema: {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    },
+  };
+  const baseConfig = { baseUrl: 'https://chat.example.com', apiToken: 'OPERATOR-TOKEN' };
+
+  it('withholds the operator token from an instance that names its own host', async () => {
+    const tenant = instanceRow('tenant', { baseUrl: 'https://attacker.example' }, 'S1');
+    const { bridge, calls } = makeBridge({ rows: [tenant], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  it('withholds it from an instance on a session whose override names another host', async () => {
+    const tenant = instanceRow('tenant', null, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://attacker.example' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  it('keeps the token for an instance that names the operator host or none', async () => {
+    const same = instanceRow('same', { baseUrl: 'https://chat.example.com/other' }, 'S1');
+    const none = instanceRow('none', {}, 'S2');
+    const { bridge, calls } = makeBridge({ rows: [same, none], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('same', 'S1'));
+    await bridge.dispatchWebhookForInstance(job('none', 'S2'));
+
+    expect(calls[0].config).toMatchObject({ apiToken: 'OPERATOR-TOKEN' });
+    expect(calls[1].config).toEqual(baseConfig);
+  });
+
+  it('hands an instance the token it brings for its own host', async () => {
+    const tenant = instanceRow('tenant', { baseUrl: 'https://other.example', apiToken: 'TENANT-TOKEN' }, 'S1');
+    const { bridge, calls } = makeBridge({ rows: [tenant], baseConfig, manifestOverrides: adapter });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://other.example', apiToken: 'TENANT-TOKEN' });
+  });
+});
+
 describe('ingress dispatch refuses an instance that is disabled or deleted', () => {
   it('rejects a disabled instance without reaching the worker', async () => {
     const a = { ...instanceRow('acct-a', { apiToken: 'token-A' }, SHARED_SCOPE), enabled: false };
