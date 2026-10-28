@@ -480,6 +480,7 @@ CREATE TABLE webhooks (
   "session.restriction",
   "presence.update",
   "event.response",
+  "poll.vote",
   "group.join",
   "group.leave",
   "group.update",

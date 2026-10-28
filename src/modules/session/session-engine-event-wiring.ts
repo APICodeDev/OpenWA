@@ -296,6 +296,25 @@ export class SessionEngineEventWiring {
         host.eventsGateway.emitEventResponse(id, payload);
         void host.webhookService.dispatch(id, 'event.response', payload);
       },
+      onPollVote: (event): void => {
+        if (!host.isLiveEngine(id, engine)) return;
+        if (!event.pollMessageId) {
+          this.logger.warn('Ignoring poll vote without a poll message id', {
+            sessionId: id,
+            action: 'poll_vote_ignored',
+          });
+          return;
+        }
+        this.logger.debug(`Poll vote: ${event.selectedOptions.length} option(s) on ${event.pollMessageId}`, {
+          sessionId: id,
+          chatId: event.chatId,
+          pollMessageId: event.pollMessageId,
+          action: 'poll_vote',
+        });
+        const payload = { sessionId: id, ...event };
+        host.eventsGateway.emitPollVote(id, payload);
+        void host.webhookService.dispatch(id, 'poll.vote', payload);
+      },
       onGroupEvent: (event): void => {
         if (!host.isLiveEngine(id, engine)) return;
         this.logger.debug(`Group event: ${event.kind} in ${event.groupId}`, {

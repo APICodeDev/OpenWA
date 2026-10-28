@@ -28,6 +28,7 @@ const (
 	EventSessionRestriction   WebhookEvent = "session.restriction"
 	EventPresenceUpdate       WebhookEvent = "presence.update"
 	EventEventResponse        WebhookEvent = "event.response"
+	EventPollVote             WebhookEvent = "poll.vote"
 	EventCallAccepted         WebhookEvent = "call.accepted"
 	EventCallRejected         WebhookEvent = "call.rejected"
 	EventCallMissed           WebhookEvent = "call.missed"

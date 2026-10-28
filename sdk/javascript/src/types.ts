@@ -959,6 +959,7 @@ export type WebhookEvent =
   | 'session.restriction'
   | 'presence.update'
   | 'event.response'
+  | 'poll.vote'
   | 'call.accepted'
   | 'call.rejected'
   | 'call.missed'

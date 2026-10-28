@@ -118,6 +118,13 @@ export function generateIdempotencyKey(event: string, data: Record<string, unkno
       // id, so (session, RSVP id) is already unique per occurrence and stable across retries.
       return `rsvp_${toStr(data.sessionId)}_${toStr(data.responseMessageId)}`;
 
+    case 'poll.vote':
+      // A vote carries no id of its own, but each change of a voter's selection is stamped by the
+      // voter's clock, so (session, poll, voter, timestamp) is distinct per change and stable across
+      // retries. The stamp is whole seconds, so the selection is hashed in as well: two taps on a
+      // multiple-choice poll within one second are two changes and must not share a key.
+      return `vote_${toStr(data.sessionId)}_${toStr(data.pollMessageId)}_${toStr(data.voterId)}_${toStr(data.timestamp)}_${hashData({ selectedOptions: data.selectedOptions ?? null })}`;
+
     case 'presence.update':
       // Keyed on the chat and salted per occurrence. Only genuine state CHANGES are dispatched, and
       // a contact who types, stops, and types again produces the same payload each time — content

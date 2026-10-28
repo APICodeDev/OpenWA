@@ -1,6 +1,6 @@
 # OpenWA SDKs
 
-This document describes SDK 0.7.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` webhook event name requires an OpenWA release newer than 0.25.0.
+This document describes SDK 0.7.0. Send idempotency, webhook failure redrive, message-window filters, poll choices, last-message types, and the `event.response` webhook event name require OpenWA 0.25.0 or later. The `message.receipt` and `poll.vote` webhook event names require an OpenWA release newer than 0.25.0.
 
 Official client libraries for [OpenWA](https://github.com/rmyndharis/OpenWA), the
 open-source WhatsApp API Gateway. OpenWA is an independent project, not
