@@ -43,6 +43,12 @@ describe('SearchQueryDto', () => {
     );
   });
 
+  // PostgreSQL refuses U+0000 in a bound parameter in either match mode, and SQLite's FTS5 in a contains query.
+  it('rejects a q holding a NUL character', () => {
+    const errors = validateSync(fromQuery({ q: `invoice${String.fromCharCode(0)}` }));
+    expect(errors.map(e => [e.property, Object.keys(e.constraints ?? {})])).toEqual([['q', ['notContains']]]);
+  });
+
   it('rejects limit < 1 (@Min(1))', () => {
     const dto = fromQuery({ q: 'hello', limit: '0' });
     expect(validateSync(dto).some(e => e.property === 'limit')).toBe(true);

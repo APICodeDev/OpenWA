@@ -5,7 +5,7 @@ import { BadRequestException, NotImplementedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { join } from 'path';
-import { BuiltInFtsProvider, TRIGRAM_BUILD_LOCK_KEYS } from './builtin-fts.provider';
+import { BuiltInFtsProvider, TRIGRAM_BUILD_LOCK, TRIGRAM_BUILD_LOCK_KEY } from './builtin-fts.provider';
 
 /**
  * Postgres runtime coverage for match=contains: the pg_trgm/unaccent schema buildContainsIndex creates
@@ -123,22 +123,68 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       expect((await provider.search({ q: 'voic', match: 'contains' })).total).toBe(2);
     });
 
+    // The lock the provider takes, keyed by the `messages` table the session's search_path resolves.
+    const LOCK = TRIGRAM_BUILD_LOCK;
+
     it('leaves the build to the replica holding the lock, then serves the index it built', async () => {
       const other = ds.createQueryRunner();
       await other.connect();
+      const waiting = new BuiltInFtsProvider(ds, containsOn);
       try {
-        await other.query(`SELECT pg_advisory_lock($1, $2)`, [...TRIGRAM_BUILD_LOCK_KEYS]);
-        const waiting = new BuiltInFtsProvider(ds, containsOn);
+        await other.query(`SELECT pg_advisory_lock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
         await waiting.buildContainsIndex();
 
         expect(await trigramState()).toEqual({ extensions: 0, fn: false, idx: null });
         await expect(waiting.search({ q: 'voic', match: 'contains' })).rejects.toThrow(/still being built/);
 
-        await other.query(`SELECT pg_advisory_unlock($1, $2)`, [...TRIGRAM_BUILD_LOCK_KEYS]);
+        await other.query(`SELECT pg_advisory_unlock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
         await new BuiltInFtsProvider(ds, containsOn).buildContainsIndex();
 
         expect((await waiting.search({ q: 'voic', match: 'contains' })).total).toBe(2);
       } finally {
+        waiting.onModuleDestroy();
+        await other.release();
+      }
+    });
+
+    it('builds the index itself once the replica holding the lock lets go without one', async () => {
+      const other = ds.createQueryRunner();
+      await other.connect();
+      const waiting = new BuiltInFtsProvider(ds, containsOn);
+      Object.assign(waiting, { containsBuildRetryMs: 50 });
+      try {
+        await other.query(`SELECT pg_advisory_lock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+        await waiting.buildContainsIndex();
+        await expect(waiting.search({ q: 'voic', match: 'contains' })).rejects.toThrow(/still being built/);
+
+        // The holder dies or fails: the lock goes, and no index is left behind.
+        await other.query(`SELECT pg_advisory_unlock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+        for (let i = 0; i < 200 && (await trigramState()).idx !== true; i++) await new Promise(r => setTimeout(r, 50));
+
+        expect(await trigramState()).toEqual({ extensions: 2, fn: true, idx: true });
+        expect((await waiting.search({ q: 'voic', match: 'contains' })).total).toBe(2);
+      } finally {
+        waiting.onModuleDestroy();
+        await other.release();
+      }
+    });
+
+    it('is not held up by the build lock of a deployment in another schema of the database', async () => {
+      const other = ds.createQueryRunner();
+      await other.connect();
+      try {
+        await other.query(`CREATE SCHEMA "elsewhere"`);
+        await other.query(`CREATE TABLE "elsewhere"."messages" (LIKE "public"."messages")`);
+        await other.query(`SET search_path = "elsewhere"`);
+        await other.query(`SELECT pg_advisory_lock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+
+        await new BuiltInFtsProvider(ds, containsOn).buildContainsIndex();
+
+        expect((await trigramState()).idx).toBe(true);
+      } finally {
+        await other.query(`SELECT pg_advisory_unlock(${LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
+        await other.query(`RESET search_path`);
+        await other.query(`DROP SCHEMA "elsewhere" CASCADE`);
         await other.release();
       }
     });
@@ -176,9 +222,12 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
     });
 
     it('rejects a query with no run of three letters or digits, which pg_trgm cannot look up', async () => {
-      for (const q of ['😂😂😂', '...', ':-)', 'a.b.c']) {
+      for (const q of ['😂😂😂', '...', ':-)', 'a.b.c', '안녕', '\u02bc'.repeat(3), '¹²³']) {
         await expect(provider.search({ q, match: 'contains' })).rejects.toBeInstanceOf(BadRequestException);
       }
+      await insert('m5', 's1', '서울역에서 라멘을 먹었다', 50);
+      expect((await provider.search({ q: '서울역', match: 'contains' })).hits.map(h => h.messageId)).toEqual(['m5']);
+      expect((await provider.search({ q: 'ラーメン', match: 'contains' })).total).toBe(0);
       expect((await provider.search({ q: ':-) invoice', match: 'contains' })).total).toBe(0);
       expect((await provider.search({ q: 'INV-2048', match: 'contains' })).total).toBe(1);
     });

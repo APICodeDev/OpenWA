@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, HttpException, HttpStatus, NotFoundExc
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { GroupMemberAddMode, IWhatsAppEngine, MediaInput } from '../../engine/interfaces/whatsapp-engine.interface';
 import { resolveMediaBody } from '../message/media-cap.util';
-import { chatKind } from '../../engine/identity/wa-id';
+import { chatKind, toNeutralJid } from '../../engine/identity/wa-id';
 import { isAddressableParticipant } from '../../engine/identity/wa-id';
 import { SetGroupPictureDto } from './dto/group.dto';
 import { paginate, ListOptions } from '../../common/utils/paginate';
@@ -165,7 +165,9 @@ export class GroupService {
 
   setGroupMemberLabel(sessionId: string, groupId: string, label: string): Promise<void> {
     this.assertGroupId(groupId);
-    return this.getEngine(sessionId).setGroupMemberLabel(groupId, label);
+    // Baileys relays the label as a group message only to a jid whose domain is exactly `g.us`; any
+    // other spelling the check accepts (`120363@G.US`, a trailing space) went out as a 1:1 message.
+    return this.getEngine(sessionId).setGroupMemberLabel(toNeutralJid(groupId), label);
   }
 
   leaveGroup(sessionId: string, groupId: string) {

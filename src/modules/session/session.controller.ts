@@ -761,7 +761,15 @@ export class SessionController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Mark a chat as unread' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully', type: SessionActionResponseDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Returns `{ success }`. `false` means the engine declined to act. The Baileys engine keys the mark ' +
+      "to the chat's newest message in memory, else the newest stored one, else sends it without one for a " +
+      'chat the session knows; an id it knows no chat for answers `false`, and so does an archived chat ' +
+      'with no known message, which the phone leaves unmarked without one.',
+    type: SessionActionResponseDto,
+  })
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
@@ -931,7 +939,14 @@ export class SessionController {
       'media, search entries) and emits `message:deleted` for each. Changes made on the phone are not mirrored.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
-  @ApiResponse({ status: 200, description: 'Chat deleted successfully', type: SessionActionResponseDto })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Returns `{ success }`. `false` means the engine declined to act: an unknown chat, or on the ' +
+      'Baileys engine a chat with no message in memory or stored, since the delete is keyed to its ' +
+      'last message.',
+    type: SessionActionResponseDto,
+  })
   @ApiResponse({ status: 400, description: 'Session not ready' })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({

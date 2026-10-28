@@ -4,12 +4,15 @@ import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import { MessageDirection } from '../../../modules/message/entities/message.entity';
 import type { SearchService } from '../../../modules/search/search.service';
 import {
+  SEARCH_CONTAINS_MIN_TERM_LENGTH,
+  SEARCH_CONTAINS_TERMS_MAX_LENGTH,
   SEARCH_CONTAINS_WINDOW,
   SEARCH_LIMIT_MAX,
   SEARCH_MATCH_MODES,
   SEARCH_OFFSET_MAX,
   SEARCH_QUERY_MAX_LENGTH,
 } from '../../../modules/search/search.constants';
+import { ContainsTermsRefusedError } from '../../../modules/search/search-terms';
 import { chatIdSchema } from '../chat-id-schema';
 import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
 
@@ -21,14 +24,16 @@ import { defineTool, type AnyToolDescriptor } from '../tool-descriptor';
  * configuration; calling it answers 501, as the REST route answers 404 then.
  *
  * `containsEnabled` is SEARCH_CONTAINS_ENABLED. With it on, `match` defaults to contains, unlike REST
- * (word): an agent often knows only part of a word or types it without accents, and contains finds
- * everything word finds. With it off the built-in provider answers 501 to contains, so the tool
- * defaults to word like REST.
+ * (word): an agent often knows only part of a word or types it without accents. Contains does not run
+ * every query word does (two-character words alone, as most Korean and many CJK words are, give the
+ * trigram index nothing to look up, and the terms together are bounded), so a query it refuses for its
+ * terms runs as a word search, as does one while its index is not ready. With it off the built-in
+ * provider answers 501 to contains, so the tool defaults to word like REST.
  */
 export function searchTools(search: SearchService | undefined, containsEnabled = false): AnyToolDescriptor[] {
   const defaultMatch = containsEnabled ? 'contains' : 'word';
   const matchHelp = containsEnabled
-    ? `match=contains (the default) finds any part of a word, ignoring case and accents, and ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches (whole words first, then newest), so total is at most ${SEARCH_CONTAINS_WINDOW}: narrow with more terms, chatId or dateTo to reach older ones. match=word finds whole words only.`
+    ? `match=contains (the default) finds any part of a word, ignoring case and accents, and ranks the ${SEARCH_CONTAINS_WINDOW} most recently stored matches (whole words first, then newest), so total is at most ${SEARCH_CONTAINS_WINDOW}: narrow with more terms, chatId or dateTo to reach older ones. It needs a term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more characters and at most ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters in all its terms; without match, a query outside those bounds runs as match=word, which finds whole words only.`
     : 'match=word (the default) finds whole words; match=contains needs SEARCH_CONTAINS_ENABLED=true on the server.';
   return [
     defineTool({
@@ -75,7 +80,10 @@ export function searchTools(search: SearchService | undefined, containsEnabled =
         try {
           return await search.search({ ...input, match: input.match ?? defaultMatch }, sessionIds, chatIds);
         } catch (error) {
-          if (input.match || defaultMatch === 'word' || !(error instanceof NotImplementedException)) throw error;
+          // Unless the agent asked for contains, a query contains cannot run yet (its index is not ready)
+          // or cannot run at all for its terms (too short or too long) is answered as a word search.
+          const fallback = error instanceof NotImplementedException || error instanceof ContainsTermsRefusedError;
+          if (input.match || defaultMatch === 'word' || !fallback) throw error;
           return search.search({ ...input, match: 'word' }, sessionIds, chatIds);
         }
       },

@@ -23,6 +23,21 @@ public record SearchQuery(
     Long dateTo,
     Integer limit,
     Integer offset) {
+    /** Back-compatible constructor without a match mode, the server's default (word). */
+    public SearchQuery(
+        String q,
+        String sessionId,
+        String chatId,
+        MessageDirection direction,
+        String type,
+        String from,
+        Long dateFrom,
+        Long dateTo,
+        Integer limit,
+        Integer offset) {
+        this(q, null, sessionId, chatId, direction, type, from, dateFrom, dateTo, limit, offset);
+    }
+
     public static Builder builder() {
         return new Builder();
     }

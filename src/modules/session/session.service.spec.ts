@@ -9403,7 +9403,7 @@ describe('SessionService', () => {
       ]);
     });
 
-    it('takes the lid the row is filed under when the table maps the phone to two, and none from a phone row', async () => {
+    it('takes the lid the row is filed under when the table maps the phone to two, and no row filed under the phone', async () => {
       (lidMappingStore.findLidsForPhone as jest.Mock).mockResolvedValue(['998', '999']);
       const row = (chatId: string) => ({
         waMessageId: 'S1',
@@ -9420,13 +9420,32 @@ describe('SessionService', () => {
         lid: '999@lid',
       });
 
-      // Filed under the phone, the row names neither lid, so the engine gets none to guess from.
+      // Filed under the phone, the row names neither lid, and either would be a guess: no write is keyed to it.
       (messageRepository.findOne as jest.Mock).mockResolvedValueOnce(row('123@c.us'));
-      await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toEqual({
-        id: 'S1',
-        fromMe: false,
-        timestamp: 1690000000,
+      await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '123@c.us'))).resolves.toBeNull();
+    });
+
+    it('takes no group message whose sender the table maps to two lids, and keeps the cache to a sender with none', async () => {
+      (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
+        Promise.resolve(phone === '628222' ? ['554', '555'] : []),
+      );
+      const row = (author: string) => ({
+        waMessageId: 'G1',
+        chatId: '1234567890-123@g.us',
+        direction: MessageDirection.INCOMING,
+        author,
+        timestamp: 1690000001,
       });
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce(row('628222@c.us'));
+      await expect(
+        lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1234567890-123@g.us')),
+      ).resolves.toBeNull();
+
+      // A sender the table maps to no lid keeps its row: the engine falls back to the lid it knows, if any.
+      (messageRepository.findOne as jest.Mock).mockResolvedValueOnce(row('628333@c.us'));
+      await expect(
+        lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '1234567890-123@g.us')),
+      ).resolves.toEqual({ id: 'G1', fromMe: false, author: '628333@c.us', timestamp: 1690000001 });
     });
 
     it('for a read receipt, takes only a received message', async () => {
@@ -9461,6 +9480,10 @@ describe('SessionService', () => {
           row('456@c.us', 'TWO-OLD', MessageDirection.OUTGOING, 100),
           row('462@lid', 'TWO-NEW', MessageDirection.INCOMING, 200),
           row('461@lid', 'TWO-OLDER', MessageDirection.INCOMING, 50),
+          row('782@lid', 'PHONE-OLD', MessageDirection.INCOMING, 100),
+          row('789@c.us', 'PHONE-NEW', MessageDirection.OUTGOING, 200),
+          row('3-4@g.us', 'AMBIGUOUS-OWN', MessageDirection.OUTGOING, 100),
+          row('3-4@g.us', 'AMBIGUOUS-IN', MessageDirection.INCOMING, 200, '628333@c.us'),
         ] as QueryDeepPartialEntity<Message>[]);
       });
 
@@ -9470,8 +9493,14 @@ describe('SessionService', () => {
 
       beforeEach(() => {
         Object.assign(service as unknown as Record<string, unknown>, { messageRepository: messages });
+        const lids: Record<string, string[]> = {
+          123: ['999'],
+          456: ['461', '462'],
+          789: ['781', '782'],
+          628333: ['5551', '5552'],
+        };
         (lidMappingStore.findLidsForPhone as jest.Mock).mockImplementation((phone: string) =>
-          Promise.resolve(phone === '123' ? ['999'] : phone === '456' ? ['461', '462'] : []),
+          Promise.resolve(lids[phone] ?? []),
         );
       });
 
@@ -9491,6 +9520,14 @@ describe('SessionService', () => {
           timestamp: 200,
           lid: '462@lid',
         });
+      });
+
+      it('takes no message filed under a phone the table maps to two lids, nor one from a sender it maps to two', async () => {
+        await expect(lookupOf('markUnread', () => service.markUnread('sess-uuid-1', '789@c.us'))).resolves.toBeNull();
+        await expect(
+          lookupOf('clearChatMessages', () => service.clearChatMessages('sess-uuid-1', '3-4@g.us')),
+        ).resolves.toBeNull();
+        await expect(lookupOf('sendSeen', () => service.sendSeen('sess-uuid-1', '3-4@g.us'))).resolves.toBeNull();
       });
 
       it('in a group, skips a received message without its sender, and a receipt takes only a received one', async () => {

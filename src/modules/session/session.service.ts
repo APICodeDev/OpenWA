@@ -1552,11 +1552,18 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
       if (!row) return null;
       // The lid the engine keys a lid-migrated chat by, read from the persisted mapping: the engine's
       // own cache can lack it (#1901). A phone can map to more than one lid, so the lid the row is
-      // filed under wins; a row filed under the phone takes the table's lid only when it lists one.
+      // filed under wins, and a row filed under the phone takes the table's lid when it lists one. With
+      // two or more, for the chat or for the sender of a received group message, any one is a guess
+      // (the engine's cache would pick the oldest), so no write is keyed to the row at all.
       const filed = parseWaId(row.chatId);
       const lids = expanded.filter(candidate => parseWaId(candidate).kind === 'lid');
-      const lid = filed.kind === 'lid' ? `${filed.userPart}@lid` : lids.length === 1 ? lids[0] : undefined;
-      const authorLid = row.author ? await this.persistedLidOf(row.author) : undefined;
+      if (filed.kind !== 'lid' && lids.length > 1) return null;
+      const lid = filed.kind === 'lid' ? `${filed.userPart}@lid` : lids[0];
+      const sender =
+        parseWaId(chatId).kind === 'group' && row.direction === MessageDirection.INCOMING ? row.author : undefined;
+      const authorLids = sender ? await this.persistedLidsOf(sender) : [];
+      if (authorLids.length > 1) return null;
+      const authorLid = authorLids[0];
       return {
         id: row.waMessageId,
         fromMe: row.direction === MessageDirection.OUTGOING,
@@ -1568,13 +1575,12 @@ export class SessionService implements OnModuleDestroy, OnModuleInit, OnApplicat
     };
   }
 
-  /** The `<lid>@lid` the persisted mapping holds for a person, or undefined. */
-  private async persistedLidOf(jid: string): Promise<string | undefined> {
+  /** Every `<lid>@lid` the persisted mapping holds for a person (the lid itself for a lid). */
+  private async persistedLidsOf(jid: string): Promise<string[]> {
     const parsed = parseWaId(jid);
-    if (parsed.kind === 'lid') return `${parsed.userPart}@lid`;
-    if (parsed.kind !== 'user') return undefined;
-    const [lid] = await this.lidMappingStore.findLidsForPhone(parsed.userPart);
-    return lid ? `${lid}@lid` : undefined;
+    if (parsed.kind === 'lid') return [`${parsed.userPart}@lid`];
+    if (parsed.kind !== 'user') return [];
+    return (await this.lidMappingStore.findLidsForPhone(parsed.userPart)).map(lid => `${lid}@lid`);
   }
 
   /**

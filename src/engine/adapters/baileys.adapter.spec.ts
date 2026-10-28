@@ -8435,6 +8435,46 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
     );
   });
 
+  // The stored lookup normalizes the id and finds the chat's rows, but the patch would be indexed by the
+  // id as written, which names no chat on the phone.
+  it.each(['120363@G.US', '628111', ' 628111@c.us', '628111:5@s.whatsapp.net', '484848@hosted.lid'])(
+    'keys no write to a stored message or to none for %j, which is not how the engine keys a chat',
+    async chatId => {
+      const adapter = await ready();
+      fakeSock.fire('chats.upsert', [{ id: '120363@g.us' }, { id: '628111@s.whatsapp.net' }]);
+      const stored = lookup({ id: 'S1', fromMe: true, author: '628222@c.us', timestamp: 1690000000 });
+
+      await expect(adapter.clearChatMessages(chatId, stored)).resolves.toBe(false);
+      await expect(adapter.deleteChat(chatId, stored)).resolves.toBe(false);
+      await expect(adapter.archiveChat(chatId, true, stored)).resolves.toBe(false);
+      await expect(adapter.markUnread(chatId, stored)).resolves.toBe(false);
+      await expect(
+        adapter.sendSeen(chatId, undefined, undefined, lookup({ id: 'S2', fromMe: false, timestamp: 1690000001 })),
+      ).resolves.toBe(false);
+      expect(stored).not.toHaveBeenCalled();
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(fakeSock.readMessages).not.toHaveBeenCalled();
+    },
+  );
+
+  it('still keys a write to the message in memory for a phone id spelled in upper case', async () => {
+    const adapter = await ready();
+    await upsert({ remoteJid: '628111@s.whatsapp.net', fromMe: true, id: 'OWN' });
+    const stored = lookup(null);
+
+    await expect(adapter.clearChatMessages('628111@C.US', stored)).resolves.toBe(true);
+    expect(fakeSock.chatModify).toHaveBeenCalledWith(
+      {
+        clear: true,
+        lastMessages: [
+          { key: { remoteJid: '628111@s.whatsapp.net', fromMe: true, id: 'OWN' }, messageTimestamp: 1700000020 },
+        ],
+      },
+      '628111@s.whatsapp.net',
+    );
+    expect(stored).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['archiveChat', (a: BaileysAdapter) => a.archiveChat('628111@c.us', true, lookup(null)), { archive: true }],
     ['markUnread', (a: BaileysAdapter) => a.markUnread('628111@c.us', lookup(null)), { markRead: false }],

@@ -1,4 +1,4 @@
-import { foldSearchText } from './search-terms';
+import { foldForMatching } from './search-terms';
 
 /**
  * Relevance of a match=contains candidate, computed in the application so both dialects rank alike
@@ -14,9 +14,9 @@ import { foldSearchText } from './search-terms';
  * caller's scope.
  */
 export function containsScore(body: string, terms: string[]): number {
-  const folded = foldSearchText(body);
+  const folded = foldForMatching(body);
   let score = 0;
-  for (const term of terms.map(foldSearchText)) {
+  for (const term of terms.map(foldForMatching)) {
     let best = 0;
     for (let at = folded.indexOf(term); at !== -1 && best < 3; at = folded.indexOf(term, at + 1)) {
       const startsWord = !isWordChar(folded[at - 1]);
