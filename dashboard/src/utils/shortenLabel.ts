@@ -1,5 +1,5 @@
 // Graphemes, not code points: a flag, a family emoji or a letter with combining marks is several code points
-// and must not be cut inside. Segmenter is in every browser the dashboard supports; code points are the fallback.
+// and must not be cut inside. A browser without Segmenter (Firefox before 125) counts code points instead.
 const segmenter =
   typeof Intl.Segmenter === 'function' ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
 

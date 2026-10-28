@@ -74,7 +74,10 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
     assert.match(rule, /align-self:\s*flex-start/, selector);
     assert.match(rule, /max-width:\s*100%/, `${selector} needs a cap, or the ellipsis never shows`);
   }
-  assert.match(body('pages/Chats.css', '.chats-page .quote-body'), /width:\s*fit-content/);
+  const quote = body('pages/Chats.css', '.chats-page .quote-body');
+  assert.match(quote, /width:\s*fit-content/);
+  // A long nowrap quote is as wide as its text, so the cap has to follow the room in the box, not only 250px.
+  assert.match(quote, /max-width:\s*min\(250px,\s*100%\)/);
 });
 
 test('chart plots stay left to right on a right to left page', () => {
