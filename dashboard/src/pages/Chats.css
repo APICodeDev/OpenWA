@@ -1490,7 +1490,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
-  max-width: 250px;
+  /* The cap is the smaller of 250px and the room in the quote box: under nowrap the shrink-to-fit width is the
+     whole text, so a bare 250px cap let a long quote paint past a narrow bubble. */
+  max-width: min(250px, 100%);
   width: fit-content;
 }
 
