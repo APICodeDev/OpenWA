@@ -69,6 +69,26 @@ export function isProtocolTimeout(error: unknown): boolean {
   return PROTOCOL_TIMEOUT_PATTERN.test(error instanceof Error ? error.message : String(error));
 }
 
+/** What a request answers 409 while WhatsApp Web reloads its page, whichever side of the window stamp it lands. */
+export const PAGE_RELOADING_MESSAGE =
+  'WhatsApp Web is reloading its page and the session is re-injecting. Retry in a few seconds.';
+
+/**
+ * Whether a page call was cut short by the page navigating away under it (WhatsApp Web reloading). Puppeteer
+ * rewrites its three CDP shapes of this into 'Execution context was destroyed, most likely because of a
+ * navigation.', and a call that lands on the new document before WhatsApp Web has booted dies on the missing
+ * `window.require`. The page is alive and re-injecting, so unlike a death this is not reported, and a retry
+ * a few seconds later succeeds. Not an HttpException, and not a failure captured inside the page, whose text
+ * quotes WhatsApp Web and says nothing about our page.
+ */
+export function isNavigationError(error: unknown): boolean {
+  if (error instanceof HttpException) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isNavigationShapedInitRejection(message);
+}
+
 /**
  * The start of a send failure that scripts/patch-wwebjs-send-error.js captured inside the page, where
  * it summarises a thrown value puppeteer would otherwise hand over as `t: t`. The patcher builds the
