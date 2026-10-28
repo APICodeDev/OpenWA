@@ -27,11 +27,7 @@ const logger = createLogger('wwebjs-navigation-error.spec');
 const NAVIGATION = 'Execution context was destroyed, most likely because of a navigation.';
 
 describe('isNavigationError', () => {
-  it.each([
-    NAVIGATION,
-    'Evaluation failed: TypeError: window.require is not a function',
-    'execution context was destroyed',
-  ])('reads %p as a navigation', message => {
+  it.each([NAVIGATION, 'execution context was destroyed'])('reads %p as a navigation', message => {
     expect(isNavigationError(new Error(message))).toBe(true);
   });
 
@@ -45,6 +41,8 @@ describe('isNavigationError', () => {
     'Protocol error (Runtime.callFunctionOn): Target closed',
     "Runtime.callFunctionOn timed out. Increase the 'protocolTimeout' setting in launch/connect calls",
     'Evaluation failed: TypeError: Cannot read properties of null',
+    // Nothing bounds this one, so a page that stays like it must reach the liveness probe as a failure.
+    'Evaluation failed: TypeError: window.require is not a function',
     '',
   ])('does not read %p as a navigation', message => {
     expect(isNavigationError(new Error(message))).toBe(false);

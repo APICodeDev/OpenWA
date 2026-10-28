@@ -76,17 +76,18 @@ export const PAGE_RELOADING_MESSAGE =
 /**
  * Whether a page call was cut short by the page navigating away under it (WhatsApp Web reloading). Puppeteer
  * rewrites its three CDP shapes of this into 'Execution context was destroyed, most likely because of a
- * navigation.', and a call that lands on the new document before WhatsApp Web has booted dies on the missing
- * `window.require`. The page is alive and re-injecting, so unlike a death this is not reported, and a retry
- * a few seconds later succeeds. Not an HttpException, and not a failure captured inside the page, whose text
- * quotes WhatsApp Web and says nothing about our page.
+ * navigation.' The page is alive and re-injecting, so unlike a death this is not reported, and a retry a few
+ * seconds later succeeds. Not an HttpException, and not a failure captured inside the page, whose text quotes
+ * WhatsApp Web and says nothing about our page. The `window.require is not a function` of a document that has
+ * not booted is left out: nothing here bounds it, so a page that stays like that would answer this retryable
+ * status for good, where the liveness probe and the watchdog deal with it as a failure.
  */
 export function isNavigationError(error: unknown): boolean {
   if (error instanceof HttpException) {
     return false;
   }
   const message = error instanceof Error ? error.message : String(error);
-  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isNavigationShapedInitRejection(message);
+  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isExecutionContextDestroyedError(message);
 }
 
 /**

@@ -719,6 +719,11 @@ export interface PollVoteEvent {
   pollName?: string;
   /** Unix seconds the voter changed the selection (sender clock). */
   timestamp: number;
+  /**
+   * The same instant in Unix milliseconds. Two changes of one voter within a second share `timestamp`, so
+   * this is what orders them and tells them apart.
+   */
+  timestampMs: number;
 }
 
 /**

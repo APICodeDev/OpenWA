@@ -319,6 +319,7 @@ describe('Idempotency Utils', () => {
       const at = '2026-07-20T00:00:00.000Z';
       const data = { sessionId: 'A', pollMessageId: 'POLL1', voterId: 'V1', selectedOptions: ['Yes'], timestamp: 100 };
       const key = generateIdempotencyKey('poll.vote', data, at);
+      // Without the millisecond stamp the whole second stands in for it.
       expect(key).toMatch(/^vote_A_POLL1_V1_100_[0-9a-f]{12}$/);
       expect(generateIdempotencyKey('poll.vote', data, '2026-07-20T01:00:00.000Z')).toBe(key);
       // An identical redelivery dedupes, a different selection in the same second does not.
@@ -329,6 +330,27 @@ describe('Idempotency Utils', () => {
       expect(generateIdempotencyKey('poll.vote', { ...data, timestamp: 200 }, at)).not.toBe(key);
       // Two voters on the same poll in the same second are two events.
       expect(generateIdempotencyKey('poll.vote', { ...data, voterId: 'V2' }, at)).not.toBe(key);
+    });
+
+    // A voter flipping A, B, A within one second: the third change shares the whole second, the selection and so
+    // the hash with the first. Under the key of the first it would be dropped by a receiver that dedupes on it,
+    // which would then end on B while the voter's choice is A.
+    it('keeps a vote that returns to an earlier selection within the same second apart from the first', () => {
+      const at = '2026-07-20T00:00:00.000Z';
+      const first = {
+        sessionId: 'A',
+        pollMessageId: 'POLL1',
+        voterId: 'V1',
+        selectedOptions: ['A'],
+        timestamp: 100,
+        timestampMs: 100100,
+      };
+      const third = { ...first, timestampMs: 100900 };
+      expect(generateIdempotencyKey('poll.vote', third, at)).not.toBe(generateIdempotencyKey('poll.vote', first, at));
+      // A redelivery of the same change still carries the same stamp and the same key.
+      expect(generateIdempotencyKey('poll.vote', { ...first }, '2026-07-20T01:00:00.000Z')).toBe(
+        generateIdempotencyKey('poll.vote', first, at),
+      );
     });
 
     it('keys call.received on the session + call id (unique per call, no occurrence salt needed)', () => {
