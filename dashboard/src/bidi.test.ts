@@ -91,6 +91,21 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
 });
 
+test('a message body takes its direction from its own characters', () => {
+  // Under the page direction an English question in an Arabic page drew its question mark at the left.
+  assert.match(body('pages/Chats.css', '.chats-page .message-content > .message-text'), /unicode-bidi:\s*plaintext/);
+});
+
+test('the session number is cut by its own isolate, so an RTL page keeps its first digits', () => {
+  // The line around it keeps the page direction; cut there, an Arabic page lost "+4" and kept the last digits.
+  const picker = readFileSync(join(SRC, 'components/chats/SessionPicker.tsx'), 'utf8');
+  assert.match(picker, /<span className="session-phone-line">[\s\S]*?<bdi dir="ltr">/);
+  const cut = body('pages/Chats.css', '.chats-page .session-phone-line > bdi');
+  assert.match(cut, /text-overflow:\s*ellipsis/);
+  assert.match(cut, /min-width:\s*0/);
+  assert.match(body('pages/Chats.css', '.chats-page .session-phone-line'), /max-width:\s*100%/);
+});
+
 test('chart plots stay left to right on a right to left page', () => {
   assert.match(body('components/DashboardCharts.css', '.dashboard-charts .recharts-surface'), /direction:\s*ltr/);
 });

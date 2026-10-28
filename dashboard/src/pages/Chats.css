@@ -264,6 +264,43 @@
 
 .chats-page .session-flag {
   margin-inline-end: 0.3em;
+  flex-shrink: 0;
+}
+
+/* The number is cut by its own box. The line around it keeps the page direction, so in an Arabic page its
+   ellipsis took the number's first digits ("...9 151 123 4 5678"); the isolate, written left to right, cuts its
+   last ones instead, and the flag stays whole beside it. */
+.chats-page .session-phone-line {
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.chats-page .session-phone-line > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In the picker the account's name comes first; it is the part that gives way, so the number stays whole. */
+.chats-page .session-phone.with-push-name {
+  display: flex;
+  min-width: 0;
+}
+
+.chats-page .session-phone.with-push-name > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chats-page .session-phone.with-push-name > .session-push-name-sep {
+  flex-shrink: 0;
+  white-space: pre;
+}
+
+.chats-page .session-phone.with-push-name > .session-phone-line {
+  flex-shrink: 0;
 }
 
 .chats-page .session-chevron {
@@ -2112,9 +2149,14 @@
   word-break: break-word;
 }
 
+/* A message is written in its own direction, not the page's: under an inherited right to left an English
+   question in an Arabic page drew its question mark at the left ("?quote for the kitchen project"). On an inline
+   box plaintext isolates the text and reads its direction from the first strong letter, while the bubble keeps
+   aligning it by the page direction. */
 .chats-page .message-content > .message-text {
   display: inline;
   white-space: pre-wrap;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .message-content > .message-poll-options {

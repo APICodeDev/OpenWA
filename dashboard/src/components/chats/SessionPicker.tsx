@@ -40,7 +40,7 @@ function PhoneLine({ phone }: { phone?: string | null }) {
   if (!phone) return <>{t('chats.noPhone')}</>;
   const region = regionOfPhone(phone);
   return (
-    <>
+    <span className="session-phone-line">
       {region && (
         <span className="session-flag" aria-hidden="true">
           {flagOfRegion(region)}
@@ -48,7 +48,7 @@ function PhoneLine({ phone }: { phone?: string | null }) {
       )}
       {/* Digits and + carry no direction of their own: without ltr a right-to-left page reverses them. */}
       <bdi dir="ltr">{formatPhoneForDisplay(phone) ?? phone}</bdi>
-    </>
+    </span>
   );
 }
 
@@ -231,11 +231,13 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
                       <SessionAvatar session={session} size="sm" />
                       <span className="session-text">
                         <span className="session-name">{session.name}</span>
-                        <span className="session-phone">
+                        <span className={`session-phone${session.pushName ? ' with-push-name' : ''}`}>
                           {session.pushName && (
                             <>
                               <bdi>{session.pushName}</bdi>
-                              <span aria-hidden="true"> · </span>
+                              <span className="session-push-name-sep" aria-hidden="true">
+                                {' · '}
+                              </span>
                             </>
                           )}
                           <PhoneLine phone={session.phone} />
