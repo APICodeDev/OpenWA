@@ -4,6 +4,7 @@ import {
   isPluginActiveForSession,
   resolveInstanceConfig,
   resolvePluginConfig,
+  restorableConfig,
   sessionScopeKey,
 } from './plugin-activation';
 
@@ -151,9 +152,18 @@ describe('a layer that names another host than the layer beneath', () => {
     expect(resolveFor({ inboxId: '9' })).toMatchObject({ apiToken: 'OPERATOR-TOKEN', inboxId: '9' });
   });
 
-  it('is no redirect when the host key is set to nothing or to a non-string', () => {
-    for (const none of ['', '   ', null, 5]) {
+  it('is no redirect when the host key is set to nothing', () => {
+    for (const none of ['', '   ', null, undefined]) {
       expect(resolveFor({ baseUrl: none })).toMatchObject({ apiToken: 'OPERATOR-TOKEN' });
+    }
+  });
+
+  // A plugin may turn a value that is no text into a URL: String(['https://x.example']) is 'https://x.example'. With no
+  // origin to compare, such a value is a redirect, or a one-element list would carry the operator's token to its host.
+  it('is a redirect when the host key holds a list, an object, a number or a boolean', () => {
+    for (const odd of [['https://attacker.example'], { url: 'https://attacker.example' }, 5, true, []]) {
+      expect(resolveFor({ baseUrl: odd })).not.toHaveProperty('apiToken');
+      expect(resolveInstanceConfig(base, { baseUrl: odd }, adapter)).not.toHaveProperty('apiToken');
     }
   });
 
@@ -218,6 +228,41 @@ describe('resolveInstanceConfig', () => {
     expect(viaOverride).toMatchObject({ apiToken: 'OPERATOR-TOKEN', inboxId: '8' });
     expect(resolveInstanceConfig(viaOverride, { baseUrl: 'https://attacker.example' }, adapter)).not.toHaveProperty(
       'apiToken',
+    );
+  });
+});
+
+describe('restorableConfig: the stored layer a write may restore a masked secret from', () => {
+  const stored = { baseUrl: 'https://tenant.example', apiToken: 'TENANT-TOKEN', inboxId: '3' };
+
+  it('is the stored layer when the write keeps the host or leaves it alone', () => {
+    expect(restorableConfig(stored, { baseUrl: 'HTTPS://Tenant.Example:443/x', apiToken: '***' }, adapter)).toBe(
+      stored,
+    );
+    expect(restorableConfig(stored, { inboxId: '4', apiToken: '***' }, adapter)).toBe(stored);
+    expect(restorableConfig(stored, { baseUrl: '', apiToken: '***' }, adapter)).toBe(stored);
+  });
+
+  it('holds back every stored secret when the write points the host key at another origin', () => {
+    expect(restorableConfig(stored, { baseUrl: 'https://attacker.example', apiToken: '***' }, adapter)).toEqual({
+      baseUrl: 'https://tenant.example',
+      inboxId: '3',
+    });
+  });
+
+  it('treats a host key that is no text as another origin, and a first host as one too', () => {
+    expect(restorableConfig(stored, { baseUrl: ['https://attacker.example'] }, adapter)).not.toHaveProperty('apiToken');
+    expect(restorableConfig({ apiToken: 'T' }, { baseUrl: 'https://x.example' }, adapter)).toEqual({});
+  });
+
+  it('holds back everything when there is no schema to tell a secret from, and has nothing to hold back without a layer', () => {
+    expect(restorableConfig(stored, { baseUrl: 'https://x.example' }, { net: adapter.net })).toEqual({});
+    expect(restorableConfig(undefined, { baseUrl: 'https://x.example' }, adapter)).toBeUndefined();
+  });
+
+  it('is the stored layer when the manifest names no host key', () => {
+    expect(restorableConfig(stored, { baseUrl: 'https://x.example' }, { configSchema: adapter.configSchema })).toBe(
+      stored,
     );
   });
 });

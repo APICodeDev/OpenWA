@@ -149,7 +149,7 @@ export function sessionTools(session: SessionService): AnyToolDescriptor[] {
       sessionScoped: true,
       inputSchema: z.object({
         sessionId,
-        chatId: chatIdSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
+        chatId: chatJidSchema.describe('Chat JID (e.g. 1234567890@c.us)'),
         state: z
           .enum(['typing', 'recording', 'paused'])
           .describe("'typing' or 'recording' shows the indicator; 'paused' clears it"),

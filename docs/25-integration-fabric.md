@@ -130,7 +130,9 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   projection is re-keyed per instance. The base configuration is also the layer under every instance
   and per-session override. An instance or override that points a `net.allowConfigHosts` key at another
   origin than the layer beneath does not inherit that layer's `secret` fields and must bring its own; one
-  that keeps the same origin, or sets no host key, inherits them. A plugin that reaches its destination
+  that keeps the same origin, or sets no host key, inherits them. A host key that holds no text counts as
+  another origin, and a write that moves a host key to another origin than the stored layer names gets no
+  stored secret back for the mask, so the secret has to be sent with it. A plugin that reaches its destination
   through a key outside `net.allowConfigHosts` (for example under `net.allow: ['*']`) is not covered, so
   keep such a secret on the instance that uses it. Capability calls are not confined to the dispatching instance's
   scope either: separating tenants across instances of one plugin relies on the handler using the

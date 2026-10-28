@@ -206,7 +206,10 @@ removes it for an explicit `null`. A per-session override and an integration ins
 overlaid on the base config, secret fields included, so a stored secret reaches every override that does
 not replace it. The exception is an override or instance that points a `net.allowConfigHosts` key at
 another origin than the layer beneath: it does not inherit that layer's secret fields (a list that holds
-one is dropped whole) and must bring its own.
+one is dropped whole) and must bring its own. A host key that holds no text (a list, an object, a number) counts
+as another origin. The same rule applies on write: a write to an override or an instance that points a host key
+at another origin than the stored layer names gets no stored secret back for the mask or an empty string, so
+the secret has to be sent with it.
 
 ### Plugin Entry Point
 

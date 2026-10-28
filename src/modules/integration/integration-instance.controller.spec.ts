@@ -390,6 +390,7 @@ describe('IntegrationInstanceController provisioning bridge', () => {
       'acct1',
       { sessionScope: null, config: undefined },
       undefined,
+      undefined,
     );
     expect(view.sessionScope).toBeNull();
     expect(setPluginSessionConfig).toHaveBeenCalledWith('chatwoot-adapter', 'sess-1', {}); // old scope torn down
@@ -625,10 +626,10 @@ describe('IntegrationInstanceController session-scope fence', () => {
   const scopedKey = { allowedSessions: ['sess-1'] } as ApiKey;
   const unrestrictedKey = { allowedSessions: null } as unknown as ApiKey;
 
-  function build(instances: Partial<PluginInstanceService>) {
+  function build(instances: Partial<PluginInstanceService>, net?: { allowConfigHosts: string[] }) {
     const loader = {
       getPlugin: jest.fn().mockReturnValue({
-        manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'] },
+        manifest: { id: 'chatwoot-adapter', ingress: [{ route: 'chatwoot' }], permissions: ['webhook:ingress'], net },
         activeSessions: [],
       }),
       setPluginSessionConfig: jest.fn(),
@@ -744,6 +745,19 @@ describe('IntegrationInstanceController session-scope fence', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  // The service holds back a stored secret from a PATCH that moves a host key, but only knows the host keys if
+  // the controller hands over the manifest's net rules.
+  it('hands the manifest net rules to update(), so a moved host key is told from an unchanged one', async () => {
+    const inst = { ...baseInstance, sessionScope: 'sess-1' };
+    const update = jest.fn().mockResolvedValue(inst);
+    const net = { allowConfigHosts: ['baseUrl'] };
+    const { controller } = build({ resolve: jest.fn().mockResolvedValue(inst), update }, net);
+
+    await controller.patch('chatwoot-adapter', 'acct1', { config: { baseUrl: 'https://x.example' } }, scopedKey);
+
+    expect(update).toHaveBeenCalledWith('chatwoot-adapter', 'acct1', expect.any(Object), undefined, net);
+  });
+
   it('lets a scoped key patch an in-scope instance without touching sessionScope', async () => {
     const inst = { ...baseInstance, sessionScope: 'sess-1' };
     const update = jest.fn().mockResolvedValue({ ...inst, enabled: false });
@@ -755,6 +769,7 @@ describe('IntegrationInstanceController session-scope fence', () => {
       'chatwoot-adapter',
       'acct1',
       { enabled: false, sessionScope: undefined, config: undefined },
+      undefined,
       undefined,
     );
   });
@@ -1004,6 +1019,7 @@ describe('IntegrationInstanceController update audit', () => {
       'chatwoot-adapter',
       'acct1',
       { enabled: false, sessionScope: 'sess-2', config: { apiToken: 'rotated-token' } },
+      undefined,
       undefined,
     );
   });

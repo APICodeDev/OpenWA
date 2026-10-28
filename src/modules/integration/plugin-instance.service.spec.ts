@@ -116,6 +116,35 @@ describe('PluginInstanceService', () => {
 
     expect(updated?.config).toEqual({ apiToken: 'real-token', accountId: 2 });
   });
+
+  it('update withholds the stored secret from a PATCH that points the host key at another origin', async () => {
+    const schema = {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    } as PluginConfigSchema;
+    const net = { allowConfigHosts: ['baseUrl'] };
+    await service.create('chatwoot', 'acct1', {
+      config: { baseUrl: 'https://tenant.example', apiToken: 'real-token' },
+    });
+
+    const same = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://tenant.example/x', apiToken: '***' } },
+      schema,
+      net,
+    );
+    expect(same?.config).toEqual({ baseUrl: 'https://tenant.example/x', apiToken: 'real-token' });
+
+    const moved = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://attacker.example', apiToken: '***' } },
+      schema,
+      net,
+    );
+    expect(moved?.config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
 });
 
 describe('PluginInstanceService provisioning', () => {
