@@ -151,6 +151,8 @@
   border-inline-end: 1px solid var(--chat-divider);
   flex-shrink: 0;
   min-height: 0;
+  /* The session picker hangs from the column (see .session-picker). */
+  position: relative;
 }
 
 /* As high as the room header beside it. Layout.css gives the dashboard's own .sidebar-header a 72px minimum, which
@@ -171,7 +173,6 @@
 
 /* Session switcher: the selected account in the header, opening a searchable list of every session. */
 .chats-page .session-switcher {
-  position: relative;
   min-width: 0;
 }
 
@@ -330,13 +331,16 @@
   transform: rotate(180deg);
 }
 
-/* The open list */
+/* The open list. The chat layout clips what runs past its bottom edge, so the list is placed against the list column
+   (under its 64px header, at the switcher's start edge) and capped by the column's height: the sessions scroll inside
+   it, and the search row and the pairing link stay in reach on a short window or a phone held sideways. */
 .chats-page .session-picker {
   position: absolute;
-  top: calc(100% + 0.5rem);
-  inset-inline-start: -0.25rem;
+  top: calc(64px + 0.25rem);
+  inset-inline-start: 0.75rem;
   z-index: 30;
   width: min(360px, calc(100vw - 2rem));
+  max-height: calc(100% - 64px - 0.75rem);
   display: flex;
   flex-direction: column;
   background: var(--chat-panel);

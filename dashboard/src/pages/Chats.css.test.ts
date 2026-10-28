@@ -55,3 +55,19 @@ test('the chat list header is as high as the room header, whatever minimum the d
     'the dashboard minimum stretches the chat list header',
   );
 });
+
+test('the session picker is capped by the list column, so the layout never clips its last sessions or its link', () => {
+  // .chats-layout clips what runs past it; the picker hung from the switcher had no cap but the list's own 360px.
+  const declared = (selector: string, property: string): string | undefined =>
+    rulesFor(selector)
+      .map(body => new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+)`).exec(body)?.[1].trim())
+      .filter(Boolean)
+      .pop();
+  assert.equal(declared('.chats-page .chats-layout', 'overflow'), 'hidden');
+  assert.equal(declared('.chats-page .chats-sidebar', 'position'), 'relative');
+  assert.equal(declared('.chats-page .session-switcher', 'position'), undefined, 'the switcher holds the picker');
+  assert.equal(declared('.chats-page .session-picker', 'position'), 'absolute');
+  assert.match(declared('.chats-page .session-picker', 'max-height') ?? '', /^calc\(100% - /);
+  assert.equal(declared('.chats-page .session-picker', 'overflow'), 'hidden');
+  assert.equal(declared('.chats-page .session-picker-list', 'overflow-y'), 'auto');
+});
