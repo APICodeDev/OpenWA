@@ -10,6 +10,7 @@ describe('poll.vote wiring', () => {
     selectedOptions: ['Done'],
     pollName: 'Did you finish the report?',
     timestamp: 1786000000,
+    timestampMs: 1786000000123,
   };
 
   const setup = (live: boolean) => {

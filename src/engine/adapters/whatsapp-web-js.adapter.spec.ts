@@ -4038,6 +4038,7 @@ describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
       selectedOptions: ['Done'],
       pollName: 'Did you finish the report?',
       timestamp: 1786000000,
+      timestampMs: 1786000000123,
     });
   });
 
@@ -4073,6 +4074,7 @@ describe('WhatsAppWebJsAdapter vote_update (poll.vote)', () => {
       voterId: 'peer@c.us',
       selectedOptions: [],
       timestamp: 1786000000,
+      timestampMs: 1786000000123,
     });
     expect(event).not.toHaveProperty('pollName');
   });
