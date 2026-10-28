@@ -4,6 +4,7 @@ import type { AuthService } from '../../../modules/auth/auth.service';
 import { ApiKeyRole } from '../../../modules/auth/entities/api-key.entity';
 import type { SearchService } from '../../../modules/search/search.service';
 import { invokeTool } from '../tool-invoker';
+import { ContainsTermsRefusedError } from '../../../modules/search/search-terms';
 import { searchTools } from './search.tools';
 
 const CHAT = '628111000111@c.us';
@@ -64,11 +65,36 @@ describe('MessageSearch tool', () => {
     await expect(call(key, { q: 'invoice', match: 'contains' })).rejects.toBeInstanceOf(NotImplementedException);
     expect(search).toHaveBeenCalledTimes(1);
 
-    // Only the 501 of an unready index falls back; any other failure reaches the agent as it was.
+    // Only the 501 of an unready index and a refusal of the terms (below) fall back; any other failure
+    // reaches the agent as it was.
     search.mockClear();
     search.mockRejectedValueOnce(new BadRequestException('Every term is under three characters'));
     await expect(call(key, { q: 'in' })).rejects.toBeInstanceOf(BadRequestException);
     expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  // REST's default word mode answers `ok`, `東京` or a pasted sentence; contains refuses them for their terms.
+  it.each([
+    ['too short', 'ok', 'A contains search needs at least one term of 3 or more characters.'],
+    ['too long', 'a'.repeat(65), 'The terms of a contains search may hold at most 64 characters together.'],
+  ])('searches by word when contains refuses %s terms, unless the agent asked for contains', async (_n, q, refusal) => {
+    const key = { id: 'k1', allowedSessions: null, allowedChats: null };
+    search.mockRejectedValueOnce(new ContainsTermsRefusedError(refusal));
+
+    await expect(call(key, { q })).resolves.toBe(results);
+    expect(search).toHaveBeenNthCalledWith(1, { q, match: 'contains' }, undefined, undefined);
+    expect(search).toHaveBeenNthCalledWith(2, { q, match: 'word' }, undefined, undefined);
+
+    search.mockClear();
+    search.mockRejectedValueOnce(new ContainsTermsRefusedError(refusal));
+    await expect(call(key, { q, match: 'contains' })).rejects.toBeInstanceOf(BadRequestException);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a NUL character in the query before searching, which PostgreSQL would fail on', async () => {
+    const key = { id: 'k1', allowedSessions: null, allowedChats: null };
+    await expect(call(key, { q: `invoice${String.fromCharCode(0)}` })).rejects.toBeInstanceOf(BadRequestException);
+    expect(search).not.toHaveBeenCalled();
   });
 
   it('bounds dateFrom and dateTo to the safe integer range, as REST does', async () => {

@@ -6,6 +6,11 @@ describe('foldSearchText', () => {
     expect(foldSearchText('Meeting at the CAFÉ')).toBe('meeting at the cafe');
     expect(foldSearchText('Ação')).toBe('acao');
   });
+
+  it('keeps a Hangul syllable one character, however the text spells it', () => {
+    expect([...foldSearchText('서울')]).toEqual(['서', '울']);
+    expect(foldSearchText('서울'.normalize('NFD'))).toBe('서울');
+  });
 });
 
 describe('containsTerms', () => {
@@ -33,6 +38,16 @@ describe('containsSnippet', () => {
   it('maps matches back through a body written with combining accents', () => {
     const decomposed = 'café'.normalize('NFD');
     expect(containsSnippet(`meet at the ${decomposed}`, ['cafe'], 24)).toBe(`meet at the <mark>${decomposed}</mark>`);
+  });
+
+  it('marks a Hangul word in a body that spells its syllables as jamo', () => {
+    const [word, rest] = ['서울역'.normalize('NFD'), '에서 만나요'.normalize('NFD')];
+    expect(containsSnippet(`${word}${rest}`, ['서울역'], 24)).toBe(`<mark>${word}</mark>${rest}`);
+  });
+
+  it('marks a word ending in final sigma in a body written in capitals, and the other way round', () => {
+    expect(containsSnippet('ΚΑΛΟΣ ΔΡΟΜΟΣ σήμερα', ['δρομος'], 24)).toBe('ΚΑΛΟΣ <mark>ΔΡΟΜΟΣ</mark> σήμερα');
+    expect(containsSnippet('ο δρομος', ['ΔΡΟΜΟΣ'], 24)).toBe('ο <mark>δρομος</mark>');
   });
 
   it('opens the window a few words before a late match and marks where it cut', () => {

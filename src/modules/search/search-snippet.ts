@@ -1,4 +1,4 @@
-import { foldSearchText } from './search-terms';
+import { foldForMatching } from './search-terms';
 
 /**
  * Snippets for match=contains hits, built in the application rather than the database so both
@@ -21,26 +21,30 @@ interface FoldedText {
 }
 
 /**
+ * What folds as one unit: a character with the combining marks after it, or a Hangul syllable spelled
+ * as jamo (leading consonants, vowels, trailing consonants), which NFC composes into one syllable.
+ */
+const FOLD_UNIT = /[\u1100-\u115f]+[\u1160-\u11a7]*[\u11a8-\u11ff]*\p{M}*|[\s\S]\p{M}*/gu;
+
+/**
  * Folding can change a text's length: a body that spells `é` as `e` followed by a combining accent
  * loses that accent unit. Matches are therefore found in the folded copy and mapped back through
- * per-unit offsets, rather than assuming positions line up.
+ * per-unit offsets, rather than assuming positions line up. The text folds one FOLD_UNIT at a time, as
+ * the whole body folds for the score: a letter's accents fold away with it, so a match ending on it
+ * covers them instead of leaving a dangling accent outside </mark>, and jamo recompose into the
+ * syllable the term folds to.
  */
 function foldWithOffsets(text: string): FoldedText {
   let folded = '';
   const starts: number[] = [];
   const ends: number[] = [];
-  let offset = 0;
-  for (const char of text) {
-    const mapped = foldSearchText(char);
-    // A combining mark folds to nothing; it belongs to the letter before it, so a match ending on that
-    // letter also covers the mark instead of leaving a dangling accent outside </mark>.
-    if (!mapped && ends.length) ends[ends.length - 1] = offset + char.length;
+  for (const { 0: unit, index } of text.matchAll(FOLD_UNIT)) {
+    const mapped = foldForMatching(unit);
     for (let i = 0; i < mapped.length; i++) {
-      starts.push(offset);
-      ends.push(offset + char.length);
+      starts.push(index);
+      ends.push(index + unit.length);
     }
     folded += mapped;
-    offset += char.length;
   }
   return { folded, starts, ends };
 }
@@ -49,7 +53,7 @@ function foldWithOffsets(text: string): FoldedText {
 function matchRanges(body: string, terms: string[]): Array<[number, number]> {
   const { folded, starts, ends } = foldWithOffsets(body);
   const ranges: Array<[number, number]> = [];
-  for (const term of terms.map(foldSearchText).filter(Boolean)) {
+  for (const term of terms.map(foldForMatching).filter(Boolean)) {
     for (let at = folded.indexOf(term); at !== -1; at = folded.indexOf(term, at + term.length)) {
       ranges.push([starts[at], ends[at + term.length - 1]]);
     }

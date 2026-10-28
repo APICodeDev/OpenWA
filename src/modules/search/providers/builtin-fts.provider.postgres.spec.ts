@@ -1,7 +1,9 @@
 import 'reflect-metadata';
 import { NotImplementedException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { LoggerService } from '../../../common/services/logger.service';
 import { DataSource } from 'typeorm';
+import { ContainsTermsRefusedError } from '../search-terms';
 import { BuiltInFtsProvider } from './builtin-fts.provider';
 
 /**
@@ -184,5 +186,34 @@ describe('BuiltInFtsProvider (postgres probe)', () => {
     state.bodyTsPresent = true;
     expect((await provider.health()).ok).toBe(true);
     await expect(provider.search({ q: 'hello' })).resolves.toMatchObject({ provider: 'builtin-fts' });
+  });
+});
+
+describe('BuiltInFtsProvider match=contains terms (postgres)', () => {
+  /** A provider whose catalog read finds the trigram index ready, over a database that matches nothing. */
+  const containsReady = () => {
+    const query = jest.fn().mockResolvedValue([]);
+    const manager = {
+      query: jest.fn().mockResolvedValue([{ trgm: 'public', unaccent: 'public', fn: true, idx: true }]),
+    };
+    const ds = { options: { type: 'postgres' }, query, manager } as unknown as DataSource;
+    return { provider: new BuiltInFtsProvider(ds, new ConfigService({ search: { containsEnabled: true } })), query };
+  };
+
+  // As show_trgm(openwa_unaccent(term)) reads them on PostgreSQL 16, with glibc and with musl: a Hangul
+  // word of two syllables, a modifier letter unaccent turns into an apostrophe and superscript digits
+  // give pg_trgm no trigram to look up, so the search would read every row.
+  it.each(['안녕', '\u02bc'.repeat(3), '¹²³'])('refuses %j alone, which pg_trgm cannot look up', async q => {
+    const { provider, query } = containsReady();
+    await expect(provider.search({ q, match: 'contains' })).rejects.toBeInstanceOf(ContainsTermsRefusedError);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  // Hangul syllables, a katakana word with its prolonged sound mark, and letter numbers (which unaccent
+  // spells in Latin) give it trigrams.
+  it.each(['서울역', 'ラーメン', 'ⅫⅫⅫ'])('looks %j up', async q => {
+    const { provider, query } = containsReady();
+    await expect(provider.search({ q, match: 'contains' })).resolves.toMatchObject({ total: 0 });
+    expect(query).toHaveBeenCalledTimes(1);
   });
 });

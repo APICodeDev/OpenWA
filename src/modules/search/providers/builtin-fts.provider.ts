@@ -16,8 +16,13 @@ import { DataSource, QueryRunner } from 'typeorm';
 import type { MessageType } from '../../../engine/interfaces/whatsapp-engine.interface';
 import { MessageDirection } from '../../message/entities/message.entity';
 import type { SearchProvider, SearchQuery, SearchResults, SearchHit } from '../search.types';
-import { SEARCH_CONTAINS_MIN_TERM_LENGTH, SEARCH_CONTAINS_WINDOW, SEARCH_LIMIT_MAX } from '../search.constants';
-import { containsTerms, foldSearchText } from '../search-terms';
+import {
+  SEARCH_CONTAINS_MIN_TERM_LENGTH,
+  SEARCH_CONTAINS_TERMS_MAX_LENGTH,
+  SEARCH_CONTAINS_WINDOW,
+  SEARCH_LIMIT_MAX,
+} from '../search.constants';
+import { ContainsTermsRefusedError, containsTerms, foldSearchText } from '../search-terms';
 import { containsSnippet } from '../search-snippet';
 import { containsScore } from '../search-score';
 
@@ -70,8 +75,16 @@ const CONTAINS_UNAVAILABLE = {
     'Contains search is unavailable: this SQLite build has no FTS5 trigram tokenizer (SQLite 3.45+ is required).',
 } as const;
 
-/** Three letters or digits in a row: pg_trgm takes trigrams from nothing else. */
-const POSTGRES_TRIGRAM_SOURCE = new RegExp(`[\\p{L}\\p{N}]{${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`, 'u');
+/**
+ * Three letters or digits in a row, the only characters pg_trgm takes trigrams from: letters of every
+ * kind, decimal digits and letter numbers (`Ⅻ`), never other numbers (`²`, `①`). The nine modifier
+ * letters left out are the ones openwa_unaccent turns into punctuation before pg_trgm reads them (`ʼ`
+ * into an apostrophe, `ˆ` into `^`).
+ */
+const POSTGRES_TRIGRAM_SOURCE = new RegExp(
+  `(?:(?![\\u02b9-\\u02bd\\u02c6\\u02c8\\u02cb\\u02d0])[\\p{L}\\p{Nl}\\p{Nd}]){${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`,
+  'u',
+);
 
 /**
  * The contains candidate SELECT list. It carries no snippet or score column: searchContains computes
@@ -624,8 +637,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    *
    *  1. The database returns at most SEARCH_CONTAINS_WINDOW candidates: the most recently stored
    *     messages that contain every term, found through the trigram index, newest first. Both
-   *     dialects answer that order from an index and stop at the window, so the work is bounded
-   *     however many messages match.
+   *     dialects answer that order from an index and stop once the window is full, so a common match
+   *     costs no more than a rare one. A message the index yields that a narrowing term then rules out
+   *     does not fill it, so the messages holding the looked-up terms bound the work, multiplied by
+   *     the length of the terms (SEARCH_CONTAINS_TERMS_MAX_LENGTH).
    *  2. The application ranks the candidates with containsScore (whole word, then word start, then
    *     inside a word), newest first within a score and `id` last for a total order, and pages them in
    *     memory.
@@ -730,15 +745,22 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * it takes no trigram from (FTS5 returns nothing for it, pg_trgm scans every row), so such terms only
    * narrow the rows another term already found, and a query made of them alone is a 400 rather than a
    * full-table scan. SQLite takes trigrams from any three characters, pg_trgm only from three letters or
-   * digits in a row (see postgresCanIndex).
+   * digits in a row (see postgresCanIndex). The terms together are bounded by
+   * SEARCH_CONTAINS_TERMS_MAX_LENGTH, since each of their characters costs a check on every candidate.
    */
   private static containsTermsOf(q: string, isPostgres: boolean): string[] {
     const terms = containsTerms(q);
     const canIndex = isPostgres ? postgresCanIndex : (term: string) => !isShortTerm(term);
     if (!terms.some(canIndex)) {
       const unit = isPostgres ? 'letters or digits in a row' : 'characters';
-      throw new BadRequestException(
+      throw new ContainsTermsRefusedError(
         `A contains search needs at least one term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more ${unit}.`,
+      );
+    }
+    const length = terms.reduce((sum, term) => sum + [...foldSearchText(term)].length, 0);
+    if (length > SEARCH_CONTAINS_TERMS_MAX_LENGTH) {
+      throw new ContainsTermsRefusedError(
+        `The terms of a contains search may hold at most ${SEARCH_CONTAINS_TERMS_MAX_LENGTH} characters together, spaces not counted.`,
       );
     }
     return terms;

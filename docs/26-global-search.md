@@ -68,7 +68,8 @@ never assign the raw snippet to `innerHTML`.
 ### Match modes
 
 The `match` query parameter picks how `q` matches a message body. Each mode has its own DB-maintained
-index, so both are index lookups, never table scans. The `contains` index is opt-in
+index, and every search looks its terms up there; `contains` refuses a query its index cannot look up
+rather than read the whole table (how much of the index it reads is below). The `contains` index is opt-in
 (`SEARCH_CONTAINS_ENABLED=true`, see [26.9](#269-enabling-matchcontains)); while it is off or still
 building, `match=contains` answers `501`:
 
@@ -77,26 +78,35 @@ building, `match=contains` answers `501`:
 | `word` (default) | whole words, as described above                                                                              | `body_ts` (Postgres) / `messages_fts` (SQLite)                                                                                           | `ts_rank` / FTS5 `rank`, over every match                  |
 | `contains`       | any part of a word of 3+ characters, ignoring case and accents (`voic` finds "Invoice", `cafe` finds "Café") | a `pg_trgm` GIN index on `openwa_unaccent(body)` (Postgres) / an FTS5 `trigram` table with `remove_diacritics`, `messages_trgm` (SQLite) | match quality, over the 1,000 most recently stored matches |
 
-`contains` finds everything `word` finds, plus partial words. Every whitespace-separated term must
-appear, as with `word`; a repeated term (also one that differs only in case or accents) runs once. A
-trigram index cannot look up a term it takes no trigram from, so such a term only narrows what another
-term found, and a query made of such terms alone, two-character CJK words such as `東京` included,
-answers `400`. What counts differs by dialect: SQLite
-takes trigrams from any three characters, so a term needs three (`id` and `pm` only narrow, `:-)`
-searches); `pg_trgm` takes them from letters and digits only, so on Postgres a term needs three of them
-in a row (`:-)`, `...`, `😂😂😂` and `a.b` only narrow there, and alone answer `400`). The query grammar of
-`word` mode (quoted phrases, `OR`, `-` on Postgres) does not apply: every term, `%` and `_` included,
-matches literally.
+`contains` finds parts of words as well as whole ones, but it does not run every query `word` runs.
+Every whitespace-separated term must appear, as with `word`; a repeated term (also one that differs
+only in case or accents) runs once. A trigram index cannot look up a term it takes no trigram from, so
+such a term only narrows what another term found, and a query made of such terms alone answers `400`.
+That includes every query of two-character words, as most Korean words (`서울`) and many Chinese and
+Japanese ones (`東京`) are: search those with `word`. What counts differs by dialect: SQLite takes
+trigrams from any three characters, so a term needs three (`id` and `pm` only narrow, `:-)` searches,
+and a Hangul syllable is one character however it is encoded); `pg_trgm` takes them from letters and
+digits only, so on Postgres a term needs three of them in a row (`:-)`, `...`, `😂😂😂`, `a.b` and
+superscript digits such as `¹²³` only narrow there, and alone answer `400`). The terms may also hold
+at most **64 characters** together, spaces not counted, or the query answers `400`: every character of
+a term is checked on every message holding the term's trigrams, on SQLite on the event loop every
+session shares, and on 200k messages a query of 1,000 characters took 2.8 s where one of 64 took about
+100 ms. The query grammar of `word` mode (quoted phrases, `OR`, `-` on Postgres) does not apply: every
+term, `%` and `_` included, matches literally.
 
 **Ranking runs in two phases.** Ranking every match in SQL costs time in proportion to the number of
 matches: measured on 1M messages with a term found in 200k of them, about 100 ms on SQLite (where that
 time blocks the event loop every session shares) and 1.6 s on Postgres. So `contains` bounds the work:
 
 1. The database returns at most **1,000 candidates**: the most recently stored messages that contain
-   every term, newest first. Both dialects answer that order from an index and stop at 1,000, however
-   many messages match. SQLite reads its trigram index in insertion order; Postgres walks the existing
+   every term, newest first. Both dialects answer that order from an index and stop once they hold
+   1,000 matches. SQLite reads its trigram index in insertion order; Postgres walks the existing
    `IDX_messages_createdAt` b-tree backward for a common term, or reads the few matches of a rare one
-   from the GIN index.
+   from the GIN index. The window bounds the matches, not the messages read to find them: a message
+   the index yields that another term then rules out (a short term, or one `pg_trgm` cannot look up)
+   costs a check and counts for nothing. So a query whose looked-up term is in most messages while a
+   narrowing term is in none reads every message holding the looked-up term, on Postgres each
+   rechecked through `openwa_unaccent` (which wraps the STABLE `unaccent` and so cannot be inlined).
 2. The application ranks the candidates and pages them: each term scores **3** as a whole word, **2**
    at the start of a word and **1** inside a word (compared without case or accents), the hit's `score`
    is the sum over the terms, and ties go to the newest message, then to `messageId`. The same code
@@ -202,7 +212,7 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   is a `400`.
 
 - **`q`** is required and must be non-empty (whitespace-only is rejected with `400`, and so is one
-  longer than 1000 characters or with more than 32 words, punctuation separating words as whitespace does and a symbol or emoji that stands apart counting as one; a whitespace-separated word said again counts once). Numeric params
+  longer than 1000 characters or with more than 32 words, punctuation separating words as whitespace does and a symbol or emoji that stands apart counting as one; a whitespace-separated word said again counts once; and one holding a NUL character, which PostgreSQL refuses as a parameter). Numeric params
   are coerced and validated; a non-numeric `limit`/`offset`/`dateFrom`/`dateTo` surfaces as `400`,
   never as a `NaN` SQL parameter, and so does a `dateFrom`/`dateTo` beyond 9007199254740991 in either direction
   (no timestamp reaches it, and the cap keeps the value exactly representable, on both databases).
@@ -223,9 +233,10 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   `direction`, `from`, and optional `score`. `total` is an exact count (bounded; computed lazily only
   when the page could be full). `tookMs` is the provider-side query time. `provider` names which
   backend answered (e.g. `builtin-fts`).
-- **Errors:** `400` empty/whitespace `q`, a non-numeric numeric param, an unknown `match`, or a
-  `match=contains` query with no term the trigram index can look up (three characters; on Postgres,
-  three letters or digits in a row) (an FTS5 query-grammar error is also mapped to `400`, but since the
+- **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric numeric param,
+  an unknown `match`, or a `match=contains` query with no term the trigram index can look up (three
+  characters; on Postgres, three letters or digits in a row) or with more than 64 characters in its
+  terms (an FTS5 query-grammar error is also mapped to `400`, but since the
   SQLite path quotes every token ordinary input no longer reaches that fallback) · `401`/`403` auth ·
   `501` no provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) / for
   `match=contains`, `SEARCH_CONTAINS_ENABLED` off, the index still building, or no way to build it (e.g.
