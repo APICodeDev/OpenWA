@@ -2192,12 +2192,15 @@ export function Chats() {
           {activeChat && showContactInfo && (
             <aside className="contact-info-panel" aria-label={contactInfoLabel}>
               <header className="contact-info-header">
+                {/* Opening the panel takes focus into it: below 1200px it covers the room, the button that opened it
+                    and the stops after it. Closing it returns focus to the toggle. */}
                 <button
                   type="button"
                   className="icon-btn"
                   onClick={closeContactInfo}
                   aria-label={t('common.close')}
                   title={t('common.close')}
+                  autoFocus
                 >
                   <X size={20} />
                 </button>

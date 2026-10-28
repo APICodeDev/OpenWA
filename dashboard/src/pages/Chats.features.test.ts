@@ -505,6 +505,30 @@ test('the page and the open room keep a heading, and closing the panel returns f
   assert.equal(focusedName(), 'Contact info', 'Escape dropped focus');
 });
 
+test('opening the contact panel takes focus to its close button, from the toggle and from the contact', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const panel = () => container.querySelector('.contact-info-panel') as HTMLElement;
+  // Below 1200px the panel covers the room, so focus left on the toggle would sit under it.
+  const onClose = () => panel().contains(document.activeElement) && focusedName() === 'Close';
+
+  const toggle = screen.getByRole('button', { name: 'Contact info' });
+  toggle.focus();
+  fireEvent.click(toggle);
+  await waitFor(() => assert.ok(panel(), 'the panel did not open'));
+  assert.equal(onClose(), true, `focus is on "${focusedName()}", not in the panel`);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(focusedName(), 'Contact info', 'Escape did not return focus to the toggle');
+
+  fireEvent.click(container.querySelector('.room-contact') as HTMLElement);
+  await waitFor(() => assert.ok(panel(), 'the panel did not open from the contact'));
+  assert.equal(onClose(), true, `focus is on "${focusedName()}", not in the panel`);
+  fireEvent.click(within(panel()).getByRole('button', { name: 'Close' }));
+  assert.equal(focusedName(), 'Contact info', 'closing the panel did not return focus to the toggle');
+});
+
 test("a group's panel is its group info, not contact info", async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listGroup = true;
