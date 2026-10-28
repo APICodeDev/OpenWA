@@ -212,3 +212,19 @@ test('no stylesheet asks for the legacy touch overflow scrolling', () => {
     [],
   );
 });
+
+test('a long update notice ends in an ellipsis, and its focus ring is not clipped by the brand', () => {
+  const [badge] = find('.brand-update');
+  assert.equal(decl(badge.body, 'text-overflow'), 'ellipsis');
+  assert.equal(decl(badge.body, 'overflow'), 'hidden');
+  assert.equal(decl(badge.body, 'max-width'), '100%');
+  // The brand clips what leaves it; its padding has to hold the global ring, outline plus offset, all round.
+  const [brand] = find('.sidebar-brand');
+  assert.equal(decl(brand.body, 'overflow'), 'hidden');
+  const index = readFileSync(join(DIR, '..', 'index.css'), 'utf8');
+  const ring = /a:focus-visible[^{]*\{[^}]*outline:\s*(\d+)px[^}]*outline-offset:\s*(\d+)px/.exec(index);
+  assert.ok(ring, 'index.css no longer draws the link focus ring');
+  const reach = Number(ring[1]) + Number(ring[2]);
+  assert.equal(decl(brand.body, 'padding'), `${reach}px`);
+  assert.equal(decl(brand.body, 'margin'), `-${reach}px`);
+});

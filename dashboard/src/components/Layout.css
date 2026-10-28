@@ -57,6 +57,10 @@
   flex-direction: column;
   overflow: hidden;
   white-space: nowrap;
+  /* The clip reaches 4px past the text, where the update link's focus ring (2px, offset 2px) is drawn; the margin
+     takes the padding back, so nothing moves. */
+  padding: 4px;
+  margin: -4px;
 }
 
 .brand-name {
@@ -74,8 +78,14 @@
   margin-top: 1px;
 }
 
+/* Beside the collapse button the brand has about 123px: a longer notice (the Telugu one is about 138px) ends in an
+   ellipsis instead of being cut silently, and its title and accessible name keep the whole text. */
 .brand-update {
   align-self: flex-start;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
   margin-top: 2px;
   padding: 1px 6px;
   border-radius: var(--radius);
