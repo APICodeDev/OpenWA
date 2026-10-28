@@ -268,6 +268,37 @@ test('the session status mark clears 3:1 against its ring in every theme and tel
   assert.match(forced, /\.session-status-dot\.pending\s*\{[^}]*background:\s*Canvas;[^}]*inset 0 0 0 2px CanvasText/);
 });
 
+// A picture-less avatar shows the chat's kind as a glyph in its tone (components/chats/ChatAvatar.tsx): in light mode
+// on the tone's pastel, in dark mode on the tone mixed into the dark panel. Orange measured 2.67:1 on its pastel and
+// violet 2.96:1 on its dark mix.
+test('every avatar tone draws its glyph at 3:1 or more on its fill, in light and dark', () => {
+  const avatar = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/chats/ChatAvatar.tsx'), 'utf8');
+  const tones = /AVATAR_TONES = \[([^\]]+)\]/.exec(avatar)?.[1].match(/[a-z]+/g) ?? [];
+  assert.ok(tones.length >= 6, 'ChatAvatar.tsx no longer lists its tones');
+  const darkMix = (anchor: string): [number, string] => {
+    const rule = new RegExp(
+      `${anchor.replace(/[.[\]()'*]/g, '\\$&')}[^{]*\\{[^}]*background:\\s*color-mix\\(in srgb, currentColor (\\d+)%, (#[0-9a-f]{6})\\)`,
+    ).exec(CHATS_CSS);
+    assert.ok(rule, `no dark tone fill under ${anchor}`);
+    return [Number(rule[1]) / 100, rule[2]];
+  };
+  const darks = [
+    darkMix("[data-theme='dark'] .chats-page .chat-avatar[class*='avatar-tone-']"),
+    darkMix(":root:not([data-theme='light']) .chats-page .chat-avatar[class*='avatar-tone-']"),
+  ];
+  for (const tone of tones) {
+    const rule = chatRule(`.chats-page .avatar-tone-${tone}`);
+    const glyph = rgb(/color:\s*(#[0-9a-f]{6})/i.exec(rule)?.[1] ?? '');
+    const pastel = rgb(/background:\s*(#[0-9a-f]{6})/i.exec(rule)?.[1] ?? '');
+    const light = contrast(glyph, pastel);
+    assert.ok(light >= 3, `${tone} glyph is ${light.toFixed(2)}:1 on its pastel`);
+    for (const [alpha, panel] of darks) {
+      const dark = contrast(glyph, mix(glyph, alpha, rgb(panel)));
+      assert.ok(dark >= 3, `${tone} glyph is ${dark.toFixed(2)}:1 on its dark fill`);
+    }
+  }
+});
+
 test('the action required pill clears 4.5:1 on its tint in the dark theme, with one tint on both pages', () => {
   const tints = [
     ['Sessions.css', '.sessions-page .status-pill.action_required'],

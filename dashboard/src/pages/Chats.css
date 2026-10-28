@@ -755,14 +755,16 @@
   display: block;
 }
 
+/* The glyph shows the chat's kind, so each tone's colour holds the 3:1 of a graphic on its pastel and, in dark mode, on
+   the 18 percent of itself mixed into the panel; theme-contrast.test.ts checks every tone in both. */
 .chats-page .avatar-tone-blue {
   background: #e3ebff;
-  color: #4a6bd6;
+  color: #5070d7;
 }
 
 .chats-page .avatar-tone-orange {
   background: #fde8dc;
-  color: #d9773b;
+  color: #cf6728;
 }
 
 .chats-page .avatar-tone-pink {
@@ -777,12 +779,12 @@
 
 .chats-page .avatar-tone-violet {
   background: #ede4fb;
-  color: #8257d1;
+  color: #875ed3;
 }
 
 .chats-page .avatar-tone-teal {
   background: #daf3ee;
-  color: #1f9a85;
+  color: #1e9581;
 }
 
 [data-theme='dark'] .chats-page .chat-avatar[class*='avatar-tone-'] {
