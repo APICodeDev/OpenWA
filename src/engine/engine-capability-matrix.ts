@@ -318,6 +318,8 @@ export const CURATED_CAPABILITY_EXCEPTIONS: Record<string, MethodCapability> = {
       'phone on every tick. The interval lives in the page, so it dies with the next WhatsApp Web ' +
       'reload (roughly every 20s while UNPAIRED) and with the session; the library does expose ' +
       'cancelPairingCode, but it returns the page to QR mode, which is not what a retry wants. ' +
+      'The gateway answers 409 before asking, on whatsapp-web.js only, for a number that is the stored ' +
+      'phone of another of its sessions; it cannot see a link made on another gateway or only on the phone. ' +
       'baileys requestPairingCode ' +
       '(Socket/socket.js:596-650) writes only its own creds and sends one link_code_companion_reg IQ, ' +
       'with no shared page; no side effect was observed there.',

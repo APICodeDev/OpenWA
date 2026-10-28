@@ -395,7 +395,7 @@ test('poll messages display exact choices, including outgoing and legacy polls',
     Array.from(container.querySelectorAll('li bdi')).map(node => node.textContent),
     [...poll.options, ...poll.options],
   );
-  assert.equal(container.querySelector('script'), null);
+  assert.equal(container.querySelectorAll('script').length, 0);
   assert.ok(container.textContent?.includes('Legacy question'));
 });
 
@@ -1820,4 +1820,21 @@ test('focus that arrives by keyboard clears the pointer mark a click left, and a
 
   bubble.focus();
   assert.equal(thread.hasAttribute('data-pointer'), false);
+});
+
+test('shows the edited indicator for a persisted message and keeps it after remount', () => {
+  const message = { ...PROMPT, metadata: { edited: true } };
+  const { container } = renderThread('viewer', [message]);
+  assert.equal(container.querySelector('.message-edited')?.textContent, 'Edited');
+  rtl.cleanup();
+  const reloaded = renderThread('viewer', [JSON.parse(JSON.stringify(message)) as ChatMessageView]);
+  assert.equal(reloaded.container.querySelector('.message-edited')?.textContent, 'Edited');
+});
+
+test('does not label an unedited or revoked message as edited', () => {
+  const { container } = renderThread('viewer', [
+    { ...PROMPT, metadata: undefined },
+    { ...PROMPT, id: 'revoked', waMessageId: 'revoked', type: 'revoked', metadata: { edited: true } },
+  ]);
+  assert.equal(container.querySelectorAll('.message-edited').length, 0);
 });

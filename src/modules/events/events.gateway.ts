@@ -82,6 +82,7 @@ const CHAT_EVENTS = new Set([
   'group.update',
   'presence.update',
   'event.response',
+  'poll.vote',
 ]);
 
 /**
@@ -156,11 +157,20 @@ const EVICTION_MESSAGES: Record<ApiKeyEvictionReason, string> = {
   expired: 'API key has expired',
 };
 
+/**
+ * Largest client frame the socket accepts, in bytes. A client only sends subscribe, unsubscribe and ping
+ * frames, and the longest legal one (the longest session and request id, every event) is under 1 KB.
+ * Every frame is decoded and walked before it is answered, so the Socket.IO default of 1 MB is far more
+ * than any client needs.
+ */
+export const WS_MAX_FRAME_BYTES = 8 * 1024;
+
 @WebSocketGateway({
   cors: {
     origin: resolveWsCorsOrigin(),
   },
   namespace: '/events',
+  maxHttpBufferSize: WS_MAX_FRAME_BYTES,
 })
 export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer()
@@ -175,6 +185,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
    */
   private readonly socketsByKeyId = new Map<string, Set<Socket>>();
   private readonly chatDeliveries = new Map<string, Promise<void>>();
+  // Subscribes still re-validating their key. An unsubscribe answered meanwhile cancels the ones it covers, so
+  // they cannot join rooms after the client was told they were left.
+  private readonly pendingSubscriptions = new WeakMap<Socket, Set<{ sessionId: string; cancelled: boolean }>>();
   private authzSweepTimer?: ReturnType<typeof setInterval>;
 
   /**
@@ -277,6 +290,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     if (!current) return 'deleted';
     if (!current.isActive) return 'revoked';
     const expiry = apiKeyExpiryTime(current.expiresAt);
+    // An expiry that does not parse is the epoch for apiKeyExpiryTime, so it is expired here as AuthService refuses it.
     if (expiry !== null && expiry <= now) return 'expired';
     const authorization = apiKeyAuthorizationFingerprint(current);
     // Per socket, not per key: sockets under one key connected at different moments, so one can hold
@@ -385,7 +399,8 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // Pre-auth, per-IP handshake throttle. This must run BEFORE any credential handling: an
     // unauthenticated handshake flood otherwise reaches the DB validateApiKey below on every
     // attempt (same gap the MCP pre-auth IP throttle covers for the /mcp mount).
-    if (!this.handshakeLimiter.allow(handshakeKey)) {
+    const handshakeReservation = {};
+    if (!this.handshakeLimiter.allow(handshakeKey, handshakeReservation)) {
       this.logger.warn(`Client ${client.id} rejected: handshake rate limit exceeded (ip: ${clientIp})`);
       this.noteRateLimitViolation('handshake', { ipAddress: clientIp });
       client.emit('message', this.createError('RATE_LIMITED', 'Too many connection attempts, retry later'));
@@ -447,7 +462,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // handshakes, and authenticated connections stay bounded by maxSocketsPerKey above. Without
       // this, every client behind one NAT/proxy IP shares a 10/min budget and normal dashboard
       // re-mounts lock each other out.
-      this.handshakeLimiter.refund(handshakeKey);
+      this.handshakeLimiter.refund(handshakeKey, handshakeReservation);
       // The transport can close while validateApiKey is in flight, and Nest runs the disconnect
       // handler before this one returns. That untrack found no key on client.data yet and did
       // nothing, so the socket just tracked would stay in the per-key set for the life of the
@@ -581,6 +596,13 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     // here too, not just at connect.
     const rawApiKey = (client.data as { rawApiKey?: string }).rawApiKey;
     const clientIp = this.resolveClientIp(client);
+    const subscription = { sessionId, cancelled: false };
+    let pending = this.pendingSubscriptions.get(client);
+    if (!pending) {
+      pending = new Set();
+      this.pendingSubscriptions.set(client, pending);
+    }
+    pending.add(subscription);
     let subscriberKey: ApiKey | null;
     try {
       subscriberKey = rawApiKey ? await this.authService.validateApiKey(rawApiKey, clientIp) : null;
@@ -593,6 +615,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      pending.delete(subscription);
+      if (pending.size === 0) this.pendingSubscriptions.delete(client);
     }
     if (!subscriberKey) {
       client.emit('message', this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId));
@@ -688,6 +713,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return this.createError('TOO_MANY_SUBSCRIPTIONS', TOO_MANY_SUBSCRIPTIONS_MESSAGE, requestId);
     }
 
+    if (subscription.cancelled) {
+      return this.createError('SUBSCRIPTION_CANCELLED', 'Subscription was cancelled', requestId);
+    }
+
     // Join rooms for each session/event combination
     for (const room of rooms) {
       void client.join(room);
@@ -723,6 +752,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     if (!isSessionSelector(sessionId)) {
       return this.createError('INVALID_SESSION', 'sessionId must be "*" or a session id', requestId);
+    }
+
+    for (const subscription of this.pendingSubscriptions.get(client) ?? []) {
+      if (sessionId === '*' || subscription.sessionId === sessionId) subscription.cancelled = true;
     }
 
     // Leave all rooms for this session
@@ -927,6 +960,11 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
   /** Emit an RSVP to a WhatsApp event (Baileys only). Payload mirrors the `event.response` webhook. */
   emitEventResponse(sessionId: string, data: Record<string, unknown>) {
     this.emitToRooms(sessionId, 'event.response', data);
+  }
+
+  /** Emit a voter's new selection on a poll (whatsapp-web.js only). Payload mirrors the `poll.vote` webhook. */
+  emitPollVote(sessionId: string, data: Record<string, unknown>) {
+    this.emitToRooms(sessionId, 'poll.vote', data);
   }
 
   /**

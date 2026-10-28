@@ -5,7 +5,7 @@ import { ChatSummary, ChatState } from '../interfaces/whatsapp-engine.interface'
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { chatKind, isChannelJid } from '../identity/wa-id';
 import { WwebjsMessaging } from './wwebjs-messaging';
-import { type WwebjsEngineHost } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 import { mapWwebjsMessageType } from './message-mapper';
 
@@ -58,6 +58,7 @@ function rethrowTransportFailure(
   activity: string,
   timedOutMessage = `WhatsApp Web did not answer in time while ${activity}`,
 ): void {
+  rethrowIfNavigation(host, error);
   if (host.isPageTransportError(error)) {
     host.reportIfPageTransportError(error, context);
     throw new EngineTransportError(`Transport died while ${activity}`);
@@ -253,6 +254,7 @@ export class WwebjsChats {
     try {
       return await op();
     } catch (error) {
+      rethrowIfNavigation(this.host, error);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, context);
         throw new EngineTransportError(`Transport died during ${context}`);

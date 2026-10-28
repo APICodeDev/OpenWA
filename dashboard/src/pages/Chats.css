@@ -51,7 +51,7 @@
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   color: var(--text-primary);
   font-size: 0.875rem;
   font-weight: 500;
@@ -61,8 +61,8 @@
 }
 
 .chats-page .session-selector:focus {
-  border-color: var(--primary);
-  background: var(--bg-white);
+  border-color: var(--focus-ring);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
@@ -126,7 +126,7 @@
 }
 
 .chats-page .chat-search-input:focus-within {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
 
@@ -166,6 +166,11 @@
   gap: 0.5rem;
 }
 
+.chats-page .btn-secondary[aria-disabled='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .chats-page .chat-item-card {
   display: flex;
   align-items: center;
@@ -183,6 +188,12 @@
 
 .chats-page .chat-item-card.active {
   background: rgba(34, 197, 94, 0.08);
+}
+
+/* The muted gray is 4.44:1 on the active row's tint. */
+.chats-page .chat-item-card.active .chat-item-time,
+.chats-page .chat-item-card.active .chat-item-snippet {
+  color: var(--text-secondary);
 }
 
 .chats-page .chat-avatar {
@@ -227,6 +238,12 @@
   gap: 6px;
 }
 
+/* Text that is cut with an ellipsis takes its direction from its own characters (unicode-bidi: plaintext).
+   Under an inherited direction the ellipsis eats the wrong end of a name written the other way round: a
+   Latin name in an Arabic page lost its first letters and kept its last ("...hi Armyndharis").
+   The same property aligns the text by its own direction, so a box that a flex column stretches across its
+   width would put a Latin name at the left edge of an Arabic page while its siblings sit at the right. Those
+   boxes hug the start edge instead (align-self: flex-start, capped by max-width so the ellipsis still shows). */
 .chats-page .chat-item-name {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -234,6 +251,15 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+}
+
+/* In the New chat list the name and the number are direct children of a stretched column; in the chat list
+   they sit in rows that are as wide as their text, which needs nothing. */
+.chats-page .chat-item-info > .chat-item-name,
+.chats-page .chat-item-info > .chat-item-snippet {
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .chat-item-time {
@@ -255,12 +281,12 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
   max-width: 180px;
 }
 
 .chats-page .chat-item-snippet .no-message {
   font-style: italic;
-  opacity: 0.6;
 }
 
 .chats-page .chat-unread-badge {
@@ -272,7 +298,7 @@
   min-width: 20px;
   padding: 0 6px;
   background: var(--primary);
-  color: white;
+  color: #0f172a;
   font-size: 0.75rem;
   font-weight: 700;
   line-height: 1;
@@ -413,6 +439,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 /* Prettified phone (or "Group" / "Private contact" label for non-personal JIDs). Primary subtitle
@@ -421,6 +450,11 @@
   font-size: 0.8125rem;
   color: var(--text-muted);
   line-height: 1.2;
+  /* A number or the Group label: each takes its direction from its own text, so a phone keeps its digit
+     order inside Arabic and Hebrew pages. A line of digits resolves to left to right, so the box hugs the
+     start edge of the header (the right one in RTL, where the name is) instead of stretching across it. */
+  unicode-bidi: plaintext;
+  align-self: flex-start;
 }
 
 /* Raw JID preserved for technical use (lid resolution, webhook payloads, group ids). Muted mono,
@@ -429,10 +463,12 @@
   font-size: 0.6875rem;
   color: var(--text-muted);
   font-family: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
-  opacity: 0.7;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  max-width: 100%;
+  align-self: flex-start;
 }
 
 .chats-page .room-messages {
@@ -731,13 +767,21 @@
   margin-top: 0.25rem;
 }
 
+.chats-page .message-edited,
 .chats-page .message-time {
   font-size: 0.6875rem;
   color: var(--text-muted);
 }
 
+/* On an outgoing bubble the muted gray was 4.29:1 on the light green and 3.11:1 on the dark one. */
+.chats-page .message-bubble.outgoing .message-edited,
+.chats-page .message-bubble.outgoing .message-time {
+  color: var(--text-secondary);
+}
+
 /* A styled status bubble sets its own inline background + white text; let its timestamp inherit
    instead of staying the muted gray meant for the default bubble. */
+.chats-page .message-bubble[style] .message-edited,
 .chats-page .message-bubble[style] .message-time {
   color: inherit;
   opacity: 0.75;
@@ -749,9 +793,21 @@
 
 .chats-page .message-status-icon.read {
   /* The WhatsApp blue is 2.13:1 on the outgoing bubble, and these checks are TEXT, not an icon.
-     Darkened to clear 4.5:1 there and on white; the status is also spelled out in aria-label/title,
+     Darkened to clear 4.5:1 there (4.62:1) and on white; the status is also spelled out in aria-label/title,
      since delivered and read otherwise differ only by this colour. */
   color: #337592;
+}
+
+/* That blue is for the light bubble (4.62:1 on it, 1.56:1 on the dark green one). On the dark bubble the read tick
+   takes --read-tick, 4.78:1 there where --info is 3.14:1; the status is also spelled out in aria-label/title. */
+[data-theme='dark'] .chats-page .message-status-icon.read {
+  color: var(--read-tick);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .chats-page .message-status-icon.read {
+    color: var(--read-tick);
+  }
 }
 
 /* =============================================================================
@@ -789,7 +845,7 @@
 }
 
 .chats-page .message-text-input:focus {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
@@ -803,7 +859,7 @@
   background: var(--primary);
   border: none;
   border-radius: 50%;
-  color: white;
+  color: #0f172a;
   cursor: pointer;
   transition:
     background 0.2s,
@@ -821,7 +877,7 @@
   /* Keep the brand silhouette readable while clearly inactive — a bare gray-on-gray glyph
      reads as "no button here" rather than "send, disabled". */
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   opacity: 0.55;
   cursor: not-allowed;
   box-shadow: none;
@@ -858,6 +914,10 @@
   max-width: 450px;
   margin: 0;
   color: var(--text-muted);
+}
+
+.chats-page .chats-error-state button {
+  margin-top: 1.5rem;
 }
 
 .chats-page .text-warn {
@@ -952,6 +1012,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .preview-filesize {
@@ -1251,7 +1314,7 @@
 
 /* A bubble is a keyboard stop (ChatThread): the ring says which message the arrow keys act on. */
 .chats-page .message-bubble-container:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   border-radius: 12px;
 }
@@ -1426,7 +1489,11 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 250px;
+  unicode-bidi: plaintext;
+  /* The cap is the smaller of 250px and the room in the quote box: under nowrap the shrink-to-fit width is the
+     whole text, so a bare 250px cap let a long quote paint past a narrow bubble. */
+  max-width: min(250px, 100%);
+  width: fit-content;
 }
 
 /* Inbound business prompt buttons (Baileys click-button) */
@@ -1448,7 +1515,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-white);
-  color: var(--primary);
+  color: var(--primary-text);
   font-size: 0.875rem;
   font-weight: 500;
   cursor: pointer;
@@ -1543,6 +1610,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .btn-close-reply {
@@ -1729,7 +1799,7 @@
 
 .chats-page .status-compose-modal .compose-type-toggle button.active {
   background: var(--primary);
-  color: white;
+  color: #0f172a;
 }
 
 .chats-page .status-compose-modal .compose-field {
@@ -1753,7 +1823,7 @@
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: var(--radius, 8px);
-  background: var(--bg-light);
+  background-color: var(--bg-light);
   color: var(--text-primary);
   font-size: 0.875rem;
   outline: none;
@@ -1764,8 +1834,8 @@
 .chats-page .status-compose-modal textarea:focus,
 .chats-page .status-compose-modal input:focus,
 .chats-page .status-compose-modal select:focus {
-  border-color: var(--primary);
-  background: var(--bg-white);
+  border-color: var(--focus-ring);
+  background-color: var(--bg-white);
   box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.1);
 }
 
@@ -1792,6 +1862,11 @@
   background: var(--bg-light);
   cursor: pointer;
   box-sizing: border-box;
+}
+
+/* The rule above repaints the border over `input:focus` at the same weight, so a focused color input needs its own. */
+.chats-page .status-compose-modal input[type='color']:focus {
+  border-color: var(--focus-ring);
 }
 
 .chats-page .status-compose-modal input[type='file'] {
@@ -1878,7 +1953,7 @@
 }
 
 .chats-page .icon-btn:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -2030,8 +2105,15 @@
 }
 
 .chats-page .chat-row-menu-trigger:focus-visible {
-  outline: 2px solid var(--primary);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
+}
+
+/* A touch screen has no hover to reveal the trigger, so it stays visible there. */
+@media (hover: none) {
+  .chats-page .chat-row-menu-trigger {
+    opacity: 1;
+  }
 }
 
 /* The row's and the room's menus share their entries (ChatActionList). */
@@ -2088,11 +2170,16 @@
 }
 
 .chats-page .chat-row-menu-popover button:hover:not(:disabled),
-.chats-page .chat-row-menu-popover button:focus-visible,
-.chats-page .room-menu-popover button:hover:not(:disabled),
-.chats-page .room-menu-popover button:focus-visible {
+.chats-page .room-menu-popover button:hover:not(:disabled) {
   background: var(--bg-light);
-  outline: none;
+}
+
+/* A one-step background change does not show keyboard focus, so the entry also gets a ring. */
+.chats-page .chat-row-menu-popover button:focus-visible,
+.chats-page .room-menu-popover button:focus-visible {
+  background: var(--primary-soft);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .chats-page .chat-row-menu-popover button svg,
@@ -2152,6 +2239,34 @@
   margin-inline: 1.25rem;
 }
 
+/* The clear button at the end of a search field: a small icon button whose block margin keeps it inside the
+   height of the line, so the field does not grow when it appears. */
+.chats-page .search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-block: -0.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.chats-page .search-clear:hover {
+  background: var(--border);
+  color: var(--text-primary);
+}
+
+.chats-page .search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
 .chats-page .new-chat-hint {
   margin-block: 0.375rem 0;
   margin-inline: 1.25rem;
@@ -2192,7 +2307,7 @@
 .chats-page .chat-avatar.action-avatar {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: #0f172a;
 }
 
 .chats-page .select-check {
@@ -2234,7 +2349,7 @@
 }
 
 .chats-page .new-group-name:focus {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
 }
 
@@ -2291,7 +2406,7 @@
   border: none;
   border-radius: var(--radius, 8px);
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   font-weight: 600;
   cursor: pointer;
 }
@@ -2317,7 +2432,7 @@
   height: 44px;
   border-radius: 12px;
   background: var(--primary);
-  color: #fff;
+  color: #0f172a;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2401,7 +2516,7 @@
 }
 
 .chats-page .group-info-field .required {
-  color: var(--error);
+  color: var(--error-text);
 }
 
 .chats-page .group-info-field input,
@@ -2430,7 +2545,7 @@
 .chats-page .group-info-field textarea:focus,
 .chats-page .group-info-add input:focus,
 .chats-page .chat-dialog-form input:focus {
-  border-color: var(--primary);
+  border-color: var(--focus-ring);
   background: var(--bg-white);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
@@ -2520,6 +2635,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
 }
 
 .chats-page .group-info-member .number {

@@ -50,16 +50,22 @@ export class ContactController {
     @CurrentApiKey() apiKey?: ApiKey,
   ) {
     // Filtered before paging so a chat-restricted key sees only its contacts, in full windows.
-    const visible = await this.chatScope.filter(apiKey, await this.contactService.listContacts(sessionId), c => c.id);
-    return paginate(visible, limit ? parseInt(limit, 10) : undefined, offset ? parseInt(offset, 10) : undefined);
+    const skip = offset ? parseInt(offset, 10) : undefined;
+    const visible = await this.chatScope.filter(
+      apiKey,
+      await this.contactService.listContacts(sessionId, skip),
+      c => c.id,
+    );
+    return paginate(visible, limit ? parseInt(limit, 10) : undefined, skip);
   }
 
   @Get('profile-pictures')
   @ApiOperation({
     summary: 'Batch-resolve profile picture URLs for up to 50 contacts',
     description:
-      'One request for a whole chat sidebar — avoids the burst of parallel single fetches that ' +
-      'would exhaust the per-IP throttle. Engine lookups run 5 at a time; per-id failures return null.',
+      'Resolve a chat sidebar in one request to avoid bursts of per-contact HTTP calls. ' +
+      'Engine lookups run 5 at a time; per-id failures return null. After a lookup times out, ' +
+      'later chunks are skipped and their ids are absent from the response.',
   })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiQuery({ name: 'ids', required: true, description: 'Comma-separated contact ids (max 50 used)' })
@@ -149,8 +155,8 @@ export class ContactController {
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
   async checkNumber(@Param('sessionId') sessionId: string, @Param('number') number: string) {
-    // The engine returns the canonical chat id in its native format; we don't build the JID here
-    // (decoupled from the whatsapp-web.js `@c.us` scheme).
+    // The engine returns the id already in the neutral `<phone>@c.us` form (the Baileys adapter neutralizes its
+    // own answer, the whatsapp-web.js one folds an `@lid` back to the phone id); we don't build the JID here.
     const whatsappId = await this.contactService.getNumberId(sessionId, number);
     return {
       number,

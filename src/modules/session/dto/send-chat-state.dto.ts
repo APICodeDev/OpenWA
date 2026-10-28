@@ -1,7 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsString, Matches, MaxLength } from 'class-validator';
 import type { ChatState } from '../../../engine/interfaces/whatsapp-engine.interface';
-import { CHAT_ID_MAX_LENGTH } from '../../message/dto/send-message.dto';
+import { CHAT_ID_MAX_LENGTH, CHAT_JID_MESSAGE, CHAT_JID_PATTERN } from '../../message/dto/send-message.dto';
+import { ToStrictString } from '../../../common/utils/strict-boolean';
 
 export class SendChatStateDto {
   @ApiProperty({
@@ -12,9 +13,11 @@ export class SendChatStateDto {
     description: "Chat ID, in the active engine's native format (e.g. 1234567890@c.us)",
     example: '1234567890@c.us',
   })
+  @ToStrictString()
   @IsString()
   @IsNotEmpty()
   @MaxLength(CHAT_ID_MAX_LENGTH)
+  @Matches(CHAT_JID_PATTERN, { message: CHAT_JID_MESSAGE })
   chatId!: string;
 
   @ApiProperty({

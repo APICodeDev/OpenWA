@@ -69,6 +69,29 @@ export function isProtocolTimeout(error: unknown): boolean {
   return PROTOCOL_TIMEOUT_PATTERN.test(error instanceof Error ? error.message : String(error));
 }
 
+/** What a request answers 409 while WhatsApp Web reloads its page, whichever side of the window stamp it lands. */
+export const PAGE_RELOADING_MESSAGE =
+  'WhatsApp Web is reloading its page and the session is re-injecting. Retry in a few seconds.';
+
+/**
+ * Whether a page call was cut short by the page navigating away under it (WhatsApp Web reloading). Puppeteer
+ * rewrites its three CDP shapes of this into 'Execution context was destroyed, most likely because of a
+ * navigation.', and a call that lands on the new document before WhatsApp Web has booted dies on the missing
+ * `window.require`. The page is alive and re-injecting, so unlike a death this is not reported, and a retry
+ * a few seconds later succeeds. Not an HttpException, and not a failure captured inside the page, whose text
+ * quotes WhatsApp Web and says nothing about our page. A page that stays without `window.require` is not
+ * hidden by this answer: it is not reported here, but the liveness probe fails outside the re-inject window
+ * and the watchdog reconnects. Left unread, the same message became a false 404 or 400 at the catches that
+ * fold a failed lookup into "not found", or a bare 500.
+ */
+export function isNavigationError(error: unknown): boolean {
+  if (error instanceof HttpException) {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return !message.startsWith(CAPTURED_PAGE_ERROR_PREFIX) && isNavigationShapedInitRejection(message);
+}
+
 /**
  * The start of a send failure that scripts/patch-wwebjs-send-error.js captured inside the page, where
  * it summarises a thrown value puppeteer would otherwise hand over as `t: t`. The patcher builds the
@@ -244,6 +267,8 @@ export class WwebjsLifecycle {
   // exact jest timer counts, and a timer would also outlive the single-use adapter.
   private lastMainFrameNavigationAt = 0;
   private navigationEpisodeStartedAt = 0;
+  /** Counts the navigations stamped, so a probe can tell that one landed while it was waiting. */
+  private navigationCount = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -760,6 +785,7 @@ export class WwebjsLifecycle {
       // lastLoggedOut is a runtime field the wwjs typings do not declare (same loose-cast pattern as
       // the pupBrowser/pupPage handles above).
       if ((this.client as unknown as { lastLoggedOut?: boolean } | null)?.lastLoggedOut) return;
+      this.navigationCount++;
       const now = Date.now();
       if (this.navigationEpisodeStartedAt === 0) this.navigationEpisodeStartedAt = now;
       this.lastMainFrameNavigationAt = now;
@@ -795,6 +821,10 @@ export class WwebjsLifecycle {
     this.setStatus(EngineStatus.DISCONNECTED);
     this.host.getCallbacks().onDisconnected?.(reason);
   }
+
+  /** How many times, and how far apart, {@link reportOnceGone} looks for puppeteer to mark a page gone. */
+  private static readonly PAGE_GONE_POLLS = 25;
+  private static readonly PAGE_GONE_POLL_MS = 20;
 
   /**
    * Error-message signatures of a dead page/transport: Puppeteer raises these when the browser
@@ -847,6 +877,38 @@ export class WwebjsLifecycle {
     if (!this.isPageTransportError(error)) {
       return;
     }
+    this.reportDeath(error, context);
+  }
+
+  /**
+   * For a best-effort read that carries on after a failure, which must not take the session down on an
+   * error's text: a page-side exception can quote "connection closed" about WhatsApp Web's own socket while
+   * the page is fine. Puppeteer rejects a call pending on a dying page a few milliseconds BEFORE it marks
+   * the page closed or the browser disconnected (measured with Chromium stopped by SIGTERM and with a tab
+   * closed from outside; a killed browser already reads disconnected), so the page gets a short while to
+   * show it is gone. A page that still reads alive after that is not reported and the caller carries on.
+   */
+  async reportOnceGone(error: unknown, context: string): Promise<void> {
+    if (!this.isPageTransportError(error)) return;
+    // Counted in polls rather than elapsed time: every poll hands the event loop a turn, which is when
+    // puppeteer's close events are delivered, even if the process was starved for longer than the wait.
+    for (let polls = 0; polls < WwebjsLifecycle.PAGE_GONE_POLLS; polls++) {
+      if (this.status !== EngineStatus.READY || this.isPageGone()) break;
+      await new Promise(resolve => setTimeout(resolve, WwebjsLifecycle.PAGE_GONE_POLL_MS));
+    }
+    // Not READY any more means a death listener or a teardown got there first and owns the report.
+    if (this.status !== EngineStatus.READY) return;
+    if (!this.isPageGone()) {
+      this.host.logger.warn(`Page transport error during ${context} while the page is alive, not a death`, {
+        error: error instanceof Error ? error.message : String(error),
+        action: 'page_transport_error_page_alive',
+      });
+      return;
+    }
+    this.reportDeath(error, context);
+  }
+
+  private reportDeath(error: unknown, context: string): void {
     // Inside the navigation re-inject window the same signatures ride a HEALING page: an in-flight
     // evaluate killed by the navigation keeps its 'Protocol error' prefix (puppeteer only rewrites
     // the shapes that END with a context-gone suffix), and a navigating page transiently detaches
@@ -868,6 +930,15 @@ export class WwebjsLifecycle {
       error: error instanceof Error ? error.message : String(error),
     });
     this.handlePuppeteerDeath(`Page transport error during ${context}`);
+  }
+
+  /** Whether puppeteer itself reports the page closed or the browser disconnected (not an error's text). */
+  private isPageGone(): boolean {
+    const { pupBrowser, pupPage } = (this.client ?? {}) as unknown as {
+      pupBrowser?: { connected?: boolean };
+      pupPage?: { isClosed?: () => boolean };
+    };
+    return pupPage?.isClosed?.() === true || pupBrowser?.connected === false;
   }
 
   markReadyFromClientInfo(): void {
@@ -1117,6 +1188,7 @@ export class WwebjsLifecycle {
     // dead on the first tick, and hid a page that really had died.
     const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
     if (!probeable || !this.client) return false;
+    const navigationsBefore = this.navigationCount;
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -1130,8 +1202,9 @@ export class WwebjsLifecycle {
       if (state === WAState.CONNECTED) {
         // Observed recovery closes the navigation episode. Without this, an episode whose re-inject
         // died silently (no 'ready' re-emit, but WA Web's socket back up) would keep a stale episode
-        // anchor forever, denying the grace to every LATER navigation via the episode cap.
-        this.clearNavigationReinjectWindow();
+        // anchor forever, denying the grace to every LATER navigation via the episode cap. Only an episode
+        // this answer can speak for: a navigation stamped while getState() was pending is a newer one.
+        if (navigationsBefore === this.navigationCount) this.clearNavigationReinjectWindow();
         return true;
       }
       return this.isInNavigationReinjectWindow();

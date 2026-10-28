@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { localizePlugin } from '../utils/localizePlugin';
 import { configUiSafeConfig, missingRequiredConfig, sparseSessionOverride } from '../utils/pluginConfigRules';
@@ -201,7 +201,7 @@ function ConfigField({
           minLength={field.min}
           maxLength={field.max}
           rows={4}
-          onChange={e => onChange(e.target.value)}
+          onChange={e => onChange(coerceFieldInput(field, e.target.value))}
         />
         {desc}
       </div>
@@ -225,7 +225,8 @@ function ConfigField({
         step={field.type === 'number' ? 'any' : undefined}
         minLength={field.type !== 'number' ? field.min : undefined}
         maxLength={field.type !== 'number' ? field.max : undefined}
-        pattern={field.type !== 'number' ? field.pattern : undefined}
+        // A stored secret reads back as the mask '***', which no pattern describes: it is only checked once typed over.
+        pattern={field.type !== 'number' && !(field.secret && value === '***') ? field.pattern : undefined}
         onChange={e => onChange(coerceFieldInput(field, e.target.value))}
       />
       {desc}
@@ -586,12 +587,50 @@ function SessionsTab({ plugin }: { plugin: Plugin }) {
   );
 }
 
+/**
+ * The remote catalog and its read. The mount prefetch can still be in flight when a later read starts (an install or
+ * an uninstall changes the installed flags), so only the latest read may publish: an older answer finishing after it
+ * would put back flags from before.
+ */
+function useCatalog() {
+  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const latestRead = useRef(0);
+
+  const loadCatalog = useCallback(async () => {
+    const read = ++latestRead.current;
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const entries = await pluginsApi.catalog();
+      if (read === latestRead.current) setCatalog(entries);
+    } catch (err) {
+      // The error renders only inside the Catalog tab, next to a Refresh button, so a failed
+      // page-mount prefetch stays quiet on the page itself (it just means no update chips). It
+      // must still be recorded: a tab opened while that prefetch was in flight would otherwise
+      // settle on "No plugins in the catalog." with no way to retry.
+      if (read === latestRead.current) setCatalogError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (read === latestRead.current) setCatalogLoading(false);
+    }
+  }, []);
+
+  return { catalog, catalogLoading, catalogError, loadCatalog };
+}
+
 export default function Plugins() {
   const { t, i18n } = useTranslation();
   useDocumentTitle(t('plugins.title'));
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { data: plugins = [], isLoading: loadingPlugins, error: queryError } = usePluginsQuery();
+  const {
+    data: plugins = [],
+    isLoading: loadingPlugins,
+    error: queryError,
+    // A read that never produced a list says nothing about what is installed. A failed refetch keeps its data.
+    isLoadingError: neverLoaded,
+  } = usePluginsQuery();
   const loading = loadingPlugins;
   const error = queryError instanceof Error ? queryError.message : null;
   // Ids of plugins with a lifecycle action in flight. One per plugin, so another plugin's action
@@ -619,9 +658,7 @@ export default function Plugins() {
   const [installFile, setInstallFile] = useState<File | null>(null);
   const [installing, setInstalling] = useState(false);
   const [installMode, setInstallMode] = useState<'upload' | 'catalog'>('upload');
-  const [catalog, setCatalog] = useState<CatalogPlugin[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const { catalog, catalogLoading, catalogError, loadCatalog } = useCatalog();
   const [catalogSearch, setCatalogSearch] = useState('');
   const [installingId, setInstallingId] = useState<string | null>(null);
 
@@ -749,22 +786,6 @@ export default function Plugins() {
     }
   };
 
-  const loadCatalog = async () => {
-    setCatalogLoading(true);
-    setCatalogError(null);
-    try {
-      setCatalog(await pluginsApi.catalog());
-    } catch (err) {
-      // The error renders only inside the Catalog tab, next to a Refresh button, so a failed
-      // page-mount prefetch stays quiet on the page itself (it just means no update chips). It
-      // must still be recorded: a tab opened while that prefetch was in flight would otherwise
-      // settle on "No plugins in the catalog." with no way to retry.
-      setCatalogError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCatalogLoading(false);
-    }
-  };
-
   // Load the catalog when the Catalog tab opens with nothing to show: the first time, or again
   // after an earlier load failed.
   useEffect(() => {
@@ -778,7 +799,7 @@ export default function Plugins() {
   // user having to open the Install drawer first. An unreachable catalog just hides the chips.
   useEffect(() => {
     void loadCatalog();
-  }, []);
+  }, [loadCatalog]);
 
   // Catalog entries with a strictly newer version than the installed one, keyed by plugin id —
   // drives both the per-card update chip and the counter on the Install button.
@@ -896,18 +917,18 @@ export default function Plugins() {
         <aside className="plugins-rail">
           <div className="rail-stats">
             <div className="rail-stat">
-              <span className="rail-stat-num">{enabledCount}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : enabledCount}</span>
               <span className="rail-stat-label">{t('plugins.rail.enabled', 'enabled')}</span>
             </div>
             <div className="rail-stat">
-              <span className="rail-stat-num">{visiblePlugins.length}</span>
+              <span className="rail-stat-num">{neverLoaded ? '-' : visiblePlugins.length}</span>
               <span className="rail-stat-label">{t('plugins.rail.installed', 'installed')}</span>
             </div>
           </div>
 
           <div className="rail-section">
             <p className="rail-label">{t('plugins.rail.active', 'Active plugins')}</p>
-            {activePlugins.length === 0 ? (
+            {neverLoaded ? null : activePlugins.length === 0 ? (
               <p className="rail-empty">{t('plugins.rail.none', 'None enabled yet')}</p>
             ) : (
               <ul className="rail-active-list">
@@ -923,7 +944,7 @@ export default function Plugins() {
           </div>
         </aside>
 
-        <main className="plugins-main">
+        <div className="plugins-main">
           <div className="plugins-grid">
             {visiblePlugins.map(plugin => {
               const TypeIcon = pluginTypeIcons[plugin.type as PluginType] || Puzzle;
@@ -1047,10 +1068,10 @@ export default function Plugins() {
               );
             })}
           </div>
-        </main>
+        </div>
       </div>
 
-      {visiblePlugins.length === 0 && !loading && (
+      {visiblePlugins.length === 0 && !loading && !neverLoaded && (
         <div className="empty-state">
           <Puzzle size={64} />
           <h3>{t('plugins.empty.title')}</h3>
