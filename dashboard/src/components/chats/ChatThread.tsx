@@ -709,7 +709,7 @@ function ChatThread({
                   hasReactions ? ' has-reactions' : ''
                 }`}
                 data-wa-message-id={msg.waMessageId}
-                data-scroll-anchor=""
+                data-scroll-anchor={msg.id}
               >
                 <div
                   className="message-bubble-container"

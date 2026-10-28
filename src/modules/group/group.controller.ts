@@ -1,4 +1,18 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Post,
+  Put,
+  Delete,
+  Param,
+  Body,
+  Query,
+  Req,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+import type { Request } from 'express';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { GroupService } from './group.service';
 import {
@@ -69,6 +83,25 @@ const PACED_PARTICIPANT_400 =
 // EngineRegistry.require() answers 400 for a session with no engine; ENGINE_NOT_READY_409 covers only
 // an engine that exists but is not ready. The body variant is for routes that also validate a DTO.
 const BODY_OR_SESSION_400 = 'The body failed validation, or the session is not started (no engine is running for it).';
+
+/**
+ * Approve and reject act on EVERY pending request when `participants` is absent, so a body that was sent but
+ * never became the DTO must not pass for an absent one. The parsers read only application/json and
+ * application/x-www-form-urlencoded and leave the body of any other type unread (a `fetch` with a string body
+ * and no headers sends text/plain), and a bare `[]` carries no property for the whitelist to refuse. Both
+ * reach the handler as an empty object.
+ */
+function assertActionBodyRead(req: Request): void {
+  const hasBody = Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined;
+  if (hasBody && req.is(['application/json', 'application/x-www-form-urlencoded']) === false) {
+    throw new BadRequestException(
+      'The request body was not read: send it as application/json, or send no body to act on every request',
+    );
+  }
+  if (Array.isArray(req.body)) {
+    throw new BadRequestException('The body must be a JSON object such as {"participants": [...]}, not a list');
+  }
+}
 
 // NOTE: the session→groups LIST lives on the SessionController at GET /sessions/:sessionId/groups (it
 // registered first and owns the canonical narrow projection). A bare @Get() here would collide on
@@ -158,7 +191,7 @@ export class GroupController {
 
   @ChatScoped('fenced')
   @Get(':groupId/settings')
-  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Get group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiResponse({ status: 200, description: 'Group settings', type: GroupSettingsResponseDto })
@@ -180,12 +213,18 @@ export class GroupController {
   @ChatScoped('fenced')
   @Put(':groupId/settings')
   @RequireRole(ApiKeyRole.OPERATOR)
-  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer)' })
+  @ApiOperation({ summary: 'Update group settings (announce / locked / ephemeral timer / member-add mode)' })
   @ApiParam({ name: 'sessionId', description: 'Session ID' })
   @ApiParam({ name: 'groupId', description: 'Group ID' })
   @ApiBody({ type: GroupSettingsDto })
   @ApiResponse({ status: 200, description: 'Group settings updated', type: GroupAckResponseDto })
-  @ApiResponse({ status: 400, description: 'No setting provided, or a value is not a boolean' })
+  @ApiResponse({
+    status: 400,
+    description:
+      'No setting provided, an unknown body field, or an invalid value: `announce` and `locked` take a boolean, ' +
+      '`ephemeralSeconds` an integer of 0 or more, `memberAddMode` `all` or `admins`, and `null` is refused. ' +
+      'Also answered when the session is not started (no engine is running for it).',
+  })
   @ApiResponse({ status: 403, description: 'The engine refused the change (the account is not a group admin)' })
   @ApiResponse({ status: 404, description: 'Group not found' })
   @ApiResponse({ status: 501, description: 'The active engine does not support a requested setting' })
@@ -389,7 +428,9 @@ export class GroupController {
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: MembershipRequestActionDto,
+    @Req() req: Request,
   ) {
+    assertActionBodyRead(req);
     const results = await this.groupService.approveGroupMembershipRequests(sessionId, groupId, dto.participants);
     return { success: true, message: 'Membership requests approved', results };
   }
@@ -423,7 +464,9 @@ export class GroupController {
     @Param('sessionId') sessionId: string,
     @Param('groupId') groupId: string,
     @Body() dto: MembershipRequestActionDto,
+    @Req() req: Request,
   ) {
+    assertActionBodyRead(req);
     const results = await this.groupService.rejectGroupMembershipRequests(sessionId, groupId, dto.participants);
     return { success: true, message: 'Membership requests rejected', results };
   }

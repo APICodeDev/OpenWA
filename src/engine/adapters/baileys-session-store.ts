@@ -11,6 +11,8 @@ interface LastMessage {
   timestamp: number;
   text: string;
   type?: MessageType;
+  /** Where the message stands in the order this session observed them, which settles a tie in `timestamp`. */
+  order: number;
 }
 
 // Default per-map entry cap, matching the other per-session bounds (LID_MAPPING_CACHE_MAX,
@@ -199,7 +201,8 @@ export class BaileysSessionStore {
    * answering with the preview after an API reply sent nothing while the route reported success.
    * An evicted entry reads null, which the receipt path answers as "nothing known".
    */
-  private readonly lastInbound: LruMap<string, { key: WAMessageKey; timestamp: number }>;
+  private readonly lastInbound: LruMap<string, { key: WAMessageKey; timestamp: number; order: number }>;
+  private messageOrder = 0;
   private readonly lidToPn: LruMap<string, string>;
   /**
    * Per-chat disappearing-messages timer (seconds) learned from inbound messages (#473), the reliable
@@ -214,7 +217,7 @@ export class BaileysSessionStore {
   /**
    * @param lidStore       optional persisted, cross-session lid->phone table that backs resolution beyond
    *                       this session's in-memory map (survives restarts, shared across sessions).
-   * @param sessionId      provenance recorded on rows this session writes to the persisted tables.
+   * @param sessionId      recorded on rows this session writes to the persisted tables (a lid row's owner).
    * @param chatStateStore optional persisted per-session mute/archive/pin, so those chat fields survive a
    *                       reconnect Baileys cannot resync (it only re-emits mutations newer than the
    *                       persisted app-state version, never an already-applied one).
@@ -263,11 +266,12 @@ export class BaileysSessionStore {
       // `phoneNumber` is the authoritative PN field; fall back to `id` itself only when it's already
       // in the phone dialect (a lid-only contact's `id` is `<lid>@lid`, which is not a usable phone).
       // A record keyed by its lid carries the lid side in `id` and usually has no `lid` field.
+      // A name-only update carries no new pair and must not write an older merged phone over the shared table.
       const phone = merged.phoneNumber ?? (merged.id.endsWith('@s.whatsapp.net') ? merged.id : undefined);
       const lid = merged.lid ?? (parseWaId(merged.id).kind === 'lid' ? merged.id : undefined);
-      if (lid && phone) {
+      if (lid && phone && (r.lid !== undefined || r.phoneNumber !== undefined)) {
         this.lidToPn.set(lid, phone);
-        this.persistLidMapping(lid, phone);
+        this.persistLidMapping(lid, phone, r.phoneNumber !== undefined || kind === 'user');
       }
     }
   }
@@ -374,11 +378,11 @@ export class BaileysSessionStore {
     if (missed.length) await store.forget(sessionId, missed);
   }
 
-  addLidMappings(mappings: { lid?: string; pn?: string }[] = []): void {
+  addLidMappings(mappings: { lid?: string; pn?: string }[] = [], isReported = true): void {
     for (const m of mappings) {
       if (m.lid && m.pn) {
         this.lidToPn.set(m.lid, m.pn);
-        this.persistLidMapping(m.lid, m.pn);
+        this.persistLidMapping(m.lid, m.pn, isReported);
       }
     }
   }
@@ -391,12 +395,15 @@ export class BaileysSessionStore {
    * is still the only place a fresh `@lid` sender's number is revealed on the message key itself; the
    * pairs flow through addLidMappings, so they also write through to the persistent table.
    */
-  recordKeyLidMappings(key: Pick<WAMessageKey, 'remoteJid' | 'remoteJidAlt' | 'participant' | 'participantAlt'>): void {
+  recordKeyLidMappings(
+    key: Pick<WAMessageKey, 'remoteJid' | 'remoteJidAlt' | 'participant' | 'participantAlt' | 'fromMe'>,
+  ): void {
     // On a status or broadcast-list message `remoteJidAlt` is the SENDER's other dialect (Baileys fills
     // it for every non-group chat), so it pairs with `participant`, not with the `@broadcast` id.
     const broadcast = key.remoteJid?.endsWith('@broadcast');
     this.addLidMappings([
-      this.lidPnPair(broadcast ? key.participant : key.remoteJid, key.remoteJidAlt),
+      // Own-message remoteJid can name the recipient while senderAlt still names this account.
+      key.fromMe === true ? {} : this.lidPnPair(broadcast ? key.participant : key.remoteJid, key.remoteJidAlt),
       this.lidPnPair(key.participant, key.participantAlt),
     ]);
   }
@@ -414,11 +421,20 @@ export class BaileysSessionStore {
   }
 
   /** Write a learned lid->phone pair through to the persistent table (bare digits, fire-and-forget). */
-  private persistLidMapping(lidJid: string, pnJid: string): void {
-    void this.lidStore?.remember(userPart(lidJid), userPart(pnJid), this.sessionId);
+  private persistLidMapping(lidJid: string, pnJid: string, isReported: boolean): void {
+    if (isReported) void this.lidStore?.remember(userPart(lidJid), userPart(pnJid), this.sessionId);
+    else void this.lidStore?.rememberIfUnknown?.(userPart(lidJid), userPart(pnJid), this.sessionId);
   }
 
-  recordMessage(msg: WAMessage, type?: MessageType): void {
+  /**
+   * The next place in the observed order. A live message takes its place on arrival, before the media
+   * download and the store reads that can let a later one finish first; history, which has none, records 0.
+   */
+  nextMessageOrder(): number {
+    return ++this.messageOrder;
+  }
+
+  recordMessage(msg: WAMessage, type?: MessageType, order = this.nextMessageOrder()): void {
     const chatId = msg.key?.remoteJid;
     if (!chatId || !msg.key) {
       return;
@@ -428,18 +444,36 @@ export class BaileysSessionStore {
     // neutral JID so an outbound send addressed in either dialect (phone or @lid) finds it.
     this.recordEphemeralFromMessage(chatId, msg);
     // A received broadcast-list message previews in its sender's chat, where Baileys lists it.
-    const key = this.chatKey(baileysChatJid(chatId, msg.key.participant, msg.key.fromMe === true));
+    const key = this.toEngineJid(baileysChatJid(chatId, msg.key.participant, msg.key.fromMe === true));
     const timestamp = this.toUnixSeconds(msg.messageTimestamp);
     if (!msg.key.fromMe) {
       const inbound = this.lastInbound.get(key);
-      if (!inbound || inbound.timestamp < timestamp) this.lastInbound.set(key, { key: msg.key, timestamp });
+      if (
+        !inbound ||
+        inbound.timestamp < timestamp ||
+        (inbound.timestamp === timestamp && this.followsOther(msg, order, inbound))
+      ) {
+        this.lastInbound.set(key, { key: msg.key, timestamp, order });
+      }
     }
     const existing = this.lastMessages.get(key);
-    if (existing && existing.timestamp >= timestamp) {
+    if (
+      existing &&
+      (existing.timestamp > timestamp || (existing.timestamp === timestamp && !this.followsOther(msg, order, existing)))
+    ) {
       return; // keep the newest
     }
     const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? '';
-    this.lastMessages.set(key, { key: msg.key, timestamp, text, type });
+    this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order });
+  }
+
+  /**
+   * Whether a message sent in the same second as `other` came after it. Timestamps have a resolution of
+   * a second, so two messages of a burst tie; the order they were observed in decides, and a repeat of
+   * the same message (a redelivery) is no later than itself.
+   */
+  private followsOther(msg: WAMessage, order: number, other: { key: WAMessageKey; order: number }): boolean {
+    return !!msg.key.id && other.key.id !== msg.key.id && order > other.order;
   }
 
   /**
@@ -449,7 +483,7 @@ export class BaileysSessionStore {
    */
   recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void {
     if (!messageId) return;
-    for (const key of new Set([this.chatKey(chatId), ...this.chatTwins(chatId)])) {
+    for (const key of new Set([chatId, this.toEngineJid(chatId)])) {
       const existing = this.lastMessages.get(key);
       if (existing?.key.id === messageId)
         this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
@@ -609,7 +643,8 @@ export class BaileysSessionStore {
           ? userPart(c.id)
           : '';
       const lid = c.lid ? userPart(c.lid) : c.id.endsWith('@lid') ? userPart(c.id) : '';
-      if (phone !== want && lid !== want) continue;
+      // Digits are only comparable within one kind: a lid and a phone number can read the same.
+      if ((parsed.kind === 'user' ? phone : lid) !== want) continue;
       if (c.name) return this.toNeutralContact(c);
       unnamed ??= c;
     }
@@ -634,12 +669,19 @@ export class BaileysSessionStore {
     for (const [key, m] of [...this.lastMessages.entries()]) {
       const id = this.toNeutralJid(key);
       const seen = previews.get(id);
-      if (!seen || m.timestamp > seen.timestamp) previews.set(id, m);
+      if (!seen || m.timestamp > seen.timestamp || (m.timestamp === seen.timestamp && m.order > seen.order)) {
+        previews.set(id, m);
+      }
     }
     const byId = new Map<string, Chat[]>();
     for (const c of [...this.chats.values()]) {
       const id = this.toNeutralJid(c.id!);
       byId.set(id, [...(byId.get(id) ?? []), c]);
+    }
+    // A message proves the raw conversation exists even before its chat record reaches this process.
+    for (const [key] of [...this.lastMessages.entries()]) {
+      const id = this.toNeutralJid(key);
+      if (!byId.has(id)) byId.set(id, [{ id: key }]);
     }
     // A new engine starts with no chats (see the class comment), but a chat with a persisted state is
     // known to exist: a deleted chat loses its row. So it is listed before its next message arrives.
@@ -670,7 +712,8 @@ export class BaileysSessionStore {
 
   /** The newest message the chat received (not one this account sent), or null when none is known. */
   lastInboundMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null {
-    return this.newestAcrossTwins(this.lastInbound, chatId) ?? null;
+    const m = this.newestAcrossTwins(this.lastInbound, chatId);
+    return m ? { key: m.key, timestamp: m.timestamp } : null;
   }
 
   /**
@@ -678,11 +721,19 @@ export class BaileysSessionStore {
    * contact's lid before the lid->phone mapping was learned stays on the lid twin while the chat key
    * moves to the phone-keyed chat record, so reading the chat key alone would lose it.
    */
-  private newestAcrossTwins<T extends { timestamp: number }>(map: LruMap<string, T>, chatId: string): T | undefined {
+  private newestAcrossTwins<T extends { timestamp: number; order: number }>(
+    map: LruMap<string, T>,
+    chatId: string,
+  ): T | undefined {
     let newest: T | undefined;
     for (const k of [this.chatKey(chatId), ...this.chatTwins(chatId)]) {
       const v = map.get(k);
-      if (v && (!newest || v.timestamp > newest.timestamp)) newest = v;
+      if (
+        v &&
+        (!newest || v.timestamp > newest.timestamp || (v.timestamp === newest.timestamp && v.order > newest.order))
+      ) {
+        newest = v;
+      }
     }
     return newest;
   }
@@ -697,10 +748,9 @@ export class BaileysSessionStore {
   getEphemeralExpiration(chatId: string): number | undefined {
     // Prefer the timer learned from inbound messages (reliably present); try the raw, engine, and
     // neutral keys so an @lid-keyed entry and a phone-dialect send target resolve to the same value.
-    const fromMessage =
-      this.ephemeralByChat.get(chatId) ??
-      this.ephemeralByChat.get(this.toEngineJid(chatId)) ??
-      this.ephemeralByChat.get(this.toNeutralJid(chatId));
+    const fromMessage = [chatId, this.toEngineJid(chatId), ...this.chatTwins(chatId)]
+      .map(key => this.ephemeralByChat.get(key))
+      .find(value => typeof value === 'number' && value > 0);
     if (typeof fromMessage === 'number' && fromMessage > 0) {
       return fromMessage;
     }
@@ -740,11 +790,11 @@ export class BaileysSessionStore {
   }
 
   /**
-   * Canonicalize a Baileys JID to the neutral dialect (see {@link canonicalizeWaId} / wa-id.ts),
-   * resolving a lid to its phone via this session's lid->pn map when the mapping is known.
+   * Normalize identity without deriving it from a display cache. A LID stays a LID; persisted,
+   * reported mappings bridge it to phone grants and filters at the application boundary.
    */
   toNeutralJid(jid: string): string {
-    return canonicalizeWaId(jid, id => this.resolvePhone(id));
+    return canonicalizeWaId(jid);
   }
 
   /**
@@ -766,7 +816,7 @@ export class BaileysSessionStore {
     // the raw `@lid` key answered an empty string for somebody the account has saved. An unresolved
     // lid still answers '', which is the honest answer there.
     const id = this.toNeutralJid(c.id);
-    const number = c.phoneNumber ? userPart(c.phoneNumber) : id.endsWith('@c.us') ? userPart(id) : '';
+    const number = c.phoneNumber ? userPart(c.phoneNumber) : (this.resolvePhone(c.id) ?? '');
     return {
       id,
       name: c.name ?? c.verifiedName,

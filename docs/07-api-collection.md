@@ -185,7 +185,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/force-kill
 
 #### POST /api/sessions/:sessionId/pairing-code
 
-Request an 8-char pairing code via phone number (OPERATOR). On whatsapp-web.js, request a code only for a number you are prepared to re-link: a request for a number that already has a linked session has been observed to end with WhatsApp revoking that device. Baileys was not affected in the same tests; link by QR when a session of that number must stay up.
+Request an 8-char pairing code via phone number (OPERATOR). On whatsapp-web.js, request a code only for a number you are prepared to re-link: a request for a number that already has a linked session has been observed to end with WhatsApp revoking that device. The gateway answers `409` for a number that is the stored phone of another of its sessions, and cannot see a link made elsewhere. Baileys was not affected in the same tests and is not refused; link by QR when a session of that number must stay up.
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/pairing-code" \
@@ -278,7 +278,7 @@ curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/arch
 
 #### POST /api/sessions/:sessionId/chats/mute
 
-Mute a chat until an epoch-**milliseconds** timestamp, or send `"muteUntil":null` to unmute (OPERATOR).
+Mute a chat until an epoch-**milliseconds** timestamp (at most `9007199254740991`; a larger one is a `400`), or send `"muteUntil":null` to unmute (OPERATOR).
 
 ```bash
 curl -X POST "$BASE/api/sessions/8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a/chats/mute" \

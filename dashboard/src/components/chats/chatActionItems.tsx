@@ -20,6 +20,8 @@ import type { Chat } from '../../services/api';
 
 /** What a chat can be asked to do from its row or its room. Every one but the info views is an operator route. */
 export interface ChatRowActions {
+  /** A 1:1 chat's menu is opening: what its entries read (the address book) is loaded from here, not at page load. */
+  onMenuOpen?: () => void;
   onGroupInfo: (chat: Chat) => void;
   onContactInfo?: (chat: Chat) => void;
   onSaveContact?: (chat: Chat) => void;

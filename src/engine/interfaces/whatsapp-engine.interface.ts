@@ -103,6 +103,14 @@ export interface IncomingMessage {
   timestamp: number;
   fromMe: boolean;
   isGroup: boolean;
+  /**
+   * Set by an engine that applied an edit to `body` before it handed the message over: the text the message
+   * arrived with. The edits that reached the message meanwhile reach the session too, and are compared with
+   * this text. It equals `body` when a later edit restored that text, as the message was edited all the same,
+   * and is unset when every edit repeated the text. The session removes the field before the message is
+   * hooked, stored or announced.
+   */
+  originalBody?: string;
   /** User-facing chat kind of the conversation this message belongs to (derived from `chatId`). */
   kind: ChatKind;
   /**
@@ -691,6 +699,34 @@ export interface ReactionEvent {
 }
 
 /**
+ * A voter's current selection on a poll (the native poll sent with `send-poll` or from the phone).
+ * WhatsApp sends the whole selection each time a voter changes it, so the latest `timestamp` per
+ * `voterId` is the current state, and an empty `selectedOptions` means the voter cleared their vote.
+ */
+export interface PollVoteEvent {
+  /** Id of the poll creation message the vote belongs to. */
+  pollMessageId: string;
+  /** Neutral id of the chat the poll was posted in. */
+  chatId: string;
+  /** Neutral id of the voter (the account itself when it voted from its phone). */
+  voterId: string;
+  /**
+   * The option texts now selected, exactly as they appear on the poll (the same strings `vote-poll`
+   * takes). An option the engine could not name is left out.
+   */
+  selectedOptions: string[];
+  /** The poll's question, when the creation message is available to read it from. */
+  pollName?: string;
+  /** Unix seconds the voter changed the selection (sender clock). */
+  timestamp: number;
+  /**
+   * The same instant in Unix milliseconds. Two changes of one voter within a second share `timestamp`, so
+   * this is what orders them and tells them apart.
+   */
+  timestampMs: number;
+}
+
+/**
  * A group membership or metadata change, mapped at the adapter boundary to this neutral
  * shape so consumers never see engine-specific payloads:
  *  - whatsapp-web.js: `group_join` / `group_leave` / `group_update` /
@@ -954,6 +990,11 @@ export interface EngineEventCallbacks {
    */
   onEventResponse?: (event: EventResponseEvent) => void;
   /**
+   * Fired each time a voter changes their selection on a poll (consumers emit `poll.vote`).
+   * whatsapp-web.js only: Baileys never fires it.
+   */
+  onPollVote?: (event: PollVoteEvent) => void;
+  /**
    * Fired on group membership changes (join/leave), group metadata updates
    * (subject/description/announce/locked), and pending join requests. The `kind` selects the
    * consumer event name (`group.join` / `group.leave` / `group.update` / `group.join_request`).
@@ -1051,8 +1092,9 @@ export interface EngineEventCallbacks {
    * per live row and so covers that directory, so start()/delete()/executeReconnect can wait
    * (bounded, fail-closed) for it to settle before touching that path.
    *
-   * Adapters that never remove credentials on their own (e.g. Baileys until a later task wires its
-   * WhatsApp-originated cleanup) simply never invoke this.
+   * Adapters that never remove credentials on their own simply never invoke this. Baileys invokes it for a
+   * WhatsApp-originated unlink (a remote logout): the promise is the cleanup that wipes the stored account
+   * state and the auth directory.
    */
   onCredentialTeardownStarted?: (operation: Promise<void>) => void;
   /**
@@ -1275,6 +1317,12 @@ export interface ChatHistoryCapability {
  * JID included — see setGroupPicture), and its consumer domain is contact data.
  */
 export interface ContactCapability {
+  /**
+   * Defaults to reporting lookup answers. `seed` keeps positive lookups as display data and revokes alias
+   * trust on a conflicting phone; null still uses owner-aware clearing.
+   */
+  readonly contactPhoneLookupPersistence?: 'seed';
+
   getContacts(): Promise<Contact[]>;
 
   getContactById(contactId: string): Promise<Contact | null>;
@@ -1584,8 +1632,11 @@ export interface ChatCapability {
    * `messageIds` names exactly which messages to acknowledge. Engines that acknowledge per
    * message (Baileys) need it to mark a burst, or anything at all after a restart; engines with a
    * chat-level receipt (whatsapp-web.js) ignore it.
+   *
+   * `authors` maps a message id to who posted it, for a group: a receipt names its sender, and an id the
+   * engine never kept (history backfill) has no key to read it from. An id with neither is not acknowledged.
    */
-  sendSeen(chatId: string, messageIds?: string[]): Promise<boolean>;
+  sendSeen(chatId: string, messageIds?: string[], authors?: ReadonlyMap<string, string>): Promise<boolean>;
 
   markUnread(chatId: string): Promise<boolean>;
 
