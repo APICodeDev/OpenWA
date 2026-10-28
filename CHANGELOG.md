@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, and lets only a ready one be selected. Thanks @rjsebening.
+- Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id. Thanks @rjsebening.
+- Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
+
+### Changed
+
+- Redesign the dashboard Chats page in a WhatsApp Web style, full height without the page header, with its own light and dark palette, a patterned wallpaper behind the thread, coloured avatars, tailed bubbles and a single-pill composer; every existing chat feature stays. Thanks @rjsebening.
+- Show the dashboard Chats page's message search behind a toggle in the chat list header, still hidden for read-only keys. Thanks @rjsebening.
+- Show the raw chat id of a dashboard chat in its contact info panel instead of the room header. Thanks @rjsebening.
+- Show a dashboard chat message's time and delivery ticks inside its last line of text, with the delivery status still named for screen readers. Thanks @rjsebening.
+- Show dashboard chat list times as the clock today, Yesterday, the weekday within the last week and a short date before that. Thanks @rjsebening.
+- Move the dashboard sidebar's collapse button from the sidebar edge into its header, beside the logo or under it when collapsed, with a panel icon mirrored for right-to-left languages. Thanks @rjsebening.
+
 ## [0.26.0] - 2026-10-28
 
 ### Added
@@ -21,9 +36,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add chat and contact menus to the dashboard Chats page: pin, mute, archive, mark unread, save, rename and block a contact, leave a group, and clear or delete a chat on whatsapp-web.js only until #1891 is fixed. Thanks @rjsebening.
 - Add an Archived view to the dashboard chat list; archived chats no longer appear in the main list unless searched, and pinned chats lead it. Thanks @rjsebening.
 - Add a group info dialog to the dashboard Chats page that edits a group and manages its participants. Thanks @rjsebening.
-- Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, and lets only a ready one be selected. Thanks @rjsebening.
-- Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id. Thanks @rjsebening.
-- Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
 
 ### Changed
 
@@ -61,12 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Name the Go SDK status font constants after the WhatsApp protocol (`StatusFontSystemText`, `StatusFontFBScript`, `StatusFontMorningBreezeRegular`, `StatusFontCalistogaRegular`, `StatusFontExo2ExtraBold`, `StatusFontCourierPrimeBold`), from Go SDK 0.7.0; the old names, which did not match the font each id selects, stay as deprecated aliases.
 - Refuse to start with `REDIS_TLS=true` or a `REDIS_USERNAME` other than `default` beside the built-in Redis, which serves plain TCP and only its default user, where every Redis connection failed; the Infrastructure page refuses to save that combination.
 - Log an error at start for `STORAGE_TYPE=s3` with an `S3_ENDPOINT` that is not an absolute `http://` or `https://` URL, where every S3 call failed and media went to local disk, and refuse a save from the Infrastructure page that changes it or newly selects S3 beside it.
-- Redesign the dashboard Chats page in a WhatsApp Web style, full height without the page header, with its own light and dark palette, a patterned wallpaper behind the thread, coloured avatars, tailed bubbles and a single-pill composer; every existing chat feature stays. Thanks @rjsebening.
-- Show the dashboard Chats page's message search behind a toggle in the chat list header, still hidden for read-only keys. Thanks @rjsebening.
-- Show the raw chat id of a dashboard chat in its contact info panel instead of the room header. Thanks @rjsebening.
-- Show a dashboard chat message's time and delivery ticks inside its last line of text, with the delivery status still named for screen readers. Thanks @rjsebening.
-- Show dashboard chat list times as the clock today, Yesterday, the weekday within the last week and a short date before that. Thanks @rjsebening.
-- Move the dashboard sidebar's collapse button from the sidebar edge into its header, beside the logo or under it when collapsed, with a panel icon mirrored for right-to-left languages. Thanks @rjsebening.
 
 ### Fixed
 
