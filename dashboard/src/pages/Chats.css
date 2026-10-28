@@ -240,7 +240,10 @@
 
 /* Text that is cut with an ellipsis takes its direction from its own characters (unicode-bidi: plaintext).
    Under an inherited direction the ellipsis eats the wrong end of a name written the other way round: a
-   Latin name in an Arabic page lost its first letters and kept its last ("...hi Armyndharis"). */
+   Latin name in an Arabic page lost its first letters and kept its last ("...hi Armyndharis").
+   The same property aligns the text by its own direction, so a box that a flex column stretches across its
+   width would put a Latin name at the left edge of an Arabic page while its siblings sit at the right. Those
+   boxes hug the start edge instead (align-self: flex-start, capped by max-width so the ellipsis still shows). */
 .chats-page .chat-item-name {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -249,6 +252,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
+}
+
+/* In the New chat list the name and the number are direct children of a stretched column; in the chat list
+   they sit in rows that are as wide as their text, which needs nothing. */
+.chats-page .chat-item-info > .chat-item-name,
+.chats-page .chat-item-info > .chat-item-snippet {
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .chat-item-time {
@@ -429,6 +440,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 /* Prettified phone (or "Group" / "Private contact" label for non-personal JIDs). Primary subtitle
@@ -1000,6 +1013,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .preview-filesize {
@@ -1476,6 +1491,7 @@
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
   max-width: 250px;
+  width: fit-content;
 }
 
 /* Inbound business prompt buttons (Baileys click-button) */
@@ -1584,7 +1600,6 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  unicode-bidi: plaintext;
 }
 
 .chats-page .replying-to-body {
@@ -1594,6 +1609,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .btn-close-reply {
