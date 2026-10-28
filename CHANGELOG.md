@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.
+- Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
+
 ## [0.26.0] - 2026-10-28
 
 ### Added
@@ -105,8 +110,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Create the built-in PostgreSQL container with the saved `DATABASE_PASSWORD`, so a custom password saved with the built-in database no longer fails the next boot; a data volume that already exists keeps the role password it was created with.
 - Serialize a plugin upload with an uninstall or update of the same plugin id.
 - Show hours for a session active within the last day on the Sessions page, as the Dashboard does.
-- Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.
-- Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
 - List a whatsapp-web.js contact held under both its LID and its phone once in the contacts and blocked lists, and give it the phone as `number` in the contacts list and by id, where the first copy carried the LID digits.
 - Clear both entries when unblocking a whatsapp-web.js contact blocked under its phone number and its LID; it stayed in the blocked list after a successful unblock.
 - Show a localized edited indicator in Chats for observed edits before or after storage, including after reload; deleted messages retain their placeholder (#1905). Thanks @yederlv.
