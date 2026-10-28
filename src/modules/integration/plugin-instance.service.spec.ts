@@ -132,7 +132,7 @@ describe('PluginInstanceService', () => {
       'acct1',
       { config: { baseUrl: 'https://tenant.example/x', apiToken: '***' } },
       schema,
-      net,
+      { net },
     );
     expect(same?.config).toEqual({ baseUrl: 'https://tenant.example/x', apiToken: 'real-token' });
 
@@ -141,9 +141,38 @@ describe('PluginInstanceService', () => {
       'acct1',
       { config: { baseUrl: 'https://attacker.example', apiToken: '***' } },
       schema,
-      net,
+      { net },
     );
     expect(moved?.config).toEqual({ baseUrl: 'https://attacker.example' });
+  });
+
+  it('update judges a row that names no host against the host beneath it', async () => {
+    const schema = {
+      type: 'object',
+      properties: { baseUrl: { type: 'string' }, apiToken: { type: 'string', secret: true } },
+    } as PluginConfigSchema;
+    const layer = { net: { allowConfigHosts: ['baseUrl'] }, beneath: { baseUrl: 'https://base.example' } };
+    await service.create('chatwoot', 'acct1', { config: { apiToken: 'real-token' } });
+
+    const same = await service.update(
+      'chatwoot',
+      'acct1',
+      { config: { baseUrl: 'https://base.example/', apiToken: '***' } },
+      schema,
+      layer,
+    );
+    expect(same?.config).toEqual({ baseUrl: 'https://base.example/', apiToken: 'real-token' });
+  });
+
+  // UpdateInstanceDto lets a null config through validation, and a null config clears the row.
+  it('update still clears the config for a null config on a plugin with host keys', async () => {
+    const schema = { type: 'object', properties: { baseUrl: { type: 'string' } } } as PluginConfigSchema;
+    await service.create('chatwoot', 'acct1', { config: { baseUrl: 'https://tenant.example' } });
+
+    const cleared = await service.update('chatwoot', 'acct1', { config: null as never }, schema, {
+      net: { allowConfigHosts: ['baseUrl'] },
+    });
+    expect(cleared?.config).toEqual({});
   });
 });
 

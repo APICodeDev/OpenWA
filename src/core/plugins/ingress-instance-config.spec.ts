@@ -303,6 +303,36 @@ describe('ingress dispatch does not carry a base secret to another host', () => 
     expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example' });
   });
 
+  // The row's token was provisioned against the operator host. An override written for the same session by a
+  // key that cannot read it must not be able to move the host and take the row's token along.
+  it('withholds the token an instance holds itself when a session override moved the host', async () => {
+    const tenant = instanceRow('tenant', { apiToken: 'TENANT-TOKEN', inboxId: '9' }, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://attacker.example' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toEqual({ baseUrl: 'https://attacker.example', inboxId: '9' });
+  });
+
+  it('keeps the token an instance holds itself when the override left the host alone', async () => {
+    const tenant = instanceRow('tenant', { apiToken: 'TENANT-TOKEN' }, 'S1');
+    const { bridge, calls } = makeBridge({
+      rows: [tenant],
+      baseConfig,
+      sessionConfig: { S1: { baseUrl: 'https://chat.example.com/' } },
+      manifestOverrides: adapter,
+    });
+
+    await bridge.dispatchWebhookForInstance(job('tenant', 'S1'));
+
+    expect(calls[0].config).toMatchObject({ apiToken: 'TENANT-TOKEN' });
+  });
+
   it('keeps the token for an instance that names the operator host or none', async () => {
     const same = instanceRow('same', { baseUrl: 'https://chat.example.com/other' }, 'S1');
     const none = instanceRow('none', {}, 'S2');

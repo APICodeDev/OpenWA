@@ -124,7 +124,7 @@ export class PluginInstanceService implements PluginInstancePort {
     instanceId: string,
     patch: { enabled?: boolean; sessionScope?: string | null; config?: Record<string, unknown> },
     schema?: PluginConfigSchema,
-    net?: PluginManifest['net'],
+    layer?: { net?: PluginManifest['net']; beneath?: Record<string, unknown> },
   ): Promise<PluginInstance | null> {
     const inst = await this.resolve(pluginId, instanceId);
     if (!inst) return null;
@@ -136,7 +136,12 @@ export class PluginInstanceService implements PluginInstancePort {
       // unchanged secrets. Restore the stored values instead of persisting the mask (which would corrupt
       // the credential); genuinely-new values are written as provided.
       // A PATCH that points a host key at another origin gets no stored secret back, see restorableConfig.
-      const stored = restorableConfig(inst.config ?? undefined, patch.config, { configSchema: schema, net });
+      const stored = restorableConfig(
+        inst.config ?? undefined,
+        patch.config,
+        { configSchema: schema, net: layer?.net },
+        layer?.beneath,
+      );
       changes.config = restoreSecretConfig(patch.config, stored, schema);
     }
     if (Object.keys(changes).length === 0) return inst;

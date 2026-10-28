@@ -208,8 +208,10 @@ not replace it. The exception is an override or instance that points a `net.allo
 another origin than the layer beneath: it does not inherit that layer's secret fields (a list that holds
 one is dropped whole) and must bring its own. A host key that holds no text (a list, an object, a number) counts
 as another origin. The same rule applies on write: a write to an override or an instance that points a host key
-at another origin than the stored layer names gets no stored secret back for the mask or an empty string, so
-the secret has to be sent with it.
+at another origin than the stored layer is bound to (its own host key, or the host of the layer beneath it
+when it names none) gets no stored secret back for the mask or an empty string, so the secret has to be sent
+with it. An instance row loses its own secrets while a per-session override beneath it has moved a host key the
+row leaves unset away from the base config.
 
 ### Plugin Entry Point
 

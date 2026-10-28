@@ -156,12 +156,19 @@ export class IntegrationInstanceController {
     // One update() writes every field in a single save. Restoring the masked config can refuse the
     // PATCH with a 400 before that save, so a rejected body changes nothing, `enabled` included.
     if (dto.enabled !== undefined || dto.sessionScope !== undefined || dto.config !== undefined) {
+      const plugin = this.loader.getPlugin(pluginId);
+      // An instance row outlives its plugin. Without the manifest there are no host keys to tell a moved host
+      // from an unchanged one, and echoing the mask would put every stored secret back beside whatever host
+      // the body names, so a config write waits for the plugin to be loaded.
+      if (dto.config && !plugin) {
+        throw new ConflictException(`Plugin ${pluginId} is not loaded, so its instance config cannot be changed`);
+      }
       inst = await this.instances.update(
         pluginId,
         instanceId,
         { enabled: dto.enabled, sessionScope: dto.sessionScope, config: dto.config },
         this.schemaFor(pluginId),
-        this.loader.getPlugin(pluginId)?.manifest.net,
+        { net: plugin?.manifest.net, beneath: plugin?.config },
       );
       // update() answers null when the row was deleted after resolveVisible read it.
       if (!inst) throw new NotFoundException('instance not found');

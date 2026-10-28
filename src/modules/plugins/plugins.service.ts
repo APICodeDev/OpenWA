@@ -277,7 +277,7 @@ export class PluginsService {
       const existing = plugin.sessionConfig?.[sessionId];
       const merged = restoreSecretConfig(
         config,
-        restorableConfig(existing, config, plugin.manifest),
+        restorableConfig(existing, config, plugin.manifest, plugin.config),
         plugin.manifest.configSchema,
       );
       this.pluginLoader.setPluginSessionConfig(id, sessionId, merged);

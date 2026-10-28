@@ -733,6 +733,19 @@ describe('PluginsService — per-session config', () => {
       }
     });
 
+    // The override names no host, so it resolves to the base host; a write that names that host moves nothing.
+    it('judges a write against the base host when the stored override names none', () => {
+      service.updateConfig('sess-host', { baseUrl: 'https://base.example', apiKey: 'BASE' });
+      service.updateSessionConfig('sess-host', 'sess-A', { apiKey: 'OWN' });
+
+      service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://base.example/', apiKey: '***' });
+      expect(slice()).toEqual({ baseUrl: 'https://base.example/', apiKey: 'OWN' });
+
+      service.updateSessionConfig('sess-host', 'sess-A', { apiKey: 'OWN' });
+      service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://attacker.example', apiKey: '***' });
+      expect(slice()).toEqual({ baseUrl: 'https://attacker.example' });
+    });
+
     it('stores a secret the write brings itself, whatever the host', () => {
       service.updateSessionConfig('sess-host', 'sess-A', { baseUrl: 'https://other.example', apiKey: 'NEW' });
       expect(slice()).toEqual({ baseUrl: 'https://other.example', apiKey: 'NEW' });
