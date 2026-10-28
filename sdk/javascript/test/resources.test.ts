@@ -547,6 +547,14 @@ describe('SearchResource — exact path and query forwarding', () => {
     await c.search.search({ q: 'term', chatId: '628@c.us', direction: 'incoming' });
     expect(t.lastCall!.url).toBe('http://x/api/search?q=term&chatId=628%40c.us&direction=incoming');
   });
+
+  it('forwards the match mode', async () => {
+    const t = new MockTransport().on('GET', /\/search$/, {
+      body: { hits: [], total: 0, tookMs: 1, provider: 'builtin-fts' },
+    });
+    await client(t).search.search({ q: 'voic', match: 'contains' });
+    expect(t.lastCall!.url).toBe('http://x/api/search?q=voic&match=contains');
+  });
 });
 
 // Eleven routes no other test calls. Each row is written from the contract (openapi.json: verb, path,

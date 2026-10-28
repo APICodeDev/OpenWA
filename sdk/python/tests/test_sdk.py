@@ -1398,6 +1398,7 @@ class TestSearch:
         })
         make_client(backend).search.search({
             "q": "invoice",
+            "match": "contains",
             "sessionId": "s1",
             "chatId": "628123@c.us",
             "direction": "incoming",
@@ -1411,6 +1412,7 @@ class TestSearch:
         url = backend.last_call.url
         assert url.startswith("http://localhost:2785/api/search?")
         assert "q=invoice" in url
+        assert "match=contains" in url
         assert "sessionId=s1" in url
         assert "chatId=628123%40c.us" in url  # @ percent-encoded in query
         assert "direction=incoming" in url
