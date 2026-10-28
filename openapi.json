@@ -2526,7 +2526,7 @@
         },
         "responses": {
           "200": {
-            "description": "Chat marked as unread successfully",
+            "description": "Returns `{ success }`. `false` means the engine declined to act. The Baileys engine keys the mark to the chat's newest message in memory, else the newest stored one, else sends it without one for a chat the session knows; an id it knows no chat for answers `false`, and so does an archived chat with no known message, which the phone leaves unmarked without one.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3037,7 +3037,7 @@
         },
         "responses": {
           "200": {
-            "description": "Chat deleted successfully",
+            "description": "Returns `{ success }`. `false` means the engine declined to act: an unknown chat, or on the Baileys engine a chat with no message in memory or stored, since the delete is keyed to its last message.",
             "content": {
               "application/json": {
                 "schema": {

@@ -802,7 +802,7 @@ curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/descr
 
 #### PUT /api/sessions/:sessionId/groups/:groupId/member-label
 
-Set this account's member label in the group, up to 30 characters; an empty string clears it (OPERATOR, Baileys only: whatsapp-web.js answers `501`).
+Set this account's member label in the group, up to 30 UTF-16 code units (an emoji outside the Basic Multilingual Plane counts as two); an empty string clears it (OPERATOR, Baileys only: whatsapp-web.js answers `501`).
 
 ```bash
 curl -X PUT "$BASE/api/sessions/$SESSION_ID/groups/120363021234567890@g.us/member-label" \

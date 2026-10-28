@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add a session switcher to the dashboard Chats page that lists every session with its state, picture, push name and number, and lets only a ready one be selected. Thanks @rjsebening.
 - Add a contact info panel to the dashboard chat room with the contact's picture, name, number and copyable chat id. Thanks @rjsebening.
 - Add Today, Yesterday and date separators to the dashboard chat thread. Thanks @rjsebening.
-- Add `match=contains` to `GET /api/search`, which needs `SEARCH_CONTAINS_ENABLED=true`: case- and accent-insensitive substring search on a trigram index (FTS5 on SQLite, `pg_trgm` and `unaccent` on PostgreSQL) that ranks the 1,000 most recently stored matches, so `total` is at most 1,000 in this mode; `match=word` stays the default and the SDKs accept `match`. Thanks @luisffm.
-- Add the `MessageSearch` MCP tool, which runs the global message search for agents, with `match=contains` by default only when `SEARCH_CONTAINS_ENABLED=true`. Thanks @luisffm.
+- Add `match=contains` to `GET /api/search`, which needs `SEARCH_CONTAINS_ENABLED=true`: case- and accent-insensitive substring search on a trigram index (FTS5 on SQLite, `pg_trgm` and `unaccent` on PostgreSQL) that ranks the 1,000 most recently stored matches, so `total` is at most 1,000 in this mode; `match=word` stays the default and the SDKs accept `match` (#1899). Thanks @luisffm.
+- Add the `MessageSearch` MCP tool, which runs the global message search for agents, with `match=contains` by default only when `SEARCH_CONTAINS_ENABLED=true` (#1899). Thanks @luisffm.
 - Add `PUT /api/sessions/{sessionId}/groups/{groupId}/member-label` to set this account's member label in a group on Baileys; whatsapp-web.js answers `501` (#1918). Thanks @xwork1 for the report.
 
 ### Changed
@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.
 - Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
+- Send a Baileys archive or mark unread without a range for a chat the session knows but holds no message for, where it answered `success: false` (#1891). Thanks @rjsebening.
 - Group dashboard phone numbers in threes and fours, so `+49 157 333 4 4455` now reads `+49 157 3334 4455`; 10-digit numbers keep their shape (#1940).
 - Answer `400` to a NUL character in `q` on `GET /api/search`, which failed with `500` on PostgreSQL.
 
