@@ -2236,8 +2236,13 @@
   color: var(--chat-meta);
 }
 
+/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, and 2.87:1 on a quote there. */
 .chats-page .message-bubble.outgoing .message-edited,
-.chats-page .message-bubble.outgoing .message-time {
+.chats-page .message-bubble.outgoing .message-time,
+.chats-page .message-bubble.outgoing .message-quote-box,
+.chats-page .message-bubble.outgoing.revoked-type .message-text,
+.chats-page .message-bubble.outgoing .message-masked,
+.chats-page .message-bubble.outgoing .message-media-omitted {
   color: var(--chat-meta-out);
 }
 

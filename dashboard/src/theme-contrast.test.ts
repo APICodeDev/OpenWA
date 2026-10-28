@@ -101,6 +101,26 @@ test('the outgoing bubble draws its links in their own token', () => {
   assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
 });
 
+// The muted lines a bubble holds are --chat-meta in an incoming one. On the dark outgoing green that token is 3.27:1,
+// and 2.87:1 on a quote there, so each line has an outgoing rule in --chat-meta-out, which the tests above measure.
+const BUBBLE_META = [
+  '.message-edited',
+  '.message-time',
+  '.message-quote-box',
+  '.message-masked',
+  '.message-media-omitted',
+  '.message-bubble.revoked-type .message-text',
+];
+
+test('every muted line inside an outgoing bubble draws in the outgoing token', () => {
+  for (const line of BUBBLE_META) {
+    const incoming = line.startsWith('.message-bubble') ? line : `.message-bubble ${line}`;
+    assert.match(chatRule(`.chats-page ${line}`), /color:\s*var\(--chat-meta\)/, `${line} is no longer --chat-meta`);
+    const outgoing = incoming.replace('.message-bubble', '.message-bubble.outgoing');
+    assert.match(chatRule(`.chats-page ${outgoing}`), /color:\s*var\(--chat-meta-out\)/, outgoing);
+  }
+});
+
 // The pill green is also drawn on tints the rules mix from two tokens: the prompt buttons in an incoming bubble (the
 // dark button measured 4.22:1 in the old green) with their hover and chosen states, and the admin badge in the group
 // dialog. Each fill is read from its rule, so a stronger tint has to keep the text readable too.
@@ -113,28 +133,32 @@ const PILL_TEXT_FILLS = [
   '.chats-page .message-prompt-button.selected',
 ];
 
-// The accent text is drawn on a tint the same way, in the session switcher's avatar.
-const TEXT_FILLS: Array<[string, string[]]> = [
+// The accent text is drawn on a tint the same way, in the session switcher's avatar. A quote in a bubble mixes the
+// bubble text with transparent, so its fill is that tint over the bubble it sits in, named third.
+const TEXT_FILLS: Array<[string, string[], string?]> = [
   ['--chat-pill-active-text', PILL_TEXT_FILLS],
   ['--chat-accent-text', ['.chats-page .session-avatar']],
+  ['--chat-meta', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
+  ['--chat-meta-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
 ];
 
 for (const anchor of CHAT_ANCHORS) {
   test(`chat text clears AA on every tinted fill it is drawn on (${anchor})`, () => {
     const block = chatBlock(anchor);
-    for (const [token, selectors] of TEXT_FILLS) {
+    for (const [token, selectors, under] of TEXT_FILLS) {
       const text = rgb(chatToken(block, token));
       for (const selector of selectors) {
         const fill = /(?:^|;)\s*background:\s*([^;]+)/.exec(chatRule(selector))?.[1].trim();
         assert.ok(fill, `${selector} paints no background`);
         const plain = /^var\((--[\w-]+)\)$/.exec(fill);
-        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(fill);
+        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, (?:var\((--[\w-]+)\)|transparent)\)$/.exec(fill);
         assert.ok(plain || mixed, `${selector} paints ${fill}, which this test cannot resolve`);
+        const base = mixed?.[3] ?? under;
+        assert.ok(plain || base, `${selector} mixes with transparent, and the table names no surface under it`);
         const surface = plain
           ? rgb(chatToken(block, plain[1]))
           : rgb(chatToken(block, mixed![1])).map(
-              (c, i) =>
-                c * (Number(mixed![2]) / 100) + rgb(chatToken(block, mixed![3]))[i] * (1 - Number(mixed![2]) / 100),
+              (c, i) => c * (Number(mixed![2]) / 100) + rgb(chatToken(block, base!))[i] * (1 - Number(mixed![2]) / 100),
             );
         const ratio = contrast(text, surface);
         assert.ok(ratio >= 4.5, `${anchor} ${token} is ${ratio.toFixed(2)}:1 on ${selector}`);
