@@ -1,3 +1,5 @@
+import type { PluginConfigField, PluginManifest } from './plugin.interfaces';
+
 /**
  * The all-sessions scope is spelled null, undefined or '*' depending on where it was stored; this maps
  * every spelling to '*' and leaves a concrete session id as it is, so two scopes compare by key.
@@ -44,6 +46,73 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
 }
 
 /**
+ * What a layered config merge needs of a manifest: the config keys that name a host the plugin may
+ * call (`net.allowConfigHosts`) and the schema that says which fields are secret.
+ */
+export type ConfigLayerManifest = Pick<PluginManifest, 'net' | 'configSchema'>;
+
+/** The origin a host key names, the trimmed text when it is no URL, or null when it names nothing. */
+function hostOf(value: unknown): string | null {
+  if (typeof value !== 'string' || value.trim() === '') return null;
+  try {
+    const { origin } = new URL(value);
+    return origin === 'null' ? value.trim() : origin;
+  } catch {
+    return value.trim();
+  }
+}
+
+/** Whether `layer` points a host key at an origin other than the one `beneath` names. */
+const redirectsHost = (beneath: Record<string, unknown>, layer: Record<string, unknown>, hostKeys: string[]): boolean =>
+  hostKeys.some(key => {
+    const next = hostOf(layer[key]);
+    return next !== null && next !== hostOf(beneath[key]);
+  });
+
+const holdsSecret = (field: PluginConfigField): boolean =>
+  !!field.secret ||
+  Object.values(field.properties ?? {}).some(holdsSecret) ||
+  (!!field.items && holdsSecret(field.items));
+
+/**
+ * `config` without its declared secret fields, at any depth. A list that holds one is dropped whole,
+ * because lists are replaced and never merged.
+ */
+function withoutSecrets(
+  config: Record<string, unknown>,
+  properties: Record<string, PluginConfigField>,
+): Record<string, unknown> {
+  const out = { ...config };
+  for (const [key, field] of Object.entries(properties)) {
+    const value = out[key];
+    if (value === undefined) continue;
+    if (field.secret || (field.type === 'array' && holdsSecret(field))) delete out[key];
+    else if (field.type === 'object' && field.properties && isPlainObject(value)) {
+      out[key] = withoutSecrets(value, field.properties);
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge `layer` over `beneath`. A layer that points a host key at another origin than the layer
+ * beneath names must bring its own secrets: the beneath secrets belong to the host they were saved
+ * for, and a key allowed to write the layer (a session-restricted admin, an instance) would otherwise
+ * receive them with a host of its choosing. With no schema nothing can be told secret, so nothing is
+ * inherited.
+ */
+function mergeLayer(
+  beneath: Record<string, unknown>,
+  layer: Record<string, unknown>,
+  manifest: ConfigLayerManifest,
+): Record<string, unknown> {
+  const hostKeys = manifest.net?.allowConfigHosts;
+  if (!hostKeys?.length || !redirectsHost(beneath, layer, hostKeys)) return deepMerge(beneath, layer);
+  const properties = manifest.configSchema?.properties;
+  return deepMerge(properties ? withoutSecrets(beneath, properties) : {}, layer);
+}
+
+/**
  * Layer one integration instance's own config over whatever resolution produced.
  *
  * Provisioning projects each instance's config into the scope-keyed store, so two enabled instances
@@ -56,12 +125,16 @@ function deepMerge(base: Record<string, unknown>, override: Record<string, unkno
  * key the row leaves unset still resolves from the layer underneath. Whether that layer can be
  * attributed to this instance is the caller's decision — `PluginSandboxBridge` withholds the
  * scope slice once siblings exist, for exactly that reason.
+ *
+ * A row that names another host than the layer beneath does not inherit that layer's secrets, see
+ * {@link mergeLayer}.
  */
 export function resolveInstanceConfig(
   resolved: Record<string, unknown>,
   instanceConfig: Record<string, unknown> | null | undefined,
+  manifest: ConfigLayerManifest,
 ): Record<string, unknown> {
-  return instanceConfig ? deepMerge(resolved, instanceConfig) : resolved;
+  return instanceConfig ? mergeLayer(resolved, instanceConfig, manifest) : resolved;
 }
 
 /**
@@ -69,15 +142,17 @@ export function resolveInstanceConfig(
  * over the base ('*') config, so an override only changes the keys it specifies (at any depth) and
  * inherits the rest from the base — a sparse override can't drop a base key (e.g. a nested secret) it
  * didn't touch. A global plugin and a non-session-attributed event (no sessionId) get the base
- * unchanged. Returns a fresh object on merge; never mutates the inputs.
+ * unchanged. Returns a fresh object on merge; never mutates the inputs. An override that names
+ * another host than the base does not inherit the base secrets, see {@link mergeLayer}.
  */
 export function resolvePluginConfig(
   base: Record<string, unknown>,
   sessionConfig: Record<string, Record<string, unknown>> | undefined,
   sessionId: string | undefined,
   sessionScoped: boolean,
+  manifest: ConfigLayerManifest,
 ): Record<string, unknown> {
   if (!sessionScoped || sessionId === undefined || !sessionConfig) return base;
   const override = sessionConfig[sessionId];
-  return override ? deepMerge(base, override) : base;
+  return override ? mergeLayer(base, override, manifest) : base;
 }
