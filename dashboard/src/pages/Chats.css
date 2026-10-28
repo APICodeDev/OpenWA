@@ -1307,6 +1307,13 @@
   min-height: 7rem;
 }
 
+/* The global --text-muted placeholder is 4.24:1 on the light --chat-panel-header these fields are filled with. */
+.chats-page .group-info-field input::placeholder,
+.chats-page .group-info-field textarea::placeholder,
+.chats-page .group-info-add input::placeholder {
+  color: var(--chat-meta);
+}
+
 .chats-page .group-info-field input:focus,
 .chats-page .group-info-field textarea:focus,
 .chats-page .group-info-add input:focus {

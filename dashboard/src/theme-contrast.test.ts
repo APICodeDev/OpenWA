@@ -61,7 +61,8 @@ const chatToken = (block: string, name: string): string =>
       : chatToken(chatBlock('.chats-page {'), name);
 
 const CHAT_TEXT_ON: Array<[string, string[]]> = [
-  ['--chat-meta', ['--chat-panel', '--chat-hover', '--chat-active', '--chat-bubble-in']],
+  // The header fill is the group dialog's fields, whose placeholders are --chat-meta.
+  ['--chat-meta', ['--chat-panel', '--chat-hover', '--chat-active', '--chat-bubble-in', '--chat-panel-header']],
   ['--chat-accent-text', ['--chat-panel', '--chat-hover', '--chat-active']],
   ['--chat-meta-out', ['--chat-bubble-out']],
   // The active filter pill and the group role chip, and the reply title on the composer banner.
@@ -96,6 +97,14 @@ const chatRule = (selector: string): string => {
   }
   assert.fail(`Chats.css has no ${selector} rule`);
 };
+
+test('the group dialog fields draw their placeholders in the chat meta token, not --text-muted', () => {
+  // --text-muted is 4.24:1 on the light --chat-panel-header the fields are filled with.
+  assert.match(chatRule('.chats-page .group-info-field textarea'), /background:\s*var\(--chat-panel-header\)/);
+  for (const field of ['.group-info-field input', '.group-info-field textarea', '.group-info-add input']) {
+    assert.match(chatRule(`.chats-page ${field}::placeholder`), /color:\s*var\(--chat-meta\)/, field);
+  }
+});
 
 test('the outgoing bubble draws its links in their own token', () => {
   assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
