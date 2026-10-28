@@ -33,6 +33,9 @@ let listOffline = false;
 // session's fixtures, so both list the same chats: the shared chat id a late result must not cross over.
 const SECOND_SESSION: Session = { ...SESSION, id: 'session-3', name: 'Second', phone: '15559876543' };
 let listSecond = false;
+// Served as the list reads them once a test turns them on: the second session dropped, the offline one connected.
+let secondDown = false;
+let offlineUp = false;
 
 // The first account down at load (every session down, with `listOffline`), and an account created after the page
 // read the list, served once a test turns `listCreated` on.
@@ -209,14 +212,14 @@ function installFetchStub(): void {
       gates.get(name)?.then(response) ?? Promise.resolve(response());
 
     if (method === 'GET' && path === '/api/sessions') {
-      return Promise.resolve(
-        jsonResponse([
-          mainDown ? { ...SESSION, status: 'disconnected' } : SESSION,
-          ...(listSecond ? [SECOND_SESSION] : []),
-          ...(listOffline ? [OFFLINE_SESSION] : []),
-          ...(listCreated ? [listCreated] : []),
-        ]),
-      );
+      // Taken when the request is made, so an answer a test holds back is as stale as one still in flight.
+      const sessions: Session[] = [
+        mainDown ? { ...SESSION, status: 'disconnected' } : SESSION,
+        ...(listSecond ? [secondDown ? { ...SECOND_SESSION, status: 'disconnected' as const } : SECOND_SESSION] : []),
+        ...(listOffline ? [offlineUp ? { ...OFFLINE_SESSION, status: 'ready' as const } : OFFLINE_SESSION] : []),
+        ...(listCreated ? [listCreated] : []),
+      ];
+      return gated('sessions', () => jsonResponse(sessions));
     }
     if (method === 'GET' && path.startsWith(`${base}/chats?`)) {
       return gated('chats', () =>
@@ -412,6 +415,8 @@ afterEach(async () => {
   fetchCalls.length = 0;
   listOffline = false;
   listSecond = false;
+  secondDown = false;
+  offlineUp = false;
   mainDown = false;
   listCreated = null;
   listExtra = false;
@@ -994,19 +999,79 @@ test('a session created after the page loaded joins the switcher, and can be pic
   const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
   assert.equal(sessionReads(), 1);
 
-  listCreated = CREATED_SESSION;
+  // A session still pairing has no number yet.
+  listCreated = { ...CREATED_SESSION, phone: null };
   pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
   await waitFor(() => assert.equal(sessionReads(), 2, 'a status for an unknown session did not read the list again'));
   fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
   const option = () => screen.getAllByRole('option').find(o => o.textContent?.includes(CREATED_SESSION.name));
   await waitFor(() => assert.ok(option(), 'the new session is not in the switcher'));
   assert.equal((option() as HTMLButtonElement).disabled, true, 'a session still pairing can be picked');
+  assert.ok(option()?.textContent?.includes('No phone'));
 
-  // Known now, so its next status is applied from the feed alone.
+  // Known now, so a status short of ready is applied from the feed alone.
+  pushSessionStatus(CREATED_SESSION.id, 'authenticating');
+  await settle();
+  assert.equal(sessionReads(), 2, 'a status short of ready for a listed session read the list again');
+
+  // Once it connects it can be picked at once, and the list is read again for the number it now has.
+  listCreated = { ...CREATED_SESSION, status: 'ready' };
   pushSessionStatus(CREATED_SESSION.id, 'ready');
   assert.equal((option() as HTMLButtonElement).disabled, false, 'the new session stayed unpickable once it connected');
-  assert.equal(sessionReads(), 2, 'a status for a listed session read the list again');
+  await waitFor(() => assert.equal(sessionReads(), 3, 'a session that connected was not read again'));
+  await waitFor(() =>
+    assert.ok(!option()?.textContent?.includes('No phone'), 'the number it connected with is missing'),
+  );
   assert.equal(selectedSessionName(container), SESSION.name, 'the open session changed');
+});
+
+test('a socket reconnect reads the session list again, so a session that connected during the gap can be picked', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  listOffline = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  const reads = sessionReads();
+
+  // Its status frame was sent while the socket was down.
+  offlineUp = true;
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  act(() => socket.receive('disconnect', 'transport close'));
+  act(() => socket.receive('connect'));
+  await waitFor(() => assert.equal(sessionReads(), reads + 1, 'the reconnect did not read the session list'));
+
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const marie = () =>
+    screen.getAllByRole('option').find(o => o.textContent?.includes('Marie Haas')) as HTMLButtonElement;
+  await waitFor(() =>
+    assert.equal(marie().disabled, false, 'the session that connected during the gap stayed unpickable'),
+  );
+});
+
+test('a status that lands while the session list is being read is not undone by that read', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+
+  // A new session starts a read, answered with the list as it stood then.
+  const release = hold('sessions');
+  listCreated = CREATED_SESSION;
+  pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
+  await waitFor(() => assert.equal(sessionReads(), 2));
+  // The second session drops while that answer is out.
+  secondDown = true;
+  pushSessionStatus(SECOND_SESSION.id, 'disconnected');
+  release();
+
+  await waitFor(() => assert.equal(sessionReads(), 3, 'the status that landed during the read did not read again'));
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const second = () => screen.getAllByRole('option').find(o => o.textContent?.includes('Second')) as HTMLButtonElement;
+  await waitFor(() => assert.ok(second()));
+  await settle();
+  assert.equal(second().disabled, true, 'the older answer made the session that dropped pickable again');
 });
 
 test('the session switcher links to pairing another number only for a key that may create a session', async () => {

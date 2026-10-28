@@ -1005,6 +1005,10 @@ export function Chats() {
       // loadSessions selects the first ready session; when every session was down at load nothing is selected, so
       // the first one that connects is (the switcher would be blank and the list empty otherwise).
       if (status === 'ready') setSelectedSessionId(selected => selected || event.sessionId);
+      // A session that connects has its number and push name written as it does, which the status frame does not
+      // carry, so the list is read again. A read already out may have been answered before this change, so it is
+      // followed by one more.
+      if (status === 'ready' || relistRef.current.running) void relistSessions();
     },
     [relistSessions],
   );
@@ -1080,6 +1084,8 @@ export function Chats() {
       // Statuses are live now (status.received): a story posted during the socket gap would
       // otherwise stay invisible until a focus refetch.
       queryClient.invalidateQueries({ queryKey: ['contact-statuses', selectedSessionId] });
+      // So is a session.status frame: a session that connected or dropped during the gap is read from the list.
+      void relistSessions();
       // The sidebar list is local state, so previews, unread counts and chats started during the gap
       // only show after a refetch. Background mode keeps the current list on screen meanwhile.
       // The open chat's gap messages are read on screen, so once the refetch has applied this session's
@@ -1106,6 +1112,7 @@ export function Chats() {
     canWrite,
     markChatRead,
     markRowRead,
+    relistSessions,
   ]);
 
   // The threads cache at staleTime: Infinity, and this session's events were not delivered while
@@ -1266,7 +1273,7 @@ export function Chats() {
       // Search covers stored messages of every session, but the page can only open a ready one, and
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
-      if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId)) {
+      if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId && s.status === 'ready')) {
         let ready: Session[];
         try {
           const listed = await sessionApi.list();

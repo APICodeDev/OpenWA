@@ -2314,6 +2314,33 @@ test('a search hit in a session that connected after the page loaded opens it', 
   await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
 });
 
+test('a search hit in a session that dropped while it was open, and was left since, is refused', async () => {
+  const { screen, waitFor, act } = rtl;
+  thirdSessionStatus = 'ready';
+  searchHits = [THIRD_SESSION_HIT];
+  const { container } = renderChats();
+  await screen.findByText('Alice');
+  selectSession(container, SESSION_3.id);
+  await waitFor(() => assert.equal(selectedSessionId(container), SESSION_3.id));
+
+  // The open session stays in the switcher when it drops; the operator then goes back to the first one.
+  thirdSessionStatus = 'disconnected';
+  act(() =>
+    lastSocket()?.receive('message', {
+      type: 'event',
+      timestamp: new Date(1_700_003_000_000).toISOString(),
+      payload: { event: 'session.status', sessionId: SESSION_3.id, data: { status: 'disconnected' } },
+    }),
+  );
+  selectSession(container, SESSION.id);
+  await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+
+  await clickSearchHit(container);
+  await screen.findByText('The session of this message is not connected');
+  await flush();
+  assert.equal(selectedSessionId(container), SESSION.id, 'the hit opened a session that is not connected');
+});
+
 test("a search hit in another session opens that session's chat, not the one the previous list held", async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   twoSessions = true;
@@ -3621,6 +3648,44 @@ const feedFrames = (): unknown[] =>
   (lastSocket()?.emitted ?? [])
     .map(frame => frame.args[0] as { sessionId?: string; events?: string[] })
     .filter(frame => frame.sessionId !== '*' && !frame.events?.includes('session.status'));
+
+const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
+const sessionFeedFrames = () =>
+  (lastSocket()?.emitted ?? [])
+    .map(frame => frame.args[0] as { type?: string; sessionId?: string; events?: string[] })
+    .filter(frame => frame.events?.includes('session.status'));
+
+test("the page follows every session's status on the wildcard room, and each listed session for a key refused it", async () => {
+  const { screen, waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    renderChats();
+    await screen.findByText('Alice');
+    await waitFor(() => assert.ok(sessionFeedFrames().length > 0, 'the page did not join the session feed'));
+    for (const frame of sessionFeedFrames()) {
+      assert.deepEqual(frame, { type: 'subscribe', sessionId: '*', events: SESSION_FEED_EVENTS });
+    }
+
+    const joined = sessionFeedFrames().length;
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() =>
+      socket.receive('message', { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    await waitFor(() =>
+      assert.deepEqual(
+        sessionFeedFrames()
+          .slice(joined)
+          .map(frame => frame.sessionId)
+          .sort(),
+        [SESSION.id, SESSION_2.id].sort(),
+      ),
+    );
+    for (const frame of sessionFeedFrames().slice(joined)) assert.deepEqual(frame.events, SESSION_FEED_EVENTS);
+  } finally {
+    twoSessions = false;
+  }
+});
 
 test("the page joins the open session's message events once connected, and moves to the next session on a switch", async () => {
   const { waitFor } = rtl;
