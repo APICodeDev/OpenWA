@@ -173,10 +173,16 @@ export function Chats() {
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
-  const [sessions, setSessions] = useState<Session[]>([]);
   // Every listed session, ready or not: the switcher shows the others with their state.
   const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+  // The sessions that can be opened, and the open one while it is down, so the switcher still shows it. Derived
+  // rather than kept beside the list: a copy filtered through the selection's ref dropped a session selected in the
+  // same turn as a list read answered, before the ref caught up.
+  const sessions = useMemo(
+    () => listedSessions.filter(s => s.status === 'ready' || s.id === selectedSessionId),
+    [listedSessions, selectedSessionId],
+  );
   // The session on screen, for requests that answer later to check they still belong to it (synced below, with the
   // socket's refs).
   const selectedSessionRef = useRef(selectedSessionId);
@@ -431,8 +437,6 @@ export function Chats() {
     reads.list = list;
     setSessionsFailure(null);
     setListedSessions(list);
-    // The open session stays in the switcher when it is down, as it does on a status event.
-    setSessions(list.filter(s => s.status === 'ready' || s.id === selectedSessionRef.current));
     const firstReady = list.find(s => s.status === 'ready')?.id ?? '';
     setSelectedSessionId(selected => (list.some(s => s.id === selected) ? selected : firstReady));
     return list;
@@ -1011,16 +1015,6 @@ export function Chats() {
       const status = event.status as Session['status'];
       const withStatus = (session: Session) => (session.id === event.sessionId ? { ...session, status } : session);
       setListedSessions(prev => prev.map(withStatus));
-      setSessions(prev => {
-        if (status === 'ready') {
-          if (prev.some(session => session.id === event.sessionId)) return prev.map(withStatus);
-          const listed = listedSessionsRef.current.find(session => session.id === event.sessionId);
-          return listed ? [...prev, { ...listed, status }] : prev;
-        }
-        return prev
-          .filter(session => session.id !== event.sessionId || session.id === selectedSessionRef.current)
-          .map(withStatus);
-      });
       // loadSessions selects the first ready session; when every session was down at load nothing is selected, so
       // the first one that connects is (the switcher would be blank and the list empty otherwise).
       if (status === 'ready') setSelectedSessionId(selected => selected || event.sessionId);
