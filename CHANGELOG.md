@@ -321,6 +321,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix the PHP SDK reading a `Retry-After` header of 309 or more digits as 0 seconds; it is now capped like a smaller oversized value.
 - Do not mark a patch release on an older line as the GitHub Latest release, which the update check reads.
 - Answer a body over `BODY_SIZE_LIMIT`, malformed JSON, a body nested past the bound and an undecodable path parameter under `/api` and `/mcp` with 413 or 400 when the bundled dashboard is served, where they answered `404 Cannot POST` ([#1921](https://github.com/rmyndharis/OpenWA/issues/1921)). Thanks @ScalingMBA for the report.
+- Answer a `chatId` that is not `localpart@host` on a send or message-action body, and on the MCP message tools, with `400` instead of `500`; a bare phone number reached the engine, and every such request counted against the session's send breaker.
 
 ### Dependencies
 
@@ -366,6 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A plugin catalog with an entry whose `id`, `name`, `version` or text field is not text is refused with `400`, naming the entry; the default catalog is unaffected, and a private `PLUGIN_CATALOG_URL` catalog must correct the entry.
 - `POST /api/integration/instances/{pluginId}/{instanceId}/redrive` replays and counts only the dead letters written under the instance's current session binding; rows of an earlier binding stay in the dead-letter table.
 - A per-session plugin config or an integration instance that sets a `net.allowConfigHosts` key (for example `baseUrl`) to another origin than the layer beneath no longer inherits that layer's `secret` fields, and a list holding one is not inherited either; put the secret in that config or instance, or the plugin reaches the new host without it. A deployment that shared one token across per-session hosts must copy the token to each.
+- A send or message-action body whose `chatId`, `fromChatId` or `toChatId` has no domain (`6281234567890` instead of `6281234567890@c.us`), or is a JSON number, answers `400`; it answered `500` before and never sent.
 
 ### Security
 

@@ -147,7 +147,7 @@ All media send routes (`send-image`, `send-video`, `send-audio`, `send-document`
 
 | Field      | Type     | Required    | Constraints                                         | Description                                                                                                                                                                               |
 | ---------- | -------- | ----------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `chatId`   | string   | yes         | non-empty, max 255 chars                            | Recipient — `<phone>@c.us` or `<groupId>@g.us`                                                                                                                                            |
+| `chatId`   | string   | yes         | non-empty, max 255 chars, `localpart@host`          | Recipient — `<phone>@c.us` or `<groupId>@g.us`                                                                                                                                            |
 | `url`      | string   | conditional | valid http/https URL; required when `base64` absent | Remote media URL. Fetched server-side through an SSRF guard; a blocked/internal URL, a non-2xx answer, a timeout or a failed connection yields `400`, a download over the media cap `413` |
 | `base64`   | string   | conditional | required when `url` absent                          | Raw base64 media data. Decoded size is checked against the media cap                                                                                                                      |
 | `mimetype` | string   | conditional | required when `base64` is used                      | MIME type, e.g. `image/jpeg`, `video/mp4`, `application/pdf`                                                                                                                              |
@@ -1257,10 +1257,10 @@ Send a typing/recording presence indicator to a chat (or clear it with `paused`)
 
 **Request body** — `SendChatStateDto`
 
-| Field    | Type                                | Required | Constraints                                                                                         | Description                                                 |
-| -------- | ----------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `chatId` | string                              | Yes      | `@IsString`; `@IsNotEmpty`; `@MaxLength(255)` (no JID regex; engine-neutral, the adapter validates) | Engine-native chat id, e.g. `1234567890@c.us`               |
-| `state`  | `typing` \| `recording` \| `paused` | Yes      | `@IsIn(['typing','recording','paused'])`                                                            | `typing`/`recording` show the indicator; `paused` clears it |
+| Field    | Type                                | Required | Constraints                                                                                                    | Description                                                 |
+| -------- | ----------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `chatId` | string                              | Yes      | `@IsString`; `@IsNotEmpty`; `@MaxLength(255)`; `@Matches(/^[^\s@]+@[^\s@]+$/)` (localpart@host, no whitespace) | Engine-native chat id, e.g. `1234567890@c.us`               |
+| `state`  | `typing` \| `recording` \| `paused` | Yes      | `@IsIn(['typing','recording','paused'])`                                                                       | `typing`/`recording` show the indicator; `paused` clears it |
 
 ```json
 { "chatId": "1234567890@c.us", "state": "typing" }
@@ -1299,6 +1299,10 @@ The delete first removes the session's messages, webhook outbox rows and webhook
 ### 6.4.2 Messages
 
 All routes are mounted under `/api/sessions/:sessionId/messages`. Reads (`GET` history, batch status, reactions) accept any valid API key (including VIEWER). All write/send routes require **API key (OPERATOR)** or higher. Single-recipient send routes return `MessageResponseDto { messageId, timestamp }` (`timestamp` is an epoch **number** in seconds; there is no `status` field); `POST send-bulk` instead returns `202` with `BulkMessageResponseDto`. The global ValidationPipe runs `whitelist` + `forbidNonWhitelisted`, so any body field not listed below is rejected with `400`.
+
+#### Chat ids
+
+A `chatId` (and `fromChatId` / `toChatId` on `forward`) in a send or message-action body, and the matching `chatId` of the MCP message tools, must be `localpart@host` with no whitespace, for example `6281234567890@c.us`, `120363000000000001@g.us`, `1234567890123@s.whatsapp.net` or `1234567890123@lid`. A bare phone number, a number sent as a JSON number, or any other text without a domain answers `400` with `chatId must be a valid chat JID in the form localpart@host`; it used to reach the engine and answer `500`.
 
 #### Idempotent sends
 
@@ -1768,7 +1772,7 @@ Send a plain text message.
 
 | Field             | Type     | Required | Constraints                              | Description                                                                                  |
 | ----------------- | -------- | -------- | ---------------------------------------- | -------------------------------------------------------------------------------------------- |
-| chatId            | string   | Yes      | non-empty, max 255                       | `phone@c.us` or `groupId@g.us`                                                               |
+| chatId            | string   | Yes      | non-empty, max 255, `localpart@host`     | `phone@c.us` or `groupId@g.us`                                                               |
 | text              | string   | Yes      | non-empty, max 4096                      | Message text                                                                                 |
 | mentions          | string[] | No       | array of WIDs, max 1024 of 64 characters | WIDs to @mention (e.g. `["62811@c.us"]`). See **Mentions** below                             |
 | linkPreview       | boolean  | No       | —                                        | `false` suppresses it; on Baileys `true` is required to get one. See **Link previews** below |
@@ -1894,7 +1898,7 @@ Render a stored text template (header/body/footer joined by blank lines, `{{vars
 
 | Field        | Type                    | Required    | Constraints                                       | Description                                                 |
 | ------------ | ----------------------- | ----------- | ------------------------------------------------- | ----------------------------------------------------------- |
-| chatId       | string                  | Yes         | non-empty, max 255                                | Target chat                                                 |
+| chatId       | string                  | Yes         | non-empty, max 255, `localpart@host`              | Target chat                                                 |
 | templateId   | string                  | Conditional | non-empty; required when `templateName` is absent | Stored template id                                          |
 | templateName | string                  | Conditional | non-empty; required when `templateId` is absent   | Stored template name                                        |
 | vars         | Record\<string,string\> | No          | object                                            | Substituted into `{{placeholder}}` tokens; defaults to `{}` |
@@ -1935,7 +1939,7 @@ Send an image (by URL or base64) with an optional caption.
 
 | Field           | Type     | Required    | Constraints                              | Description                                                                              |
 | --------------- | -------- | ----------- | ---------------------------------------- | ---------------------------------------------------------------------------------------- |
-| chatId          | string   | Yes         | non-empty, max 255                       | Target chat                                                                              |
+| chatId          | string   | Yes         | non-empty, max 255, `localpart@host`     | Target chat                                                                              |
 | url             | string   | Conditional | URL; required when `base64` is absent    | http/https media URL (SSRF-guarded; a blocked internal or unreachable URL maps to `400`) |
 | base64          | string   | Conditional | string; required when `url` is absent    | Base64 media data (capped to the media byte limit)                                       |
 | mimetype        | string   | Conditional | string; required when using `base64`     | MIME type of the media                                                                   |
@@ -2055,14 +2059,14 @@ Send a location pin.
 
 **Request body** — `SendLocationDto`
 
-| Field           | Type   | Required | Constraints        | Description                                                                       |
-| --------------- | ------ | -------- | ------------------ | --------------------------------------------------------------------------------- |
-| chatId          | string | Yes      | non-empty, max 255 | Target chat                                                                       |
-| latitude        | number | Yes      | valid latitude     | Latitude (out-of-range → `400`)                                                   |
-| longitude       | number | Yes      | valid longitude    | Longitude (out-of-range → `400`)                                                  |
-| description     | string | No       | string, max 1024   | Pin description                                                                   |
-| address         | string | No       | string, max 1024   | Pin address                                                                       |
-| quotedMessageId | string | No       | non-empty          | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
+| Field           | Type   | Required | Constraints                          | Description                                                                       |
+| --------------- | ------ | -------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| chatId          | string | Yes      | non-empty, max 255, `localpart@host` | Target chat                                                                       |
+| latitude        | number | Yes      | valid latitude                       | Latitude (out-of-range → `400`)                                                   |
+| longitude       | number | Yes      | valid longitude                      | Longitude (out-of-range → `400`)                                                  |
+| description     | string | No       | string, max 1024                     | Pin description                                                                   |
+| address         | string | No       | string, max 1024                     | Pin address                                                                       |
+| quotedMessageId | string | No       | non-empty                            | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
 
 ```json
 {
@@ -2096,12 +2100,12 @@ Send a contact card (vCard).
 
 **Request body** — `SendContactDto`
 
-| Field           | Type   | Required | Constraints        | Description                                                                       |
-| --------------- | ------ | -------- | ------------------ | --------------------------------------------------------------------------------- |
-| chatId          | string | Yes      | non-empty, max 255 | Target chat                                                                       |
-| contactName     | string | Yes      | non-empty, max 255 | Display name for the contact card                                                 |
-| contactNumber   | string | Yes      | non-empty, max 30  | Contact phone number                                                              |
-| quotedMessageId | string | No       | non-empty          | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
+| Field           | Type   | Required | Constraints                          | Description                                                                       |
+| --------------- | ------ | -------- | ------------------------------------ | --------------------------------------------------------------------------------- |
+| chatId          | string | Yes      | non-empty, max 255, `localpart@host` | Target chat                                                                       |
+| contactName     | string | Yes      | non-empty, max 255                   | Display name for the contact card                                                 |
+| contactNumber   | string | Yes      | non-empty, max 30                    | Contact phone number                                                              |
+| quotedMessageId | string | No       | non-empty                            | Quote an earlier message, making this a reply — see [Quoted sends](#quoted-sends) |
 
 ```json
 { "chatId": "628123456789@c.us", "contactName": "John Doe", "contactNumber": "628987654321" }
@@ -3812,11 +3816,11 @@ Send a product message (catalog product card) to a chat. Note: this route lives 
 
 **Request body** — `SendProductDto`
 
-| Field       | Type   | Required | Constraints                             | Description                                                       |
-| ----------- | ------ | -------- | --------------------------------------- | ----------------------------------------------------------------- |
-| `chatId`    | string | Yes      | `@IsString @IsNotEmpty @MaxLength(255)` | Target chat/recipient id (e.g. `6281234567890@c.us`).             |
-| `productId` | string | Yes      | `@IsString @IsNotEmpty @MaxLength(255)` | Catalog product id to send.                                       |
-| `body`      | string | No       | `@IsString @MaxLength(4096)`            | Optional message body/caption; `null` is the same as omitting it. |
+| Field       | Type   | Required | Constraints                                                           | Description                                                       |
+| ----------- | ------ | -------- | --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `chatId`    | string | Yes      | `@IsString @IsNotEmpty @MaxLength(255) @Matches(/^[^\s@]+@[^\s@]+$/)` | Target chat/recipient id (e.g. `6281234567890@c.us`).             |
+| `productId` | string | Yes      | `@IsString @IsNotEmpty @MaxLength(255)`                               | Catalog product id to send.                                       |
+| `body`      | string | No       | `@IsString @MaxLength(4096)`                                          | Optional message body/caption; `null` is the same as omitting it. |
 
 ```json
 {
