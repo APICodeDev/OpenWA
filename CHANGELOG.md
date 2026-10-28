@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Show dashboard chat list times as the clock today, Yesterday, the weekday within the last week and a short date before that. Thanks @rjsebening.
 - Move the dashboard sidebar's collapse button from the sidebar edge into its header, beside the logo or under it when collapsed, with a panel icon mirrored for right-to-left languages. Thanks @rjsebening.
 
+### Fixed
+
+- Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.
+- Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
+
 ## [0.26.0] - 2026-10-28
 
 ### Added
