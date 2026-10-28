@@ -226,6 +226,39 @@ test('time stamps and read ticks on the outgoing bubble clear their ratios in ev
   }
 });
 
+// The session status mark is the one sign in the switcher that the open session dropped. Against the panel-coloured
+// ring around it each state holds the 3:1 of a graphic (the base green and amber were 2.28:1 and 2.15:1 on white), and
+// the states differ in shape too, not by colour alone: a dot, a ring and a square. Forced colours keep the shapes.
+test('the session status mark clears 3:1 against its ring in every theme and tells its states apart by shape', () => {
+  const ready = chatRule('.chats-page .session-status-dot');
+  const pending = chatRule('.chats-page .session-status-dot.pending');
+  const down = chatRule('.chats-page .session-status-dot.down');
+  assert.match(ready, /border:\s*2px solid var\(--chat-panel\)/);
+  assert.match(ready, /border-radius:\s*50%/);
+  assert.match(pending, /background:\s*var\(--chat-panel\)/, 'the pending mark is not hollow');
+  assert.match(down, /border-radius:\s*[0-4]px/, 'the down mark is not square');
+  const marks = [
+    /background:\s*var\((--[\w-]+)\)/.exec(ready)?.[1],
+    /box-shadow:\s*inset 0 0 0 2px var\((--[\w-]+)\)/.exec(pending)?.[1],
+    /background:\s*var\((--[\w-]+)\)/.exec(down)?.[1],
+  ];
+  for (const [chatAnchor, appAnchor] of [
+    [CHAT_ANCHORS[0], LIGHT],
+    [CHAT_ANCHORS[1], DARK],
+    [CHAT_ANCHORS[2], DARK_MEDIA],
+  ]) {
+    const ring = rgb(chatToken(chatBlock(chatAnchor), '--chat-panel'));
+    for (const mark of marks) {
+      assert.ok(mark, 'a status mark is no longer drawn in a token');
+      const ratio = contrast(rgb(hexOf(blockAfter(appAnchor), mark)), ring);
+      assert.ok(ratio >= 3, `${chatAnchor} ${mark} is ${ratio.toFixed(2)}:1 against the ring`);
+    }
+  }
+  const forced = /@media \(forced-colors: active\)\s*\{([\s\S]*?)\n\}/.exec(CHATS_CSS)?.[1] ?? '';
+  assert.match(forced, /\.session-status-dot[^{]*\{[^}]*forced-color-adjust:\s*none[^}]*background:\s*CanvasText/);
+  assert.match(forced, /\.session-status-dot\.pending\s*\{[^}]*background:\s*Canvas;[^}]*inset 0 0 0 2px CanvasText/);
+});
+
 test('the action required pill clears 4.5:1 on its tint in the dark theme, with one tint on both pages', () => {
   const tints = [
     ['Sessions.css', '.sessions-page .status-pill.action_required'],
