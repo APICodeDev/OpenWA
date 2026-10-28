@@ -61,7 +61,8 @@ const chatToken = (block: string, name: string): string =>
       : chatToken(chatBlock('.chats-page {'), name);
 
 const CHAT_TEXT_ON: Array<[string, string[]]> = [
-  ['--chat-meta', ['--chat-panel', '--chat-hover', '--chat-active', '--chat-bubble-in']],
+  // The header fill is the group dialog's fields, whose placeholders are --chat-meta.
+  ['--chat-meta', ['--chat-panel', '--chat-hover', '--chat-active', '--chat-bubble-in', '--chat-panel-header']],
   ['--chat-accent-text', ['--chat-panel', '--chat-hover', '--chat-active']],
   ['--chat-meta-out', ['--chat-bubble-out']],
   // The active filter pill and the group role chip, and the reply title on the composer banner.
@@ -97,8 +98,36 @@ const chatRule = (selector: string): string => {
   assert.fail(`Chats.css has no ${selector} rule`);
 };
 
+test('the group dialog fields draw their placeholders in the chat meta token, not --text-muted', () => {
+  // --text-muted is 4.24:1 on the light --chat-panel-header the fields are filled with.
+  assert.match(chatRule('.chats-page .group-info-field textarea'), /background:\s*var\(--chat-panel-header\)/);
+  for (const field of ['.group-info-field input', '.group-info-field textarea', '.group-info-add input']) {
+    assert.match(chatRule(`.chats-page ${field}::placeholder`), /color:\s*var\(--chat-meta\)/, field);
+  }
+});
+
 test('the outgoing bubble draws its links in their own token', () => {
   assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
+});
+
+// The muted lines a bubble holds are --chat-meta in an incoming one. On the dark outgoing green that token is 3.27:1,
+// and 2.87:1 on a quote there, so each line has an outgoing rule in --chat-meta-out, which the tests above measure.
+const BUBBLE_META = [
+  '.message-edited',
+  '.message-time',
+  '.message-quote-box',
+  '.message-masked',
+  '.message-media-omitted',
+  '.message-bubble.revoked-type .message-text',
+];
+
+test('every muted line inside an outgoing bubble draws in the outgoing token', () => {
+  for (const line of BUBBLE_META) {
+    const incoming = line.startsWith('.message-bubble') ? line : `.message-bubble ${line}`;
+    assert.match(chatRule(`.chats-page ${line}`), /color:\s*var\(--chat-meta\)/, `${line} is no longer --chat-meta`);
+    const outgoing = incoming.replace('.message-bubble', '.message-bubble.outgoing');
+    assert.match(chatRule(`.chats-page ${outgoing}`), /color:\s*var\(--chat-meta-out\)/, outgoing);
+  }
 });
 
 // The pill green is also drawn on tints the rules mix from two tokens: the prompt buttons in an incoming bubble (the
@@ -113,28 +142,32 @@ const PILL_TEXT_FILLS = [
   '.chats-page .message-prompt-button.selected',
 ];
 
-// The accent text is drawn on a tint the same way, in the session switcher's avatar.
-const TEXT_FILLS: Array<[string, string[]]> = [
+// The accent text is drawn on a tint the same way, in the session switcher's avatar. A quote in a bubble mixes the
+// bubble text with transparent, so its fill is that tint over the bubble it sits in, named third.
+const TEXT_FILLS: Array<[string, string[], string?]> = [
   ['--chat-pill-active-text', PILL_TEXT_FILLS],
   ['--chat-accent-text', ['.chats-page .session-avatar']],
+  ['--chat-meta', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
+  ['--chat-meta-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
 ];
 
 for (const anchor of CHAT_ANCHORS) {
   test(`chat text clears AA on every tinted fill it is drawn on (${anchor})`, () => {
     const block = chatBlock(anchor);
-    for (const [token, selectors] of TEXT_FILLS) {
+    for (const [token, selectors, under] of TEXT_FILLS) {
       const text = rgb(chatToken(block, token));
       for (const selector of selectors) {
         const fill = /(?:^|;)\s*background:\s*([^;]+)/.exec(chatRule(selector))?.[1].trim();
         assert.ok(fill, `${selector} paints no background`);
         const plain = /^var\((--[\w-]+)\)$/.exec(fill);
-        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, var\((--[\w-]+)\)\)$/.exec(fill);
+        const mixed = /^color-mix\(in srgb, var\((--[\w-]+)\) (\d+)%, (?:var\((--[\w-]+)\)|transparent)\)$/.exec(fill);
         assert.ok(plain || mixed, `${selector} paints ${fill}, which this test cannot resolve`);
+        const base = mixed?.[3] ?? under;
+        assert.ok(plain || base, `${selector} mixes with transparent, and the table names no surface under it`);
         const surface = plain
           ? rgb(chatToken(block, plain[1]))
           : rgb(chatToken(block, mixed![1])).map(
-              (c, i) =>
-                c * (Number(mixed![2]) / 100) + rgb(chatToken(block, mixed![3]))[i] * (1 - Number(mixed![2]) / 100),
+              (c, i) => c * (Number(mixed![2]) / 100) + rgb(chatToken(block, base!))[i] * (1 - Number(mixed![2]) / 100),
             );
         const ratio = contrast(text, surface);
         assert.ok(ratio >= 4.5, `${anchor} ${token} is ${ratio.toFixed(2)}:1 on ${selector}`);
@@ -198,6 +231,70 @@ test('time stamps and read ticks on the outgoing bubble clear their ratios in ev
     for (const tick of ['--chat-tick-read', '--chat-meta']) {
       const ratio = contrast(rgb(chatToken(block, tick)), bubble);
       assert.ok(ratio >= 3, `${anchor} ${tick} tick ${ratio.toFixed(2)}:1`);
+    }
+  }
+});
+
+// The session status mark is the one sign in the switcher that the open session dropped. Against the panel-coloured
+// ring around it each state holds the 3:1 of a graphic (the base green and amber were 2.28:1 and 2.15:1 on white), and
+// the states differ in shape too, not by colour alone: a dot, a ring and a square. Forced colours keep the shapes.
+test('the session status mark clears 3:1 against its ring in every theme and tells its states apart by shape', () => {
+  const ready = chatRule('.chats-page .session-status-dot');
+  const pending = chatRule('.chats-page .session-status-dot.pending');
+  const down = chatRule('.chats-page .session-status-dot.down');
+  assert.match(ready, /border:\s*2px solid var\(--chat-panel\)/);
+  assert.match(ready, /border-radius:\s*50%/);
+  assert.match(pending, /background:\s*var\(--chat-panel\)/, 'the pending mark is not hollow');
+  assert.match(down, /border-radius:\s*[0-4]px/, 'the down mark is not square');
+  const marks = [
+    /background:\s*var\((--[\w-]+)\)/.exec(ready)?.[1],
+    /box-shadow:\s*inset 0 0 0 2px var\((--[\w-]+)\)/.exec(pending)?.[1],
+    /background:\s*var\((--[\w-]+)\)/.exec(down)?.[1],
+  ];
+  for (const [chatAnchor, appAnchor] of [
+    [CHAT_ANCHORS[0], LIGHT],
+    [CHAT_ANCHORS[1], DARK],
+    [CHAT_ANCHORS[2], DARK_MEDIA],
+  ]) {
+    const ring = rgb(chatToken(chatBlock(chatAnchor), '--chat-panel'));
+    for (const mark of marks) {
+      assert.ok(mark, 'a status mark is no longer drawn in a token');
+      const ratio = contrast(rgb(hexOf(blockAfter(appAnchor), mark)), ring);
+      assert.ok(ratio >= 3, `${chatAnchor} ${mark} is ${ratio.toFixed(2)}:1 against the ring`);
+    }
+  }
+  const forced = /@media \(forced-colors: active\)\s*\{([\s\S]*?)\n\}/.exec(CHATS_CSS)?.[1] ?? '';
+  assert.match(forced, /\.session-status-dot[^{]*\{[^}]*forced-color-adjust:\s*none[^}]*background:\s*CanvasText/);
+  assert.match(forced, /\.session-status-dot\.pending\s*\{[^}]*background:\s*Canvas;[^}]*inset 0 0 0 2px CanvasText/);
+});
+
+// A picture-less avatar shows the chat's kind as a glyph in its tone (components/chats/ChatAvatar.tsx): in light mode
+// on the tone's pastel, in dark mode on the tone mixed into the dark panel. Orange measured 2.67:1 on its pastel and
+// violet 2.96:1 on its dark mix.
+test('every avatar tone draws its glyph at 3:1 or more on its fill, in light and dark', () => {
+  const avatar = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/chats/ChatAvatar.tsx'), 'utf8');
+  const tones = /AVATAR_TONES = \[([^\]]+)\]/.exec(avatar)?.[1].match(/[a-z]+/g) ?? [];
+  assert.ok(tones.length >= 6, 'ChatAvatar.tsx no longer lists its tones');
+  const darkMix = (anchor: string): [number, string] => {
+    const rule = new RegExp(
+      `${anchor.replace(/[.[\]()'*]/g, '\\$&')}[^{]*\\{[^}]*background:\\s*color-mix\\(in srgb, currentColor (\\d+)%, (#[0-9a-f]{6})\\)`,
+    ).exec(CHATS_CSS);
+    assert.ok(rule, `no dark tone fill under ${anchor}`);
+    return [Number(rule[1]) / 100, rule[2]];
+  };
+  const darks = [
+    darkMix("[data-theme='dark'] .chats-page .chat-avatar[class*='avatar-tone-']"),
+    darkMix(":root:not([data-theme='light']) .chats-page .chat-avatar[class*='avatar-tone-']"),
+  ];
+  for (const tone of tones) {
+    const rule = chatRule(`.chats-page .avatar-tone-${tone}`);
+    const glyph = rgb(/color:\s*(#[0-9a-f]{6})/i.exec(rule)?.[1] ?? '');
+    const pastel = rgb(/background:\s*(#[0-9a-f]{6})/i.exec(rule)?.[1] ?? '');
+    const light = contrast(glyph, pastel);
+    assert.ok(light >= 3, `${tone} glyph is ${light.toFixed(2)}:1 on its pastel`);
+    for (const [alpha, panel] of darks) {
+      const dark = contrast(glyph, mix(glyph, alpha, rgb(panel)));
+      assert.ok(dark >= 3, `${tone} glyph is ${dark.toFixed(2)}:1 on its dark fill`);
     }
   }
 });

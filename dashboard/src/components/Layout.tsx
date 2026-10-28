@@ -232,7 +232,13 @@ export function Layout({ onLogout, userRole }: LayoutProps) {
               <span className="brand-name">{t('common.appName')}</span>
               <span className="brand-version">v{version}</span>
               {update && (
-                <a className="brand-update" href={update.url} target="_blank" rel="noopener noreferrer">
+                <a
+                  className="brand-update"
+                  href={update.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={t('common.updateAvailable', { version: update.latest })}
+                >
                   {t('common.updateAvailable', { version: update.latest })}
                 </a>
               )}

@@ -149,12 +149,18 @@
   flex-direction: column;
   background: var(--chat-panel);
   border-inline-end: 1px solid var(--chat-divider);
-  flex-shrink: 0;
+  /* Gives way, down to its minimum, when the room beside it would be narrower than its composer (see .chats-room). */
+  flex-shrink: 1;
   min-height: 0;
+  /* The session picker hangs from the column (see .session-picker). */
+  position: relative;
 }
 
+/* As high as the room header beside it. Layout.css gives the dashboard's own .sidebar-header a 72px minimum, which
+   this one, of the same class name, would otherwise take. */
 .chats-page .sidebar-header {
   height: 64px;
+  min-height: 0;
   padding-block: 0;
   padding-inline: 1rem 0.75rem;
   display: flex;
@@ -168,7 +174,6 @@
 
 /* Session switcher: the selected account in the header, opening a searchable list of every session. */
 .chats-page .session-switcher {
-  position: relative;
   min-width: 0;
 }
 
@@ -232,6 +237,9 @@
   border-style: solid;
 }
 
+/* Ready, on its way and down differ in shape as well as in colour: a dot, a ring and a square. The colours are the
+   status text twins, which hold 3:1 against the panel-coloured ring around the mark in every theme (the base green
+   and amber were 2.28:1 and 2.15:1 on white). */
 .chats-page .session-status-dot {
   position: absolute;
   top: -1px;
@@ -239,16 +247,34 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--success);
+  background: var(--success-text);
   border: 2px solid var(--chat-panel);
 }
 
 .chats-page .session-status-dot.pending {
-  background: var(--warning);
+  background: var(--chat-panel);
+  box-shadow: inset 0 0 0 2px var(--warning-text);
 }
 
 .chats-page .session-status-dot.down {
-  background: var(--error);
+  border-radius: 2px;
+  background: var(--error-text);
+}
+
+/* Forced colours paint each mark in the page colour and drop the inset ring, which would leave bare outlines; the marks
+   are drawn in the system colours instead. */
+@media (forced-colors: active) {
+  .chats-page .session-status-dot,
+  .chats-page .session-status-dot.down {
+    forced-color-adjust: none;
+    background: CanvasText;
+    border-color: Canvas;
+  }
+
+  .chats-page .session-status-dot.pending {
+    background: Canvas;
+    box-shadow: inset 0 0 0 2px CanvasText;
+  }
 }
 
 .chats-page .session-text {
@@ -258,6 +284,7 @@
   line-height: 1.3;
 }
 
+/* Cut by its own direction and hugging the start edge, as a chat name is (see .chat-item-name). */
 .chats-page .session-name {
   font-size: 1rem;
   font-weight: 500;
@@ -265,6 +292,9 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .session-phone {
@@ -327,13 +357,16 @@
   transform: rotate(180deg);
 }
 
-/* The open list */
+/* The open list. The chat layout clips what runs past its bottom edge, so the list is placed against the list column
+   (under its 64px header, at the switcher's start edge) and capped by the column's height: the sessions scroll inside
+   it, and the search row and the pairing link stay in reach on a short window or a phone held sideways. */
 .chats-page .session-picker {
   position: absolute;
-  top: calc(100% + 0.5rem);
-  inset-inline-start: -0.25rem;
+  top: calc(64px + 0.25rem);
+  inset-inline-start: 0.75rem;
   z-index: 30;
   width: min(360px, calc(100vw - 2rem));
+  max-height: calc(100% - 64px - 0.75rem);
   display: flex;
   flex-direction: column;
   background: var(--chat-panel);
@@ -594,10 +627,12 @@
   background: var(--chat-hover);
 }
 
+/* Heavier as well as tinted, so the chosen filter does not stand out by colour alone. */
 .chats-page .chat-filter-pill.active {
   background: var(--chat-pill-active-bg);
   border-color: transparent;
   color: var(--chat-pill-active-text);
+  font-weight: 600;
 }
 
 /* Lists */
@@ -721,14 +756,16 @@
   display: block;
 }
 
+/* The glyph shows the chat's kind, so each tone's colour holds the 3:1 of a graphic on its pastel and, in dark mode, on
+   the 18 percent of itself mixed into the panel; theme-contrast.test.ts checks every tone in both. */
 .chats-page .avatar-tone-blue {
   background: #e3ebff;
-  color: #4a6bd6;
+  color: #5070d7;
 }
 
 .chats-page .avatar-tone-orange {
   background: #fde8dc;
-  color: #d9773b;
+  color: #cf6728;
 }
 
 .chats-page .avatar-tone-pink {
@@ -743,12 +780,12 @@
 
 .chats-page .avatar-tone-violet {
   background: #ede4fb;
-  color: #8257d1;
+  color: #875ed3;
 }
 
 .chats-page .avatar-tone-teal {
   background: #daf3ee;
-  color: #1f9a85;
+  color: #1e9581;
 }
 
 [data-theme='dark'] .chats-page .chat-avatar[class*='avatar-tone-'] {
@@ -1273,6 +1310,13 @@
   min-height: 7rem;
 }
 
+/* The global --text-muted placeholder is 4.24:1 on the light --chat-panel-header these fields are filled with. */
+.chats-page .group-info-field input::placeholder,
+.chats-page .group-info-field textarea::placeholder,
+.chats-page .group-info-add input::placeholder {
+  color: var(--chat-meta);
+}
+
 .chats-page .group-info-field input:focus,
 .chats-page .group-info-field textarea:focus,
 .chats-page .group-info-add input:focus {
@@ -1607,7 +1651,11 @@
    ============================================================================= */
 .chats-page .chats-room {
   flex: 1;
-  min-width: 0;
+  /* The composer's floor: the footer's padding, the attach button, the pill (its padding, border and gap, the input's
+     64px and the emoji button) and the send button, with the gaps between them. Narrower, the pill shrank below its
+     controls and the emoji button slid under the send button, as it did with the contact panel open beside the room
+     and the navigation expanded at 1201 to 1240px; the list column gives way instead. */
+  min-width: 262px;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -2236,8 +2284,13 @@
   color: var(--chat-meta);
 }
 
+/* Every muted line inside an outgoing bubble: --chat-meta is 3.27:1 on the dark green, and 2.87:1 on a quote there. */
 .chats-page .message-bubble.outgoing .message-edited,
-.chats-page .message-bubble.outgoing .message-time {
+.chats-page .message-bubble.outgoing .message-time,
+.chats-page .message-bubble.outgoing .message-quote-box,
+.chats-page .message-bubble.outgoing.revoked-type .message-text,
+.chats-page .message-bubble.outgoing .message-masked,
+.chats-page .message-bubble.outgoing .message-media-omitted {
   color: var(--chat-meta-out);
 }
 
@@ -3305,11 +3358,15 @@
   }
 }
 
-@media (max-width: 768px) {
+/* The phone shell's 3.5rem bar is drawn under Layout's MOBILE_QUERY, (max-width: 767px), and so is taken off here: at
+   768px the page is single pane (below) but has no bar above it, and taking it off left an empty strip. */
+@media (max-width: 767px) {
   .chats-page {
     height: calc(100dvh - 3.5rem);
   }
+}
 
+@media (max-width: 768px) {
   /* Single-pane on mobile: the list and the open conversation each take the full panel
      instead of being squeezed into one short stacked column. */
   .chats-page .chats-sidebar {
@@ -3344,11 +3401,13 @@
 /* Between the mobile breakpoint and 889px the two-pane layout leaves the room narrower than the composer
    once the list takes its 300px minimum beside the 260px navigation, so the send button fell outside the
    panel's clip with no scrollbar to recover it. In that band the panes swap one at a time instead, the way
-   they already do on a phone. Bounded on both sides on purpose: at 768px and below the mobile shell owns the
-   layout, and from 890px the room fits the composer again. Keyed to the navigation as well as the viewport,
-   because that arithmetic only holds while the nav is expanded; collapsed it already fits and none of this
-   should apply. `.main-content.expanded` is Layout's class for the COLLAPSED nav. */
-@media (min-width: 769px) and (max-width: 889px) {
+   they already do on a phone. From 890px the room fits the composer again. There is no lower bound: at 768px
+   and below these rules repeat the single-pane ones above, and a window zoomed to a width between 768 and
+   769px, which neither a 768px maximum nor a 769px minimum matches, would get two panes too narrow for the
+   room. Keyed to the navigation as well as the viewport, because that arithmetic only holds while the nav is
+   expanded; collapsed it already fits and none of this should apply. `.main-content.expanded` is Layout's
+   class for the COLLAPSED nav. */
+@media (max-width: 889px) {
   .main-content:not(.expanded) .chats-page .chats-sidebar {
     width: 100%;
     max-width: none;

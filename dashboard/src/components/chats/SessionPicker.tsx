@@ -6,6 +6,7 @@ import type { Session } from '../../services/api';
 import { useProfilePicture } from '../../hooks/useProfilePicture';
 import { formatPhoneForDisplay } from '../../utils/formatPhone';
 import { flagOfRegion, regionOfPhone } from '../../utils/phoneCountry';
+import { phoneQueryDigits } from '../../utils/phone';
 
 interface SessionPickerProps {
   /** Every session the gateway lists; only a ready one can be picked. */
@@ -110,7 +111,7 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
 
   const selected = sessions.find(s => s.id === selectedSessionId);
   const needle = query.trim().toLowerCase();
-  const digits = query.replace(/\D/g, '');
+  const digits = phoneQueryDigits(query);
   const shown = needle
     ? sessions.filter(
         s =>

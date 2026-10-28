@@ -40,6 +40,8 @@ let offlineUp = false;
 // The first account down at load (every session down, with `listOffline`), and an account created after the page
 // read the list, served once a test turns `listCreated` on.
 let mainDown = false;
+// The first account deleted on the server: the list no longer holds it.
+let mainDeleted = false;
 const CREATED_SESSION: Session = {
   ...SESSION,
   id: 'session-4',
@@ -214,7 +216,7 @@ function installFetchStub(): void {
     if (method === 'GET' && path === '/api/sessions') {
       // Taken when the request is made, so an answer a test holds back is as stale as one still in flight.
       const sessions: Session[] = [
-        mainDown ? { ...SESSION, status: 'disconnected' } : SESSION,
+        ...(mainDeleted ? [] : [mainDown ? { ...SESSION, status: 'disconnected' as const } : SESSION]),
         ...(listSecond ? [secondDown ? { ...SECOND_SESSION, status: 'disconnected' as const } : SECOND_SESSION] : []),
         ...(listOffline ? [offlineUp ? { ...OFFLINE_SESSION, status: 'ready' as const } : OFFLINE_SESSION] : []),
         ...(listCreated ? [listCreated] : []),
@@ -418,6 +420,7 @@ afterEach(async () => {
   secondDown = false;
   offlineUp = false;
   mainDown = false;
+  mainDeleted = false;
   listCreated = null;
   listExtra = false;
   listDuplicateContact = false;
@@ -500,6 +503,30 @@ test('the page and the open room keep a heading, and closing the panel returns f
   fireEvent.keyDown(document, { key: 'Escape' });
   assert.ok(!container.querySelector('.contact-info-panel'), 'Escape left the panel open');
   assert.equal(focusedName(), 'Contact info', 'Escape dropped focus');
+});
+
+test('opening the contact panel takes focus to its close button, from the toggle and from the contact', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const panel = () => container.querySelector('.contact-info-panel') as HTMLElement;
+  // Below 1200px the panel covers the room, so focus left on the toggle would sit under it.
+  const onClose = () => panel().contains(document.activeElement) && focusedName() === 'Close';
+
+  const toggle = screen.getByRole('button', { name: 'Contact info' });
+  toggle.focus();
+  fireEvent.click(toggle);
+  await waitFor(() => assert.ok(panel(), 'the panel did not open'));
+  assert.equal(onClose(), true, `focus is on "${focusedName()}", not in the panel`);
+  fireEvent.keyDown(document, { key: 'Escape' });
+  assert.equal(focusedName(), 'Contact info', 'Escape did not return focus to the toggle');
+
+  fireEvent.click(container.querySelector('.room-contact') as HTMLElement);
+  await waitFor(() => assert.ok(panel(), 'the panel did not open from the contact'));
+  assert.equal(onClose(), true, `focus is on "${focusedName()}", not in the panel`);
+  fireEvent.click(within(panel()).getByRole('button', { name: 'Close' }));
+  assert.equal(focusedName(), 'Contact info', 'closing the panel did not return focus to the toggle');
 });
 
 test("a group's panel is its group info, not contact info", async () => {
@@ -605,6 +632,23 @@ test('a contact the engine lists twice under one id is offered once, and found b
   assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was not found by his phone number');
 });
 
+test('the New chat search matches a number only for a query that reads as one', async () => {
+  const { screen, fireEvent } = rtl;
+  renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+  await screen.findByRole('button', { name: /Bob/ });
+  const search = screen.getByLabelText('Search name or number with country code');
+
+  // Bob's number holds a 2, which is no part of the name searched for.
+  fireEvent.change(search, { target: { value: 'Alice 2' } });
+  assert.equal(screen.queryAllByRole('button', { name: /Bob/ }).length, 0, 'a digit in a name matched a number');
+  assert.ok(screen.getByText('No contacts found'));
+  fireEvent.change(search, { target: { value: '+1 555-000.2222' } });
+  assert.equal(screen.getAllByRole('button', { name: /Bob/ }).length, 1, 'Bob was not found by his number');
+  assert.ok(screen.getByRole('button', { name: /^Start chat with/ }), 'the typed number is not offered');
+});
+
 for (const reactStrictMode of [false, true]) {
   test(`a typed number is checked with the gateway and opens a chat under the id it resolves to${reactStrictMode ? ' (StrictMode)' : ''}`, async () => {
     const { screen, fireEvent, waitFor, within } = rtl;
@@ -621,7 +665,7 @@ for (const reactStrictMode of [false, true]) {
       fetchCalls.some(c => c.method === 'GET' && c.path === `/api/sessions/${SESSION.id}/contacts/check/15550009999`),
       'the number was not checked with the gateway',
     );
-    await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
     assert.ok(!container.querySelector('.new-chat-panel'), 'the panel stayed open over the list');
   });
 }
@@ -641,6 +685,63 @@ test('the New chat search clear button returns focus to the field it cleared', a
   assert.equal(field.value, '');
   assert.ok(!screen.queryByRole('button', { name: 'Clear search' }), 'the clear button stayed');
   assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
+});
+
+test('the chat list search clear button returns focus to the field it cleared', async () => {
+  const { screen, fireEvent } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const field = container.querySelector('.chat-search-input input') as HTMLInputElement;
+  fireEvent.change(field, { target: { value: 'Ali' } });
+  const clear = screen.getByRole('button', { name: 'Clear search' });
+  clear.focus();
+  fireEvent.click(clear);
+
+  assert.equal(field.value, '');
+  assert.ok(!screen.queryByRole('button', { name: 'Clear search' }), 'the clear button stayed');
+  assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
+});
+
+test('an unnamed chat is titled by its number, formatted and isolated left to right, in the header and the panel', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  aliceNow.name = '';
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('15550001111'));
+  const title = await waitFor(() => {
+    const name = container.querySelector('.room-header .room-contact-name') as HTMLElement;
+    assert.equal(name?.textContent, '+1 555 000 1111');
+    return name;
+  });
+  assert.equal(title.querySelector('bdi')?.getAttribute('dir'), 'ltr', 'the number in the title is not isolated');
+  assert.equal(container.querySelector('.room-header .room-contact-phone') === null, true, 'the number is shown twice');
+  assert.ok(screen.getByRole('heading', { level: 2, name: '+1 555 000 1111' }), 'the room heading is not the number');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  const panel = await waitFor(() => container.querySelector('.contact-info-panel') as HTMLElement);
+  const heading = within(panel).getByRole('heading', { level: 3 });
+  assert.equal(heading.textContent, '+1 555 000 1111');
+  assert.equal(heading.querySelector('bdi')?.getAttribute('dir'), 'ltr', 'the number in the panel is not isolated');
+  assert.equal(panel.querySelector('.contact-info-sub') === null, true, 'the panel repeats the number under itself');
+});
+
+test('an unnamed privacy-id chat is titled by the number it resolves to, and its own digits are never formatted', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const lid = '262813461250072@lid';
+  Object.assign(aliceNow, { id: lid, name: '' });
+  const title = () => container.querySelector('.room-header .room-contact-name')?.textContent;
+
+  // Unresolved, it keeps the digits of its id as they are: they are no phone number.
+  let { container } = renderPage();
+  fireEvent.click(await screen.findByText('262813461250072'));
+  await waitFor(() => assert.equal(phoneRequests().length, 1, 'the privacy id was not looked up'));
+  await settle();
+  assert.equal(title(), '262813461250072');
+  rtl.cleanup();
+
+  lidPhones[lid] = '15550006666';
+  ({ container } = renderPage());
+  fireEvent.click(await screen.findByText('262813461250072'));
+  await waitFor(() => assert.equal(title(), '+1 555 000 6666'));
 });
 
 // ── The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
@@ -690,7 +791,7 @@ test('a privacy-id chat of another phone is not mistaken for the number, which o
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.equal(listedChatCards(container), before + 1, 'the new chat was not added to the list');
 });
 
@@ -703,7 +804,7 @@ test('a privacy id the engine cannot resolve right now does not stop a chat from
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
 });
 
@@ -732,7 +833,7 @@ test('an answer about a privacy id that the page cannot read does not stop a cha
   await startChatWithTypedNumber();
 
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
-  await within(container.querySelector('.room-header') as HTMLElement).findByText('15550009999');
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('+1 555 000 9999');
   assert.ok(!screen.queryByText('Could not check the number'), 'a failed lookup was shown as a failed number check');
 });
 
@@ -934,6 +1035,25 @@ test('the session switcher lists every session with its state, and only a connec
   assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
 });
 
+test('the session switcher matches a number only for a query that reads as one, and a name with a digit by name', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  listOffline = true;
+  listCreated = { ...CREATED_SESSION, name: 'Support 2' };
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const search = screen.getByLabelText('Search sessions...');
+  const shown = () => screen.queryAllByRole('option').map(option => option.querySelector('.session-name')?.textContent);
+  await waitFor(() => assert.equal(shown().length, 4));
+
+  // Main and Marie Haas have a 2 in their number, which is no part of the name searched for.
+  fireEvent.change(search, { target: { value: 'Support 2' } });
+  assert.deepEqual(shown(), ['Support 2']);
+  fireEvent.change(search, { target: { value: '+1 (555) 987-65' } });
+  assert.deepEqual(shown(), [SECOND_SESSION.name]);
+});
+
 test('the session switcher follows live session status: a session that connects can be picked, one that drops cannot', async () => {
   const { screen, fireEvent, act } = rtl;
   listOffline = true;
@@ -1072,6 +1192,65 @@ test('a status that lands while the session list is being read is not undone by 
   await waitFor(() => assert.ok(second()));
   await settle();
   assert.equal(second().disabled, true, 'the older answer made the session that dropped pickable again');
+});
+
+test('an open session deleted on the server gives way to the first ready one, and its chat goes with it', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  // A status for a session the page does not know reads the list again, which no longer holds the open one.
+  mainDeleted = true;
+  listCreated = CREATED_SESSION;
+  pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
+  await waitFor(() => assert.equal(selectedSessionName(container), SECOND_SESSION.name));
+  assert.equal(container.querySelector('.room-header') === null, true, "the deleted session's chat stayed open");
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  await waitFor(() => assert.ok(container.querySelector('.contact-info-panel'), 'the next session is not usable'));
+});
+
+test('an open session deleted on the server with no other one ready leaves none selected and closes its dialogs', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.ok(screen.getByRole('dialog'), 'the mute dialog did not open'));
+
+  mainDeleted = true;
+  listCreated = CREATED_SESSION;
+  pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
+  await screen.findByText('No connected sessions');
+  assert.equal(screen.queryByRole('dialog') === null, true, "the deleted session's mute dialog stayed open");
+  assert.equal(container.querySelector('.session-switcher') === null, true);
+});
+
+test('the session list read at load does not undo a newer list a status frame read before it answered', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listOffline = true;
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  // The read at load is taken with the second account down, and held back.
+  const release = hold('sessions');
+  const { container } = renderPage();
+  await waitFor(() => assert.equal(sessionReads(), 1));
+  gates.delete('sessions');
+
+  // The account connects, which the page does not know yet: the list is read again and answers at once.
+  offlineUp = true;
+  pushSessionStatus(OFFLINE_SESSION.id, 'ready');
+  await waitFor(() => assert.equal(sessionReads(), 2));
+  await settle();
+  release();
+
+  await screen.findByText('Alice');
+  await settle();
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const marie = screen.getAllByRole('option').find(o => o.textContent?.includes('Marie Haas')) as HTMLButtonElement;
+  assert.equal(marie.disabled, false, 'the answer from before the status made the connected session unpickable');
 });
 
 test('the session switcher links to pairing another number only for a key that may create a session', async () => {

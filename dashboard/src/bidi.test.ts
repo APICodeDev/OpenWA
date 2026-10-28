@@ -54,6 +54,7 @@ test('text cut with an ellipsis takes its direction from its own characters', ()
     '.chats-page .quote-body',
     '.chats-page .replying-to-body',
     '.chats-page .group-info-member .name',
+    '.chats-page .session-name',
   ];
   for (const selector of cut) {
     const rule = body('pages/Chats.css', selector);
@@ -79,6 +80,7 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
     '.chats-page .room-contact-name',
     '.chats-page .preview-filename',
     '.chats-page .replying-to-body',
+    '.chats-page .session-name',
   ];
   for (const selector of hugging) {
     const rule = body('pages/Chats.css', selector);

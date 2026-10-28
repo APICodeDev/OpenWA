@@ -173,10 +173,19 @@ export function Chats() {
   const { canWrite, engineType } = useRole();
 
   // Sessions list & active session
-  const [sessions, setSessions] = useState<Session[]>([]);
   // Every listed session, ready or not: the switcher shows the others with their state.
   const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+  // The sessions that can be opened, and the open one while it is down, so the switcher still shows it. Derived
+  // rather than kept beside the list: a copy filtered through the selection's ref dropped a session selected in the
+  // same turn as a list read answered, before the ref caught up.
+  const sessions = useMemo(
+    () => listedSessions.filter(s => s.status === 'ready' || s.id === selectedSessionId),
+    [listedSessions, selectedSessionId],
+  );
+  // The session on screen, for requests that answer later to check they still belong to it (synced below, with the
+  // socket's refs).
+  const selectedSessionRef = useRef(selectedSessionId);
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
 
   // Chats list
@@ -385,7 +394,11 @@ export function Chats() {
   );
   const activePhoneText =
     activePhoneDisplay ?? (resolvedPhoneQ.data ? formatPhoneForDisplay(resolvedPhoneQ.data) : null);
-  const activeChatTitle = activeChat ? activeChat.name || activeChat.id.split('@')[0] : '';
+  // An unnamed chat is titled by its number when one is known, never by the bare digits of its id (a @lid's are no
+  // phone). Shown, that number is isolated left to right, as it is under a name.
+  const activeChatTitle = activeChat ? activeChat.name || activePhoneText || activeChat.id.split('@')[0] : '';
+  const activeChatTitleText =
+    activeChat && !activeChat.name && activePhoneText ? <bdi dir="ltr">{activePhoneText}</bdi> : activeChatTitle;
 
   // The list loaders below reach the translator and the error toast through a ref, not as
   // dependencies: both change identity on a language switch, which re-ran the session load (it
@@ -403,23 +416,42 @@ export function Chats() {
   // 1. Fetch available connected sessions on mount. A failed read is not "no connected sessions": the gateway may
   // simply be restarting, so the page says it could not read them and offers the read again.
   const [sessionsFailure, setSessionsFailure] = useState<string | null>(null);
+  // Every read of the session list goes through here and is numbered: an answer is applied only if no read sent
+  // after it has been, since the read at load can answer after a relist a status frame started and would put back
+  // the states from before it. An answer that is dropped, or fails, after a newer one was applied resolves to that
+  // newer list. A selected session the list no longer holds was deleted, so it counts as none selected: the first
+  // ready session is opened, or none, and the session effect clears what belonged to it.
+  const sessionReadsRef = useRef({ sent: 0, applied: 0, list: [] as Session[] });
+  const readSessions = useCallback(async (): Promise<Session[]> => {
+    const reads = sessionReadsRef.current;
+    const request = ++reads.sent;
+    let list: Session[];
+    try {
+      list = await sessionApi.list();
+    } catch (err) {
+      if (request < reads.applied) return reads.list;
+      throw err;
+    }
+    if (request < reads.applied) return reads.list;
+    reads.applied = request;
+    reads.list = list;
+    setSessionsFailure(null);
+    setListedSessions(list);
+    const firstReady = list.find(s => s.status === 'ready')?.id ?? '';
+    setSelectedSessionId(selected => (list.some(s => s.id === selected) ? selected : firstReady));
+    return list;
+  }, []);
   const loadSessions = useCallback(async () => {
     try {
       setLoadingSessions(true);
       setSessionsFailure(null);
-      const list = await sessionApi.list();
-      const readySessions = list.filter(s => s.status === 'ready');
-      setSessions(readySessions);
-      setListedSessions(list);
-      if (readySessions.length > 0) {
-        setSelectedSessionId(readySessions[0].id);
-      }
+      await readSessions();
     } catch (err) {
       setSessionsFailure(err instanceof Error ? err.message : '');
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [readSessions]);
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
@@ -574,28 +606,28 @@ export function Chats() {
   useEffect(() => {
     const loads = chatsLoadsRef.current;
     const reloads = backgroundReloadsRef.current;
-    if (selectedSessionId) {
-      void loadChats(selectedSessionId);
-      setActiveChat(null);
-      setActiveChannel(null);
-      setActiveStatusContactId(null);
-      // A staged attachment or reply belongs to a chat in the session being left, so it is dropped here
-      // rather than carried across — the close/reopen round trip that preserves it is scoped to a
-      // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
-      // unmounts with the closed room and invalidates its own in-flight FileReader.
-      setAttachment(null);
-      setPreviewUrl(null);
-      setReplyingTo(null);
-      lastRoomIdRef.current = null;
-      // The new-chat panel lists the address book of the session being left, and an open group dialog
-      // edits a group through it.
-      setShowNewChat(false);
-      setGroupDialogChat(null);
-      setConfirmAction(null);
-      setMuteDialogChat(null);
-      setContactDialogChat(null);
-      setShowArchived(false);
-    }
+    // A session deleted while it was open leaves none selected when no other is ready: what belonged to it is
+    // cleared all the same, with no list to load in its place.
+    if (selectedSessionId) void loadChats(selectedSessionId);
+    setActiveChat(null);
+    setActiveChannel(null);
+    setActiveStatusContactId(null);
+    // A staged attachment or reply belongs to a chat in the session being left, so it is dropped here
+    // rather than carried across — the close/reopen round trip that preserves it is scoped to a
+    // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
+    // unmounts with the closed room and invalidates its own in-flight FileReader.
+    setAttachment(null);
+    setPreviewUrl(null);
+    setReplyingTo(null);
+    lastRoomIdRef.current = null;
+    // The new-chat panel lists the address book of the session being left, and an open group dialog
+    // edits a group through it.
+    setShowNewChat(false);
+    setGroupDialogChat(null);
+    setConfirmAction(null);
+    setMuteDialogChat(null);
+    setContactDialogChat(null);
+    setShowArchived(false);
     return () => {
       for (const controller of loads) controller.abort();
       loads.clear();
@@ -689,8 +721,6 @@ export function Chats() {
   // effects flush would otherwise see the previous list, miss the chat and refetch the whole list.
   const chatsRef = useRef(chats);
   const activeChatIdRef = useRef<string | undefined>(undefined);
-  // The session on screen, for requests that answer later to check they still belong to it.
-  const selectedSessionRef = useRef(selectedSessionId);
   useLayoutEffect(() => {
     chatsRef.current = chats;
     activeChatIdRef.current = activeChat?.id;
@@ -968,21 +998,14 @@ export function Chats() {
     try {
       do {
         relist.again = false;
-        const list = await sessionApi.list();
-        setSessionsFailure(null);
-        setListedSessions(list);
-        // The open session stays in the switcher when it is down, as it does on a status event.
-        setSessions(list.filter(s => s.status === 'ready' || s.id === selectedSessionRef.current));
-        // With nothing selected (every session was down at load), the first ready session is opened.
-        const firstReady = list.find(s => s.status === 'ready');
-        if (firstReady) setSelectedSessionId(selected => selected || firstReady.id);
+        await readSessions();
       } while (relist.again);
     } catch {
       // The next status event, or a search hit in that session, reads the list again.
     } finally {
       relist.running = false;
     }
-  }, []);
+  }, [readSessions]);
   const handleSessionStatus = useCallback(
     (event: { sessionId: string; status: string }) => {
       if (!listedSessionsRef.current.some(session => session.id === event.sessionId)) {
@@ -992,16 +1015,6 @@ export function Chats() {
       const status = event.status as Session['status'];
       const withStatus = (session: Session) => (session.id === event.sessionId ? { ...session, status } : session);
       setListedSessions(prev => prev.map(withStatus));
-      setSessions(prev => {
-        if (status === 'ready') {
-          if (prev.some(session => session.id === event.sessionId)) return prev.map(withStatus);
-          const listed = listedSessionsRef.current.find(session => session.id === event.sessionId);
-          return listed ? [...prev, { ...listed, status }] : prev;
-        }
-        return prev
-          .filter(session => session.id !== event.sessionId || session.id === selectedSessionRef.current)
-          .map(withStatus);
-      });
       // loadSessions selects the first ready session; when every session was down at load nothing is selected, so
       // the first one that connects is (the switcher would be blank and the list empty otherwise).
       if (status === 'ready') setSelectedSessionId(selected => selected || event.sessionId);
@@ -1274,21 +1287,18 @@ export function Chats() {
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
       if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId && s.status === 'ready')) {
-        let ready: Session[];
+        let listed: Session[];
         try {
-          const listed = await sessionApi.list();
-          setListedSessions(listed);
-          ready = listed.filter(s => s.status === 'ready');
+          listed = await readSessions();
         } catch (err) {
           showLoadError('chats.errors.loadSessions', err);
           return;
         }
-        if (!ready.some(s => s.id === hit.sessionId)) {
+        if (!listed.some(s => s.id === hit.sessionId && s.status === 'ready')) {
           pendingHitRef.current = null;
           showWarningToast(t('chats.errors.searchHitSessionNotReady'));
           return;
         }
-        setSessions(ready);
       }
       const pending = { sessionId: hit.sessionId, chatId: hit.chatId, waMessageId: hit.waMessageId };
       pendingHitRef.current = pending;
@@ -1316,7 +1326,7 @@ export function Chats() {
         }
       }
     },
-    [selectedSessionId, sessions, chats, switchTab, showLoadError, showWarningToast, t],
+    [selectedSessionId, sessions, chats, readSessions, switchTab, showLoadError, showWarningToast, t],
   );
 
   // After a session switch the chats list reloads — pick up the pending chat once it appears.
@@ -1957,7 +1967,7 @@ export function Chats() {
                       onImageError={() => activePp.refetch()}
                     />
                     <span className="room-contact-info">
-                      <span className="room-contact-name">{activeChatTitle}</span>
+                      <span className="room-contact-name">{activeChatTitleText}</span>
                       {/* Personal chats show the prettified phone number — local formatting for
                           @c.us ids, engine-resolved for @lid privacy ids (which are NOT phones and
                           must never be formatted as one). Only under a saved name: an unnamed chat's
@@ -2176,12 +2186,15 @@ export function Chats() {
           {activeChat && showContactInfo && (
             <aside className="contact-info-panel" aria-label={contactInfoLabel}>
               <header className="contact-info-header">
+                {/* Opening the panel takes focus into it: below 1200px it covers the room, the button that opened it
+                    and the stops after it. Closing it returns focus to the toggle. */}
                 <button
                   type="button"
                   className="icon-btn"
                   onClick={closeContactInfo}
                   aria-label={t('common.close')}
                   title={t('common.close')}
+                  autoFocus
                 >
                   <X size={20} />
                 </button>
@@ -2195,16 +2208,19 @@ export function Chats() {
                   size="lg"
                   onImageError={() => activePp.refetch()}
                 />
-                <h3>{activeChatTitle}</h3>
-                <p className="contact-info-sub">
-                  {activePhoneText ? (
-                    <bdi dir="ltr">{activePhoneText}</bdi>
-                  ) : activeChat.isGroup ? (
-                    t('chats.groupSubtitle')
-                  ) : (
-                    t('chats.privateContactSubtitle')
-                  )}
-                </p>
+                <h3>{activeChatTitleText}</h3>
+                {/* The number goes under a name only; an unnamed chat's title already is the number. */}
+                {(activeChat.name || !activePhoneText) && (
+                  <p className="contact-info-sub">
+                    {activePhoneText ? (
+                      <bdi dir="ltr">{activePhoneText}</bdi>
+                    ) : activeChat.isGroup ? (
+                      t('chats.groupSubtitle')
+                    ) : (
+                      t('chats.privateContactSubtitle')
+                    )}
+                  </p>
+                )}
                 <dl className="contact-info-list">
                   {activePhoneText && (
                     <>
