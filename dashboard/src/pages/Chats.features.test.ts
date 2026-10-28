@@ -40,6 +40,8 @@ let offlineUp = false;
 // The first account down at load (every session down, with `listOffline`), and an account created after the page
 // read the list, served once a test turns `listCreated` on.
 let mainDown = false;
+// The first account deleted on the server: the list no longer holds it.
+let mainDeleted = false;
 const CREATED_SESSION: Session = {
   ...SESSION,
   id: 'session-4',
@@ -214,7 +216,7 @@ function installFetchStub(): void {
     if (method === 'GET' && path === '/api/sessions') {
       // Taken when the request is made, so an answer a test holds back is as stale as one still in flight.
       const sessions: Session[] = [
-        mainDown ? { ...SESSION, status: 'disconnected' } : SESSION,
+        ...(mainDeleted ? [] : [mainDown ? { ...SESSION, status: 'disconnected' as const } : SESSION]),
         ...(listSecond ? [secondDown ? { ...SECOND_SESSION, status: 'disconnected' as const } : SECOND_SESSION] : []),
         ...(listOffline ? [offlineUp ? { ...OFFLINE_SESSION, status: 'ready' as const } : OFFLINE_SESSION] : []),
         ...(listCreated ? [listCreated] : []),
@@ -418,6 +420,7 @@ afterEach(async () => {
   secondDown = false;
   offlineUp = false;
   mainDown = false;
+  mainDeleted = false;
   listCreated = null;
   listExtra = false;
   listDuplicateContact = false;
@@ -1114,6 +1117,65 @@ test('a status that lands while the session list is being read is not undone by 
   await waitFor(() => assert.ok(second()));
   await settle();
   assert.equal(second().disabled, true, 'the older answer made the session that dropped pickable again');
+});
+
+test('an open session deleted on the server gives way to the first ready one, and its chat goes with it', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+
+  // A status for a session the page does not know reads the list again, which no longer holds the open one.
+  mainDeleted = true;
+  listCreated = CREATED_SESSION;
+  pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
+  await waitFor(() => assert.equal(selectedSessionName(container), SECOND_SESSION.name));
+  assert.equal(container.querySelector('.room-header') === null, true, "the deleted session's chat stayed open");
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Contact info' }));
+  await waitFor(() => assert.ok(container.querySelector('.contact-info-panel'), 'the next session is not usable'));
+});
+
+test('an open session deleted on the server with no other one ready leaves none selected and closes its dialogs', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.ok(screen.getByRole('dialog'), 'the mute dialog did not open'));
+
+  mainDeleted = true;
+  listCreated = CREATED_SESSION;
+  pushSessionStatus(CREATED_SESSION.id, 'qr_ready');
+  await screen.findByText('No connected sessions');
+  assert.equal(screen.queryByRole('dialog') === null, true, "the deleted session's mute dialog stayed open");
+  assert.equal(container.querySelector('.session-switcher') === null, true);
+});
+
+test('the session list read at load does not undo a newer list a status frame read before it answered', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  listOffline = true;
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  // The read at load is taken with the second account down, and held back.
+  const release = hold('sessions');
+  const { container } = renderPage();
+  await waitFor(() => assert.equal(sessionReads(), 1));
+  gates.delete('sessions');
+
+  // The account connects, which the page does not know yet: the list is read again and answers at once.
+  offlineUp = true;
+  pushSessionStatus(OFFLINE_SESSION.id, 'ready');
+  await waitFor(() => assert.equal(sessionReads(), 2));
+  await settle();
+  release();
+
+  await screen.findByText('Alice');
+  await settle();
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  const marie = screen.getAllByRole('option').find(o => o.textContent?.includes('Marie Haas')) as HTMLButtonElement;
+  assert.equal(marie.disabled, false, 'the answer from before the status made the connected session unpickable');
 });
 
 test('the session switcher links to pairing another number only for a key that may create a session', async () => {

@@ -177,6 +177,9 @@ export function Chats() {
   // Every listed session, ready or not: the switcher shows the others with their state.
   const [listedSessions, setListedSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string>('');
+  // The session on screen, for requests that answer later to check they still belong to it (synced below, with the
+  // socket's refs).
+  const selectedSessionRef = useRef(selectedSessionId);
   const [loadingSessions, setLoadingSessions] = useState<boolean>(true);
 
   // Chats list
@@ -407,23 +410,44 @@ export function Chats() {
   // 1. Fetch available connected sessions on mount. A failed read is not "no connected sessions": the gateway may
   // simply be restarting, so the page says it could not read them and offers the read again.
   const [sessionsFailure, setSessionsFailure] = useState<string | null>(null);
+  // Every read of the session list goes through here and is numbered: an answer is applied only if no read sent
+  // after it has been, since the read at load can answer after a relist a status frame started and would put back
+  // the states from before it. An answer that is dropped, or fails, after a newer one was applied resolves to that
+  // newer list. A selected session the list no longer holds was deleted, so it counts as none selected: the first
+  // ready session is opened, or none, and the session effect clears what belonged to it.
+  const sessionReadsRef = useRef({ sent: 0, applied: 0, list: [] as Session[] });
+  const readSessions = useCallback(async (): Promise<Session[]> => {
+    const reads = sessionReadsRef.current;
+    const request = ++reads.sent;
+    let list: Session[];
+    try {
+      list = await sessionApi.list();
+    } catch (err) {
+      if (request < reads.applied) return reads.list;
+      throw err;
+    }
+    if (request < reads.applied) return reads.list;
+    reads.applied = request;
+    reads.list = list;
+    setSessionsFailure(null);
+    setListedSessions(list);
+    // The open session stays in the switcher when it is down, as it does on a status event.
+    setSessions(list.filter(s => s.status === 'ready' || s.id === selectedSessionRef.current));
+    const firstReady = list.find(s => s.status === 'ready')?.id ?? '';
+    setSelectedSessionId(selected => (list.some(s => s.id === selected) ? selected : firstReady));
+    return list;
+  }, []);
   const loadSessions = useCallback(async () => {
     try {
       setLoadingSessions(true);
       setSessionsFailure(null);
-      const list = await sessionApi.list();
-      const readySessions = list.filter(s => s.status === 'ready');
-      setSessions(readySessions);
-      setListedSessions(list);
-      if (readySessions.length > 0) {
-        setSelectedSessionId(readySessions[0].id);
-      }
+      await readSessions();
     } catch (err) {
       setSessionsFailure(err instanceof Error ? err.message : '');
     } finally {
       setLoadingSessions(false);
     }
-  }, []);
+  }, [readSessions]);
   useEffect(() => {
     void loadSessions();
   }, [loadSessions]);
@@ -578,28 +602,28 @@ export function Chats() {
   useEffect(() => {
     const loads = chatsLoadsRef.current;
     const reloads = backgroundReloadsRef.current;
-    if (selectedSessionId) {
-      void loadChats(selectedSessionId);
-      setActiveChat(null);
-      setActiveChannel(null);
-      setActiveStatusContactId(null);
-      // A staged attachment or reply belongs to a chat in the session being left, so it is dropped here
-      // rather than carried across — the close/reopen round trip that preserves it is scoped to a
-      // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
-      // unmounts with the closed room and invalidates its own in-flight FileReader.
-      setAttachment(null);
-      setPreviewUrl(null);
-      setReplyingTo(null);
-      lastRoomIdRef.current = null;
-      // The new-chat panel lists the address book of the session being left, and an open group dialog
-      // edits a group through it.
-      setShowNewChat(false);
-      setGroupDialogChat(null);
-      setConfirmAction(null);
-      setMuteDialogChat(null);
-      setContactDialogChat(null);
-      setShowArchived(false);
-    }
+    // A session deleted while it was open leaves none selected when no other is ready: what belonged to it is
+    // cleared all the same, with no list to load in its place.
+    if (selectedSessionId) void loadChats(selectedSessionId);
+    setActiveChat(null);
+    setActiveChannel(null);
+    setActiveStatusContactId(null);
+    // A staged attachment or reply belongs to a chat in the session being left, so it is dropped here
+    // rather than carried across — the close/reopen round trip that preserves it is scoped to a
+    // single session. Clearing previewUrl runs the revoke effect's cleanup; the composer
+    // unmounts with the closed room and invalidates its own in-flight FileReader.
+    setAttachment(null);
+    setPreviewUrl(null);
+    setReplyingTo(null);
+    lastRoomIdRef.current = null;
+    // The new-chat panel lists the address book of the session being left, and an open group dialog
+    // edits a group through it.
+    setShowNewChat(false);
+    setGroupDialogChat(null);
+    setConfirmAction(null);
+    setMuteDialogChat(null);
+    setContactDialogChat(null);
+    setShowArchived(false);
     return () => {
       for (const controller of loads) controller.abort();
       loads.clear();
@@ -693,8 +717,6 @@ export function Chats() {
   // effects flush would otherwise see the previous list, miss the chat and refetch the whole list.
   const chatsRef = useRef(chats);
   const activeChatIdRef = useRef<string | undefined>(undefined);
-  // The session on screen, for requests that answer later to check they still belong to it.
-  const selectedSessionRef = useRef(selectedSessionId);
   useLayoutEffect(() => {
     chatsRef.current = chats;
     activeChatIdRef.current = activeChat?.id;
@@ -972,21 +994,14 @@ export function Chats() {
     try {
       do {
         relist.again = false;
-        const list = await sessionApi.list();
-        setSessionsFailure(null);
-        setListedSessions(list);
-        // The open session stays in the switcher when it is down, as it does on a status event.
-        setSessions(list.filter(s => s.status === 'ready' || s.id === selectedSessionRef.current));
-        // With nothing selected (every session was down at load), the first ready session is opened.
-        const firstReady = list.find(s => s.status === 'ready');
-        if (firstReady) setSelectedSessionId(selected => selected || firstReady.id);
+        await readSessions();
       } while (relist.again);
     } catch {
       // The next status event, or a search hit in that session, reads the list again.
     } finally {
       relist.running = false;
     }
-  }, []);
+  }, [readSessions]);
   const handleSessionStatus = useCallback(
     (event: { sessionId: string; status: string }) => {
       if (!listedSessionsRef.current.some(session => session.id === event.sessionId)) {
@@ -1278,21 +1293,18 @@ export function Chats() {
       // its list is read on mount. A session missing from it is looked up again, since it may have
       // connected since; one that still is not ready is refused rather than selected with no chats.
       if (hit.sessionId !== selectedSessionId && !sessions.some(s => s.id === hit.sessionId && s.status === 'ready')) {
-        let ready: Session[];
+        let listed: Session[];
         try {
-          const listed = await sessionApi.list();
-          setListedSessions(listed);
-          ready = listed.filter(s => s.status === 'ready');
+          listed = await readSessions();
         } catch (err) {
           showLoadError('chats.errors.loadSessions', err);
           return;
         }
-        if (!ready.some(s => s.id === hit.sessionId)) {
+        if (!listed.some(s => s.id === hit.sessionId && s.status === 'ready')) {
           pendingHitRef.current = null;
           showWarningToast(t('chats.errors.searchHitSessionNotReady'));
           return;
         }
-        setSessions(ready);
       }
       const pending = { sessionId: hit.sessionId, chatId: hit.chatId, waMessageId: hit.waMessageId };
       pendingHitRef.current = pending;
@@ -1320,7 +1332,7 @@ export function Chats() {
         }
       }
     },
-    [selectedSessionId, sessions, chats, switchTab, showLoadError, showWarningToast, t],
+    [selectedSessionId, sessions, chats, readSessions, switchTab, showLoadError, showWarningToast, t],
   );
 
   // After a session switch the chats list reloads — pick up the pending chat once it appears.
