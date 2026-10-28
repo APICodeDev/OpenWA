@@ -51,6 +51,26 @@ describe('MessageSearch tool', () => {
     expect(search).toHaveBeenCalledWith({ q: 'invoice', match: 'contains' }, undefined, undefined);
   });
 
+  it('searches by word while the contains index is not ready, unless the agent asked for contains', async () => {
+    const key = { id: 'k1', allowedSessions: null, allowedChats: null };
+    search.mockRejectedValueOnce(new NotImplementedException('The contains index is still building'));
+
+    await expect(call(key, { q: 'invoice' })).resolves.toBe(results);
+    expect(search).toHaveBeenNthCalledWith(1, { q: 'invoice', match: 'contains' }, undefined, undefined);
+    expect(search).toHaveBeenNthCalledWith(2, { q: 'invoice', match: 'word' }, undefined, undefined);
+
+    search.mockClear();
+    search.mockRejectedValueOnce(new NotImplementedException('The contains index is still building'));
+    await expect(call(key, { q: 'invoice', match: 'contains' })).rejects.toBeInstanceOf(NotImplementedException);
+    expect(search).toHaveBeenCalledTimes(1);
+
+    // Only the 501 of an unready index falls back; any other failure reaches the agent as it was.
+    search.mockClear();
+    search.mockRejectedValueOnce(new BadRequestException('Every term is under three characters'));
+    await expect(call(key, { q: 'in' })).rejects.toBeInstanceOf(BadRequestException);
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it('bounds dateFrom and dateTo to the safe integer range, as REST does', async () => {
     const key = { id: 'k1', allowedSessions: null, allowedChats: null };
 
