@@ -73,6 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Honor inclusive millisecond lower bounds in built-in search.
 - Stop the dashboard from asking Baileys for live chat history on every chat it opens; Baileys answers 501 to it, which logged a failed request each time.
 - Preserve replacement plugin search providers during worker recovery.
+- Answer 409 instead of a bare 500 when WhatsApp Web reloads its page under a running whatsapp-web.js read, and no longer report a group, contact, label or invite lookup cut short that way as not found (404); accepting an invite answers 503 because the join may have landed.
 - Answer 409 naming the path and the cause on `GET /api/infra/storage/files/count` and `/export` when the local storage directory holds a symbolic link, a directory the app cannot read or one nested 20 levels deep, instead of silently leaving those files out of the count and the archive.
 - Normalize CRLF line endings in SDK contract parsers so Windows checkouts do not produce false contract mismatches (#1885). Thanks @Purushotham-Prajapati-24.
 - Exclude local repository metadata from Java SDK Maven Central bundles built with Maven 3.10 (#1879).

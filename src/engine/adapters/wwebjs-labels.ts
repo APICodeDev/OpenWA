@@ -7,7 +7,7 @@ import { isChannelJid, chatKind } from '../identity/wa-id';
 import { ChatLabelsUnsupportedError } from '../../common/errors/chat-labels-unsupported.error';
 import { LabelNotFoundError } from '../../common/errors/label-not-found.error';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
-import { type WwebjsEngineHost, withPage } from './wwebjs-host';
+import { type WwebjsEngineHost, rethrowIfNavigation, withPage } from './wwebjs-host';
 import { isProtocolTimeout } from './wwebjs-lifecycle';
 
 /**
@@ -58,6 +58,7 @@ export class WwebjsLabels {
       chats = await (this.client() as unknown as BusinessClient).getChatsByLabelId(labelId);
     } catch (error) {
       // Same split the group read makes: a dead page is a 503, not "no such label".
+      rethrowIfNavigation(this.host, error);
       if (this.host.isPageTransportError(error)) {
         this.host.reportIfPageTransportError(error, 'getChatsByLabel');
         throw new EngineTransportError(`Transport died while listing chats for label ${labelId}`);
