@@ -1026,7 +1026,7 @@
     "single": {
       "title": "检查单个账号",
       "phoneLabel": "电话号码",
-      "phonePlaceholder": "例如：919876543210 或 6281234567890（含国家/地区代码）",
+      "phonePlaceholder": "例如：919876543210 或 6281234567890",
       "check": "检查",
       "checking": "正在检查...",
       "autoPrefix": "为 10 位号码自动添加前缀 <strong>+91</strong>（12 位号码保持原样）",

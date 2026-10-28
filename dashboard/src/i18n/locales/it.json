@@ -1032,7 +1032,7 @@
     "single": {
       "title": "Verifica un singolo account",
       "phoneLabel": "Numero di telefono",
-      "phonePlaceholder": "es. 919876543210 o 6281234567890 (con prefisso del paese)",
+      "phonePlaceholder": "es. 919876543210 o 6281234567890",
       "check": "Verifica",
       "checking": "Verifica in corso...",
       "autoPrefix": "Aggiungi automaticamente il prefisso <strong>+91</strong> ai numeri di 10 cifre (i numeri di 12 cifre restano invariati)",

@@ -1026,7 +1026,7 @@
     "single": {
       "title": "단일 계정 확인",
       "phoneLabel": "전화번호",
-      "phonePlaceholder": "예: 919876543210 또는 6281234567890 (국가 코드 포함)",
+      "phonePlaceholder": "예: 919876543210 또는 6281234567890",
       "check": "확인",
       "checking": "확인하는 중...",
       "autoPrefix": "10자리 번호 앞에 <strong>+91</strong> 자동 추가 (12자리 번호는 그대로 유지)",
