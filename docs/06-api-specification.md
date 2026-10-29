@@ -201,7 +201,7 @@ Single-recipient send routes under `/messages` return **HTTP 201** with `{ "mess
 
 Two consequences worth knowing:
 
-1. **A number reported as unregistered is refused before sending.** Baileys checks a phone destination when it has no LID mapping: a negative answer returns `400`, and an unanswered lookup returns `503`. Known LIDs skip that query. whatsapp-web.js also returns `400` when it cannot resolve the recipient, which can include its first-contact limitation. Neither result guarantees that a registered recipient will receive the message.
+1. **A number reported as unregistered is refused before sending.** Baileys checks a phone destination when it has no LID mapping: a negative answer returns `400`, and an unanswered lookup returns `503`. Known LIDs skip that query. whatsapp-web.js also returns `400` when its lookup answers that the recipient cannot be resolved, which can include its first-contact limitation; a lookup that does not answer ends the send with the `500` engine error (`ENGINE_PAGE_ERROR`), whose outcome is not proven. Neither result guarantees that a registered recipient will receive the message.
 2. **There is no synchronous delivery confirmation on either engine** (whatsapp-web.js or Baileys), so the `201` cannot be made to mean "delivered."
 
 **Before sending to a new number**, you can confirm it is a registered WhatsApp account with `GET /api/sessions/:sessionId/contacts/check/:number` (returns `{ exists, whatsappId }`; needs an `OPERATOR` key, like the send itself; see the Contacts reference).
@@ -1623,7 +1623,8 @@ not archived and stays inline; a row without a WhatsApp message ID keeps its inl
 outbound media is archived (and replaced) only with
 `CHAT_MEDIA_ARCHIVE_OUTBOUND=true`; rows stored before the switch keep their inline copy. Two
 consequences to weigh before enabling it: with a non-zero `CHAT_MEDIA_ARCHIVE_TTL_DAYS`, retention
-now removes the only copy, after which this route answers `404`; and a database export no longer
+now removes the only copy, after which this route answers `404` and the row no longer carries
+`archived: true` (rows purged by an earlier release keep the marker with `mediaPath` null); and a database export no longer
 carries those bytes, so back up the media store alongside the database. Webhook payloads carry the
 in-memory engine message rather than the row, so they are unaffected. The dashboard previews
 archived images, video and audio inline by fetching them from this route. Each preview is one request
@@ -1651,6 +1652,8 @@ stored mimetype (the part before any `;`, trimmed and lowercased; parameters are
 conservative inert set (common image/video/audio types) and
 `application/octet-stream` otherwise — a document, or an `image/svg+xml`, is never served as active
 content on the API origin.
+
+The bytes are streamed from the store, with `Content-Length` when the store reports a size. On S3 a connection that moves no bytes for 30 seconds is cut, so a client that stops reading that long gets an aborted response. A store failure before the first byte answers `500`; one after it aborts the connection rather than end a short body.
 
 **Errors:** `401` missing/invalid API key · `403` key not scoped to this session · `404`
 `No media stored for this message` — the message carries no media, `MEDIA_DOWNLOAD_ENABLED=false`
@@ -4458,6 +4461,8 @@ Stream a stored status's media bytes (the file behind a `mediaUrl` returned abov
 | statusId  | string | The status `id` (e.g. from a `GET /status` response) |
 
 **Response** `200` — the raw media bytes as the response body, served as an **attachment** (`Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`). `Content-Type` is the essence of the stored mimetype (see below) when that is a single image, video or audio type other than `image/svg+xml`, which is scriptable despite the `image/` prefix, and `application/octet-stream` otherwise, so no stored status media is ever served as active content on the API origin. Streamed via `StreamableFile` from whatever backs `StorageService` (local disk or S3 — the route does not care which).
+
+The bytes are streamed from the store, with `Content-Length` when the store reports a size. On S3 a connection that moves no bytes for 30 seconds is cut, so a client that stops reading that long gets an aborted response. A store failure before the first byte answers `500`; one after it aborts the connection rather than end a short body.
 
 Only the essence of the stored mimetype is checked and served: the part before any `;`, trimmed and lowercased, since MIME types are case-insensitive. Parameters are dropped, and a value that is not a single well-formed type (a comma-joined list, for example) is served as `application/octet-stream`.
 
