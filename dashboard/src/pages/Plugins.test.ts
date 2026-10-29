@@ -152,7 +152,7 @@ async function openSessionOverride(sessionLabel: string): Promise<void> {
   renderPlugins();
 
   fireEvent.click(await screen.findByTitle('Configure'));
-  fireEvent.click(await screen.findByRole('button', { name: 'Sessions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }));
   const select = await screen.findByRole('combobox', { name: 'Select a session…' });
   await findByText(select, sessionLabel);
   fireEvent.change(select, { target: { value: SESSION.id } });
@@ -324,7 +324,7 @@ test('a config schema without properties opens the config modal and the Sessions
   renderPlugins();
   fireEvent.click(await screen.findByTitle('Configure'));
   assert.equal(screen.queryByRole('button', { name: 'Save Configuration' }) === null, true);
-  fireEvent.click(await screen.findByRole('button', { name: 'Sessions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'Sessions' }));
   // No declared field means nothing to override per session.
   await screen.findByText('Run for');
   assert.equal(screen.queryByRole('combobox', { name: 'Select a session…' }) === null, true);

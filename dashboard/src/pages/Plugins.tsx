@@ -1087,14 +1087,18 @@ export default function Plugins() {
           className="install-modal"
           closeLabel={t('common.close')}
           headerExtra={
-            <div className="install-tabs">
+            <div className="install-tabs" role="tablist">
               <button
+                role="tab"
+                aria-selected={installMode === 'upload'}
                 className={`install-tab${installMode === 'upload' ? ' active' : ''}`}
                 onClick={() => setInstallMode('upload')}
               >
                 <Upload size={15} /> {t('plugins.installModal.tabUpload', 'Upload .zip')}
               </button>
               <button
+                role="tab"
+                aria-selected={installMode === 'catalog'}
                 className={`install-tab${installMode === 'catalog' ? ' active' : ''}`}
                 onClick={() => setInstallMode('catalog')}
               >
@@ -1293,8 +1297,10 @@ export default function Plugins() {
               closeLabel={t('common.close')}
               subheader={
                 showTabs ? (
-                  <div className="modal-tabs">
+                  <div className="modal-tabs" role="tablist">
                     <button
+                      role="tab"
+                      aria-selected={configTab === 'config'}
                       className={`modal-tab ${configTab === 'config' ? 'active' : ''}`}
                       onClick={() => setConfigTab('config')}
                     >
@@ -1302,6 +1308,8 @@ export default function Plugins() {
                     </button>
                     {configPlugin.sessionScoped !== false && (
                       <button
+                        role="tab"
+                        aria-selected={configTab === 'sessions'}
                         className={`modal-tab ${configTab === 'sessions' ? 'active' : ''}`}
                         onClick={() => setConfigTab('sessions')}
                       >
@@ -1310,6 +1318,8 @@ export default function Plugins() {
                     )}
                     {configPlugin.ingressCapable && (
                       <button
+                        role="tab"
+                        aria-selected={configTab === 'instances'}
                         className={`modal-tab ${configTab === 'instances' ? 'active' : ''}`}
                         onClick={() => setConfigTab('instances')}
                       >
