@@ -54,6 +54,11 @@ export interface BaileysContactsHost {
   /** Every spelling of one chat the session can connect: the id, its engine form, and its lid or phone twin. */
   chatTwins(jid: string): string[];
   /**
+   * When WhatsApp deleted the chat (epoch ms), under any of its spellings, or null when it did not or a
+   * message has re-created it since.
+   */
+  chatDeletedAt(chatId: string): number | null;
+  /**
    * Stored copies of the named messages, in whatever order the store returns them. Ids the store
    * has never seen are absent, so neither the length nor the order tracks the input. `undefined`
    * when the session was built without a message store.
@@ -446,10 +451,10 @@ export class BaileysContacts {
       // which Baileys drops from the receipt, so the call would answer true having sent nothing.
       // After a restart memory holds none until the next one arrives; the gateway's stored copy
       // stands in, rebuilt the way a chat write keys it.
-      const last = this.host.lastInboundMessage(chatId);
+      const last = this.sinceDeletion(chatId, this.host.lastInboundMessage(chatId));
       if (last && (await this.matchesChat(last.key, chatId, socket))) return [last.key];
       if (!isEngineChatId(chatId)) return [];
-      const row = await this.readStored(chatId, storedLast);
+      const row = this.sinceDeletion(chatId, await this.readStored(chatId, storedLast));
       const received = row && !row.fromMe ? this.storedTarget(chatId, row) : null;
       return received && (await this.matchesChat(received.key, chatId, socket)) ? [received.key] : [];
     }
@@ -531,6 +536,9 @@ export class BaileysContacts {
    * Only the message in memory serves an id spelled any other way than the engine keys chats
    * ({@link isEngineChatId}): the stored lookup normalizes the id and finds the chat's rows, but the
    * patch would still be indexed by the misspelled id, which names no chat on the phone.
+   *
+   * A message, in memory or stored, sent at or before WhatsApp deleted the chat neither keys the write
+   * nor shows the session knows the chat (see {@link sinceDeletion}).
    */
   private async chatWriteRange(
     socket: WASocket,
@@ -538,11 +546,11 @@ export class BaileysContacts {
     stored: StoredChatMessageLookup | undefined,
     rangeless: () => boolean = () => false,
   ): Promise<ChatWriteRange | null> {
-    const last = this.host.lastMessage(chatId);
+    const last = this.sinceDeletion(chatId, this.host.lastMessage(chatId));
     const inMemory = last ? this.memoryTarget(chatId, last.key, last.timestamp) : null;
     if (inMemory && (await this.matchesChat(inMemory.key, chatId, socket))) return toRange(inMemory);
     if (!isEngineChatId(chatId)) return null;
-    const row = await this.readStored(chatId, stored);
+    const row = this.sinceDeletion(chatId, await this.readStored(chatId, stored));
     const fromStore = row ? this.storedTarget(chatId, row) : null;
     if (fromStore && (await this.matchesChat(fromStore.key, chatId, socket))) return toRange(fromStore);
     if (!rangeless() || !(last || row || this.listedChats(chatId).length)) return null;
@@ -564,6 +572,17 @@ export class BaileysContacts {
       });
       return null;
     }
+  }
+
+  /**
+   * The message, unless it was sent at or before WhatsApp deleted the chat. WhatsApp keeps nothing of a
+   * deleted chat while the gateway keeps its stored messages: a write keyed to one names a message the
+   * phone no longer holds, and Baileys applies its own patch locally all the same, so the deleted chat
+   * would be listed again. Such a message does not show the chat exists either.
+   */
+  private sinceDeletion<T extends { timestamp: number }>(chatId: string, message: T | null): T | null {
+    const deletedAt = this.host.chatDeletedAt(chatId);
+    return message && (deletedAt === null || message.timestamp * 1000 > deletedAt) ? message : null;
   }
 
   /** A message held in memory, keyed under the jid it arrived with; null when it cannot be used. */

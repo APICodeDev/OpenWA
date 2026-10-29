@@ -13,6 +13,8 @@ import { Message, MessageDirection } from '../../modules/message/entities/messag
 import { MessageProjector } from '../../modules/session/message-projector.service';
 import { SessionLidResolver } from '../../modules/session/session-lid-resolver.service';
 import { ChatScopeService } from '../../modules/auth/chat-scope.service';
+import { ChatState } from './baileys-chat-state.entity';
+import { ChatStateStoreService } from './baileys-chat-state-store.service';
 
 jest.mock('../../common/media/load-remote-media', () => ({
   loadRemoteMediaBuffer: jest.fn(),
@@ -8538,6 +8540,180 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
       await expect(adapter.markUnread('628111@c.us', stored)).resolves.toBe(false);
       expect(stored).toHaveBeenCalled();
       expect(fakeSock.chatModify).not.toHaveBeenCalled();
+    });
+  });
+
+  // WhatsApp keeps nothing of a deleted chat while the gateway keeps its stored messages, and Baileys applies an own
+  // patch locally: a write keyed to a message from before the deletion came back as an update of the chat, which
+  // listed the deleted chat again, for good once the update had created a state row.
+  describe('for a chat deleted on WhatsApp', () => {
+    const PHONE = '628111@s.whatsapp.net';
+    const LID = '484848@lid';
+    let db: DataSource;
+    const newStore = () => new ChatStateStoreService(db.getRepository(ChatState));
+    const now = () => Math.floor(Date.now() / 1000);
+    // The store writes behind the events that feed it.
+    const settle = async () => {
+      for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+    };
+
+    beforeEach(async () => {
+      db = new DataSource({ type: 'better-sqlite3', database: ':memory:', entities: [ChatState], synchronize: true });
+      await db.initialize();
+      // Baileys applies its own app-state patch as a chat update (emitOwnEvents).
+      fakeSock.chatModify.mockImplementation((change: Record<string, unknown>, jid: string) => {
+        if ('archive' in change) fakeSock.fire('chats.update', [{ id: jid, archived: change.archive }]);
+        if ('markRead' in change) fakeSock.fire('chats.update', [{ id: jid, unreadCount: -1 }]);
+        if ('delete' in change) fakeSock.fire('chats.delete', [jid]);
+        return Promise.resolve();
+      });
+    });
+    afterEach(async () => {
+      fakeSock.chatModify.mockReset().mockResolvedValue(undefined);
+      await db.destroy();
+    });
+
+    const started = async (
+      chatStateStore: ChatStateStoreService,
+      lidMappingStore?: ReturnType<typeof reported>,
+    ): Promise<BaileysAdapter> => {
+      await chatStateStore.reload();
+      const adapter = new BaileysAdapter({
+        sessionId: 'sess-1',
+        dbSessionId: 'db-uuid-1',
+        authDir: './data/baileys',
+        messageStore: fakeStore,
+        chatStateStore,
+        ...(lidMappingStore ? { lidMappingStore } : {}),
+      });
+      await adapter.initialize({});
+      fakeSock.fire('connection.update', { connection: 'open' });
+      return adapter;
+    };
+    const deletedOnPhone = async (id = PHONE, lidMappingStore?: ReturnType<typeof reported>) => {
+      const adapter = await started(newStore(), lidMappingStore);
+      fakeSock.fire('chats.upsert', [{ id, pinned: 3 }]);
+      fakeSock.fire('chats.delete', [id]);
+      await settle();
+      return adapter;
+    };
+    const before = () => lookup({ id: 'S1', fromMe: false, timestamp: 1690000000 });
+
+    it('keys no write to a stored message from before the deletion, and the chat stays unlisted', async () => {
+      const adapter = await deletedOnPhone();
+      await expect(adapter.archiveChat('628111@c.us', true, before())).resolves.toBe(false);
+      await expect(adapter.markUnread('628111@c.us', before())).resolves.toBe(false);
+      await expect(adapter.clearChatMessages('628111@c.us', before())).resolves.toBe(false);
+      await expect(adapter.deleteChat('628111@c.us', before())).resolves.toBe(false);
+      await expect(adapter.sendSeen('628111@c.us', undefined, undefined, before())).resolves.toBe(false);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(fakeSock.readMessages).not.toHaveBeenCalled();
+      await settle();
+      expect(await adapter.getChats()).toEqual([]);
+    });
+
+    it('still keys no write to it after a restart, and a state update the phone sends lists nothing', async () => {
+      await deletedOnPhone();
+      const adapter = await started(newStore());
+      await expect(adapter.archiveChat('628111@c.us', true, before())).resolves.toBe(false);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      // An archive made before the deletion can be synced after it: the delete's collection resyncs first.
+      fakeSock.fire('chats.update', [{ id: PHONE, archived: true }]);
+      await settle();
+      expect(await adapter.getChats()).toEqual([]);
+      expect(await (await started(newStore())).getChats()).toEqual([]);
+    });
+
+    it('does not take a message from before the deletion delivered after it as the chat coming back', async () => {
+      const adapter = await deletedOnPhone();
+      // A reconnect can deliver a message the phone had before the chat was deleted after the deletion.
+      await upsert({ remoteJid: PHONE, fromMe: false, id: 'OLD' }, 1700000020);
+      fakeSock.fire('chats.update', [{ id: PHONE, conversationTimestamp: 1700000020, unreadCount: 1 }]);
+      await settle();
+      expect(await adapter.getChats()).toEqual([]);
+      await expect(adapter.archiveChat('628111@c.us', true, lookup(null))).resolves.toBe(false);
+      await expect(adapter.sendSeen('628111@c.us', undefined, undefined, lookup(null))).resolves.toBe(false);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(fakeSock.readMessages).not.toHaveBeenCalled();
+    });
+
+    it('lists and writes to the chat a later message re-creates, without the state of the deleted one', async () => {
+      const adapter = await deletedOnPhone();
+      // Synced after the deletion, from before it, and still to be dropped once the chat is new again.
+      fakeSock.fire('chats.update', [{ id: PHONE, muteEndTime: -1 }]);
+      const at = now() + 60;
+      await upsert({ remoteJid: PHONE, fromMe: false, id: 'NEW' }, at);
+      await settle();
+      expect(await adapter.getChats()).toEqual([
+        expect.objectContaining({ id: '628111@c.us', muted: false, pinned: false, archived: false }),
+      ]);
+      await expect(adapter.archiveChat('628111@c.us', true, before())).resolves.toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith(
+        {
+          archive: true,
+          lastMessages: [{ key: { remoteJid: PHONE, fromMe: false, id: 'NEW' }, messageTimestamp: at }],
+        },
+        PHONE,
+      );
+      await settle();
+      // The archive outlives a restart, as for any chat.
+      expect(await (await started(newStore())).getChats()).toEqual([
+        expect.objectContaining({ id: '628111@c.us', archived: true }),
+      ]);
+    });
+
+    it('keys a write to a stored message from after the deletion', async () => {
+      const adapter = await deletedOnPhone();
+      const at = now() + 60;
+      await expect(
+        adapter.clearChatMessages('628111@c.us', lookup({ id: 'S2', fromMe: true, timestamp: at })),
+      ).resolves.toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith(
+        { clear: true, lastMessages: [{ key: { remoteJid: PHONE, fromMe: true, id: 'S2' }, messageTimestamp: at }] },
+        PHONE,
+      );
+    });
+
+    it.each([
+      ['its lid', LID],
+      ['its phone', PHONE],
+    ])('keys no write for a lid-keyed chat deleted under %s to a stored message from before', async (_n, id) => {
+      const mappings = reported({ [LID]: '628111' });
+      const adapter = await started(newStore(), mappings);
+      fakeSock.fire('lid-mapping.update', { lid: LID, pn: PHONE });
+      fakeSock.fire('chats.upsert', [{ id: LID }]);
+      fakeSock.fire('chats.delete', [id]);
+      await settle();
+      const stored = lookup({ id: 'S1', fromMe: false, timestamp: 1690000000, lid: LID });
+      for (const chatId of ['628111@c.us', LID]) {
+        await expect(adapter.archiveChat(chatId, true, stored)).resolves.toBe(false);
+        await expect(adapter.sendSeen(chatId, undefined, undefined, stored)).resolves.toBe(false);
+      }
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(await adapter.getChats()).toEqual([]);
+    });
+
+    it('keys no write for a group deleted after leaving it to a stored message from before', async () => {
+      const adapter = await deletedOnPhone('120363@g.us');
+      const stored = lookup({ id: 'G1', fromMe: false, author: '628222@c.us', timestamp: 1690000000 });
+      await expect(adapter.markUnread('120363@g.us', stored)).resolves.toBe(false);
+      // A received message without its sender keys nothing but used to show the chat exists.
+      const anonymous = lookup({ id: 'G2', fromMe: false, timestamp: 1690000000 });
+      await expect(adapter.archiveChat('120363@g.us', true, anonymous)).resolves.toBe(false);
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+      expect(await adapter.getChats()).toEqual([]);
+    });
+
+    it('lets a chat deleted through the API come back with its next message', async () => {
+      const adapter = await started(newStore());
+      await upsert({ remoteJid: PHONE, fromMe: false, id: 'M1' }, now() - 60);
+      // Baileys replays the delete as chats.delete, as it does a phone's.
+      await expect(adapter.deleteChat('628111@c.us')).resolves.toBe(true);
+      await settle();
+      expect(await adapter.getChats()).toEqual([]);
+      await upsert({ remoteJid: PHONE, fromMe: true, id: 'M2' }, now() + 60);
+      await settle();
+      expect(await adapter.getChats()).toEqual([expect.objectContaining({ id: '628111@c.us' })]);
     });
   });
 });
