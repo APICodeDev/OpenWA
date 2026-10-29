@@ -369,7 +369,11 @@ export class BaileysGroups {
   async getGroupInviteCode(groupId: string): Promise<string> {
     this.host.ensureReady();
     const code = await this.groupWrite(groupId, 'Fetching the group invite code', () =>
-      this.sock().groupInviteCode(groupId),
+      withQueryDeadline(
+        this.sock().groupInviteCode(groupId),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the group invite-code query in time',
+      ),
     );
     if (!code) {
       throw new EngineTransportError('WhatsApp did not answer the group invite-code query');
@@ -379,8 +383,14 @@ export class BaileysGroups {
 
   async revokeGroupInviteCode(groupId: string): Promise<string> {
     this.host.ensureReady();
+    // Bounded like the read: a revoke WhatsApp applies after the deadline only mints a code nobody holds,
+    // and a retry mints another.
     const code = await this.groupWrite(groupId, 'Revoking the group invite code', () =>
-      this.sock().groupRevokeInvite(groupId),
+      withQueryDeadline(
+        this.sock().groupRevokeInvite(groupId),
+        this.queryBudgetMs,
+        'WhatsApp did not answer the group invite-code revocation in time',
+      ),
     );
     if (!code) {
       throw new EngineTransportError('WhatsApp did not answer the group invite-code revocation');
