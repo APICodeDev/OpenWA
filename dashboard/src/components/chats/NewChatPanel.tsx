@@ -310,7 +310,12 @@ function NewChatPanel({ sessionId, onOpenChat, findListedChat, onClose }: NewCha
 
       <div className="chats-list new-chat-list">
         {!isGroupMode && groupsSupported && !normalizedQuery && (
-          <button type="button" className="chat-item-card action-row" onClick={() => switchMode('group')}>
+          <button
+            type="button"
+            className="chat-item-card action-row"
+            disabled={busy}
+            onClick={() => switchMode('group')}
+          >
             <span className="chat-avatar avatar-md action-avatar">
               <Users size={22} />
             </span>

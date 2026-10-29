@@ -947,6 +947,15 @@ test('while a contact is looked up the panel takes no other pick, and the contac
   assert.equal(alice.matches(':disabled'), true, 'another contact can be picked during the lookup');
   fireEvent.click(alice);
   assert.ok(!container.querySelector('.room-header'), 'a second pick opened a chat during the lookup');
+  // A group form opened now would be thrown away by the chat the lookup opens.
+  const newGroup = within(panel).getByRole('button', { name: 'New group' });
+  assert.equal(newGroup.matches(':disabled'), true, 'New group can be picked during the lookup');
+  fireEvent.click(newGroup);
+  assert.equal(
+    within(panel).queryByLabelText('Search participants or enter a number') === null,
+    true,
+    'the group form opened',
+  );
 
   release();
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the chat did not open'));
