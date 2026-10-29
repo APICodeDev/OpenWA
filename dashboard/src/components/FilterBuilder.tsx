@@ -252,6 +252,7 @@ export function FilterBuilder({ filters, onChange, chats }: FilterBuilderProps) 
                       <button
                         key={option}
                         type="button"
+                        aria-pressed={selected}
                         className={`enum-tag ${selected ? 'selected' : ''}`}
                         onClick={() => {
                           const current = Array.isArray(condition.value) ? (condition.value as string[]) : [];

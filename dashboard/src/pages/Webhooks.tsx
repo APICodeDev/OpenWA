@@ -489,6 +489,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleNewEvent(name)}
                 >
@@ -577,6 +578,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleEditEvent(name)}
                 >
