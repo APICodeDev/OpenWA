@@ -26,7 +26,7 @@ const CHATS_TSX = readFileSync(join(SRC, 'pages/Chats.tsx'), 'utf8');
 test('the open chat header isolates the phone number, and the contact panel the raw id', () => {
   assert.match(
     CHATS_TSX,
-    /<span className="room-contact-phone">\s*<bdi dir="ltr">\{activePhoneText\}<\/bdi>/,
+    /<span className="room-contact-phone"[^>]*>\s*<bdi dir="ltr">\{activePhoneText\}<\/bdi>/,
     'the header number is not isolated',
   );
   assert.match(
@@ -41,6 +41,28 @@ test('the header number keeps the page direction, so it sits at the start edge w
   // right and, in a box the header column stretches, sit at the left edge of an Arabic header with the name at the
   // right; the name, which is cut and so takes its own direction, hugs the start edge instead (see below).
   assert.doesNotMatch(body('pages/Chats.css', '.chats-page .room-contact-phone'), /unicode-bidi/);
+});
+
+test('the header number stays on one line in a narrow room, cut by its own isolate, with the whole number in its title', () => {
+  // At the room's 262px minimum the number wrapped onto a second line under the name. Cut by the isolate, written left
+  // to right, it loses its last digits in either page direction, as the session number does.
+  assert.match(
+    CHATS_TSX,
+    /<span className="room-contact-phone" title=\{activePhoneText\}>/,
+    'the header number has no title',
+  );
+  const line = body('pages/Chats.css', '.chats-page .room-contact-phone');
+  assert.match(line, /display:\s*flex/);
+  assert.match(line, /min-width:\s*0/);
+  const cut = body('pages/Chats.css', '.chats-page .room-contact-phone > bdi');
+  for (const declaration of [
+    /white-space:\s*nowrap/,
+    /overflow:\s*hidden/,
+    /text-overflow:\s*ellipsis/,
+    /min-width:\s*0/,
+  ]) {
+    assert.match(cut, declaration);
+  }
 });
 
 test('text cut with an ellipsis takes its direction from its own characters', () => {

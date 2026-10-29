@@ -1986,7 +1986,7 @@ export function Chats() {
                           must never be formatted as one). Only under a saved name: an unnamed chat's
                           title already is the number. The raw JID is in the contact panel. */}
                       {activePhoneText && activeChat.name && (
-                        <span className="room-contact-phone">
+                        <span className="room-contact-phone" title={activePhoneText}>
                           <bdi dir="ltr">{activePhoneText}</bdi>
                         </span>
                       )}

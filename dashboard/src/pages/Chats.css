@@ -1811,11 +1811,21 @@
 }
 
 /* The number under the name is isolated left to right in the markup (<bdi dir="ltr">), so the line keeps the page
-   direction and sits at the start edge with the name. */
-
+   direction and sits at the start edge with the name. It stays on one line in a narrow room, cut by its own isolate
+   as the session number is (see .session-phone-line): its last digits give way, in either page direction, and the
+   whole number is in its title. */
 .chats-page .room-contact-phone {
+  display: flex;
+  min-width: 0;
   font-size: 0.8125rem;
   color: var(--chat-meta);
+}
+
+.chats-page .room-contact-phone > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chats-page .room-header-actions {
