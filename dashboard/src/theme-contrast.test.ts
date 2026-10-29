@@ -525,8 +525,20 @@ test('text that uses --text-muted is not faded again with opacity', () => {
 
 test('muted text on a tinted row uses --text-secondary, which clears AA on the tint in both themes', () => {
   // The chat list rows are no tint: the active one is the opaque --chat-active, on which the chat text tests above
-  // check the time and the preview (--chat-meta) in every theme.
+  // check the time and the preview (--chat-meta) in every theme. Those are the tokens the row draws them in, and no
+  // rule for the active row paints them in another.
   assert.match(chatRule('.chats-page .chat-item-card.active'), /background:\s*var\(--chat-active\)/);
+  assert.match(chatRule('.chats-page .chat-item-time'), /(?:^|;)\s*color:\s*var\(--chat-meta\)/);
+  assert.match(chatRule('.chats-page .chat-item-snippet'), /(?:^|;)\s*color:\s*var\(--chat-meta\)/);
+  assert.match(chatRule('.chats-page .chat-item-card.unread .chat-item-time'), /color:\s*var\(--chat-accent-text\)/);
+  const repainted = [...CHATS_CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(m => /\.active\b[^,]*\.chat-item-(?:time|snippet)/.test(m[1]) && /(?:^|;)\s*color:/.test(m[2]))
+    .map(m => m[1].trim());
+  assert.deepEqual(
+    repainted,
+    [],
+    'the active row paints its time or preview in a token the tests above do not measure',
+  );
   // [stylesheet, selector, tint alpha in light, tint alpha in dark, surface under the tint]
   const rules: [string, string, number, number, string][] = [
     // The selected template row is --primary-soft: 12 percent in light, 18 percent in dark.
