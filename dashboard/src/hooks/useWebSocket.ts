@@ -145,6 +145,9 @@ const SOCKET_URL = resolveSocketUrl(import.meta.env.VITE_WS_URL, API_ORIGIN, win
 // about VITE_API_URL under its own name.
 if (import.meta.env.VITE_WS_URL) warnIfInsecureHttpUrl(SOCKET_URL, 'VITE_WS_URL');
 
+// Pauses before a subscribe answered INTERNAL_ERROR is sent again, about 48 s in all before the feed counts as failed.
+const SUBSCRIBE_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -160,6 +163,79 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   // isConnected still reports true - realtime events stop arriving with no signal anywhere.
   const [socketEpoch, setSocketEpoch] = useState(0);
 
+  // A subscribe the gateway could not judge, because its key store failed, is answered INTERNAL_ERROR: it joins
+  // nothing and the socket stays open, so nothing else would send it again. Such subscribes are sent again together
+  // after each pause in SUBSCRIBE_RETRY_DELAYS_MS, and an answered subscribe starts the pauses over. Once they have run
+  // out the connection counts as failed, so the page shows its banner and retry. Every other refusal is final.
+  // Answers are matched to subscribes by the requestId the gateway echoes.
+  const pendingSubscribes = useRef(new Map<string, { sessionId: string; events: string[] }>());
+  const retryQueue = useRef(new Map<string, string[]>());
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const retryRound = useRef(0);
+  const lastRequestId = useRef(0);
+
+  const clearSubscribeRetry = useCallback(() => {
+    clearTimeout(retryTimer.current);
+    retryTimer.current = undefined;
+    pendingSubscribes.current.clear();
+    retryQueue.current.clear();
+    retryRound.current = 0;
+  }, []);
+
+  const subscribe = useCallback((sessionId: string, eventsList: string[]) => {
+    if (!socketRef.current?.connected) return;
+    const requestId = `sub-${++lastRequestId.current}`;
+    pendingSubscribes.current.set(requestId, { sessionId, events: eventsList });
+    retryQueue.current.delete(sessionId);
+    socketRef.current.emit('message', {
+      type: 'subscribe',
+      sessionId,
+      events: eventsList,
+      requestId,
+    });
+  }, []);
+
+  const unsubscribe = useCallback((sessionId: string) => {
+    retryQueue.current.delete(sessionId);
+    for (const [requestId, pending] of pendingSubscribes.current) {
+      if (pending.sessionId === sessionId) pendingSubscribes.current.delete(requestId);
+    }
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('message', {
+        type: 'unsubscribe',
+        sessionId,
+      });
+    }
+  }, []);
+
+  const noteSubscribeAnswer = useCallback(
+    (frame: { type?: string; code?: string; requestId?: string } | null | undefined) => {
+      const requestId = frame?.requestId;
+      const pending = requestId === undefined ? undefined : pendingSubscribes.current.get(requestId);
+      if (!frame || requestId === undefined || !pending) return;
+      pendingSubscribes.current.delete(requestId);
+      if (frame.type === 'subscribed') retryRound.current = 0;
+      if (frame.type !== 'error' || frame.code !== 'INTERNAL_ERROR') return;
+      retryQueue.current.set(pending.sessionId, pending.events);
+      if (retryTimer.current !== undefined) return;
+      const delay = SUBSCRIBE_RETRY_DELAYS_MS[retryRound.current];
+      if (delay === undefined) {
+        console.warn('[WebSocket] The gateway could not check a subscribe after every retry');
+        retryQueue.current.clear();
+        setConnectionFailed(true);
+        return;
+      }
+      retryTimer.current = setTimeout(() => {
+        retryTimer.current = undefined;
+        retryRound.current += 1;
+        const queued = [...retryQueue.current];
+        retryQueue.current.clear();
+        for (const [sessionId, events] of queued) subscribe(sessionId, events);
+      }, delay);
+    },
+    [subscribe],
+  );
+
   const connect = useCallback(() => {
     if (socketRef.current?.connected) return;
 
@@ -172,6 +248,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     }
 
     setSocketEpoch(epoch => epoch + 1);
+    clearSubscribeRetry();
     socketRef.current = io(`${SOCKET_URL}/events`, {
       autoConnect: true,
       reconnection: true,
@@ -192,8 +269,12 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       setConnectionFailed(false);
     });
 
+    socketRef.current.on('message', noteSubscribeAnswer);
+
     socketRef.current.on('disconnect', reason => {
       setIsConnected(false);
+      // The rooms went with the socket, and the page subscribes again once it is back.
+      clearSubscribeRetry();
       // A server-initiated close (handshake rate limit, auth rejection, key eviction) sets
       // Socket.IO's skipReconnect: no auto-reconnect runs, so `reconnect_failed` never fires
       // and without this the tab would silently stop receiving events. Surface the same
@@ -213,7 +294,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       console.warn('[WebSocket] Reconnection failed after max attempts');
       setConnectionFailed(true);
     });
-  }, []);
+  }, [clearSubscribeRetry, noteSubscribeAnswer]);
 
   // Manual retry after the socket permanently gave up: tear down the dead socket and reconnect.
   const reconnect = useCallback(() => {
@@ -225,35 +306,17 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     connect();
   }, [connect]);
 
-  const subscribe = useCallback((sessionId: string, eventsList: string[]) => {
-    if (socketRef.current?.connected) {
-      socketRef.current.emit('message', {
-        type: 'subscribe',
-        sessionId,
-        events: eventsList,
-      });
-    }
-  }, []);
-
-  const unsubscribe = useCallback((sessionId: string) => {
-    if (socketRef.current?.connected) {
-      socketRef.current.emit('message', {
-        type: 'unsubscribe',
-        sessionId,
-      });
-    }
-  }, []);
-
   useEffect(() => {
     connect();
 
     return () => {
+      clearSubscribeRetry();
       if (socketRef.current) {
         socketRef.current.disconnect();
         socketRef.current = null;
       }
     };
-  }, [connect]);
+  }, [connect, clearSubscribeRetry]);
 
   // Register the single envelope handler and fan out to the typed callbacks.
   useEffect(() => {

@@ -2,7 +2,7 @@
 // connection is gone for good. The client is the socket.io double (see vite-shim-hooks.mjs), which records
 // what the hook sends and lets a test deliver the client's own events.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { holdConnect, lastIoCall, lastSocket, resetSocketDouble } from '../test-helpers/socket-io-double.ts';
 import type { useWebSocket as useWebSocketFn } from './useWebSocket.ts';
@@ -22,9 +22,20 @@ before(async () => {
 });
 
 afterEach(() => {
+  mock.timers.reset();
   rtl.cleanup();
   resetSocketDouble();
 });
+
+type Frame = { type?: string; sessionId?: string; events?: string[]; requestId?: string };
+
+/** A frame as the page meant it: the requestId only matches the gateway's answer to it. */
+const withoutRequestId = (frame: unknown) =>
+  Object.fromEntries(Object.entries(frame as Frame).filter(([key]) => key !== 'requestId'));
+
+/** The subscribe frames the hook sent, in order. */
+const subscribeFrames = (socket: NonNullable<ReturnType<typeof lastSocket>>): Frame[] =>
+  socket.emitted.map(frame => frame.args[0] as Frame).filter(frame => frame.type === 'subscribe');
 
 test('the handshake carries the API key in auth and in a header, never in the URL', () => {
   rtl.renderHook(() => useWebSocket());
@@ -55,15 +66,22 @@ test('a room is joined and left with frames of its own, and only once the handsh
   assert.ok(socket, 'expected the hook to open a socket');
 
   result.current.subscribe('s1', ['message.received']);
-  assert.deepEqual(socket.emitted, [], 'a frame went out before the connection was open');
+  assert.equal(socket.emitted.length, 0, 'a frame went out before the connection was open');
 
   rtl.act(() => socket.receive('connect'));
   result.current.subscribe('s1', ['message.received']);
   result.current.unsubscribe('s1');
-  assert.deepEqual(socket.emitted, [
-    { event: 'message', args: [{ type: 'subscribe', sessionId: 's1', events: ['message.received'] }] },
-    { event: 'message', args: [{ type: 'unsubscribe', sessionId: 's1' }] },
-  ]);
+  assert.deepEqual(
+    socket.emitted.map(frame => frame.event),
+    ['message', 'message'],
+  );
+  assert.deepEqual(
+    socket.emitted.map(frame => withoutRequestId(frame.args[0])),
+    [
+      { type: 'subscribe', sessionId: 's1', events: ['message.received'] },
+      { type: 'unsubscribe', sessionId: 's1' },
+    ],
+  );
 });
 
 test('the connection counts as failed once the client gives up reconnecting, and recovers on a redial', () => {
@@ -89,4 +107,100 @@ test('the connection counts as failed once the client gives up reconnecting, and
   rtl.act(() => redialed.receive('connect'));
   assert.equal(result.current.connectionFailed, false);
   assert.equal(result.current.isConnected, true);
+});
+
+// The gateway answers a subscribe it could not judge (its key store failed) with INTERNAL_ERROR and keeps the socket
+// open, so nothing else sends that subscribe again and its room's events would stop with no sign. It is sent again
+// after a pause, matched to its answer by requestId. A refusal is the gateway's judgement and is not sent again.
+test('a subscribe the gateway could not check is sent again after a pause, and a refused one is not', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', ['message.received']);
+  result.current.subscribe('s2', ['message.received']);
+  const [first, second] = subscribeFrames(socket);
+  assert.equal(typeof first.requestId, 'string', 'a subscribe carries no requestId to match its answer with');
+  assert.notEqual(first.requestId, second.requestId);
+  rtl.act(() => {
+    socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', message: 'retry', requestId: first.requestId });
+    socket.receive('message', { type: 'error', code: 'FORBIDDEN_SESSION', message: 'no', requestId: second.requestId });
+  });
+  rtl.act(() => mock.timers.tick(500));
+  assert.equal(subscribeFrames(socket).length, 2, 'the subscribe was sent again at once');
+
+  rtl.act(() => mock.timers.tick(1_000));
+  const retried = subscribeFrames(socket).slice(2);
+  assert.deepEqual(retried.map(withoutRequestId), [
+    { type: 'subscribe', sessionId: 's1', events: ['message.received'] },
+  ]);
+  rtl.act(() =>
+    socket.receive('message', {
+      type: 'subscribed',
+      sessionId: 's1',
+      events: ['message.received'],
+      requestId: retried[0].requestId,
+    }),
+  );
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, 3, 'a refused or an answered subscribe was sent again');
+  assert.equal(result.current.connectionFailed, false);
+});
+
+// Retrying for ever would hide the fault: once the pauses run out the feed counts as failed, which shows the page's
+// connection banner and its retry, and nothing more is sent.
+test('a subscribe that still cannot be checked after its retries reports the connection failed', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', ['message.received']);
+  for (let round = 0; round < 20 && !result.current.connectionFailed; round++) {
+    const latest = subscribeFrames(socket).at(-1);
+    rtl.act(() => socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: latest?.requestId }));
+    rtl.act(() => mock.timers.tick(60_000));
+  }
+  assert.equal(result.current.connectionFailed, true, 'the feed never reported the failure');
+  const sent = subscribeFrames(socket).length;
+  assert.ok(sent > 2 && sent <= 10, `the subscribe was sent ${sent} times`);
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, sent, 'the subscribe was sent again after the failure was reported');
+});
+
+test('a waiting retry is dropped when its session is left or the connection drops', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', ['message.received']);
+  result.current.subscribe('s2', ['message.received']);
+  rtl.act(() => {
+    for (const frame of subscribeFrames(socket)) {
+      socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: frame.requestId });
+    }
+  });
+  result.current.unsubscribe('s1');
+  rtl.act(() => mock.timers.tick(60_000));
+  assert.deepEqual(
+    subscribeFrames(socket)
+      .slice(2)
+      .map(frame => frame.sessionId),
+    ['s2'],
+    'only the session still wanted is sent again',
+  );
+
+  const retried = subscribeFrames(socket).at(-1);
+  rtl.act(() => socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: retried?.requestId }));
+  rtl.act(() => socket.receive('disconnect', 'transport close'));
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, 3, 'a retry went out after the connection dropped');
 });

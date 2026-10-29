@@ -3880,15 +3880,17 @@ const MESSAGE_FEED_EVENTS = [
  * follows (session.status and the like, on the '*' room) is a subscription of its own and is left out.
  */
 const feedFrames = (): unknown[] =>
-  (lastSocket()?.emitted ?? [])
-    .map(frame => frame.args[0] as { sessionId?: string; events?: string[] })
-    .filter(frame => frame.sessionId !== '*' && !frame.events?.includes('session.status'));
+  sentFrames().filter(frame => frame.sessionId !== '*' && !frame.events?.includes('session.status'));
 
 const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
-const sessionFeedFrames = () =>
-  (lastSocket()?.emitted ?? [])
-    .map(frame => frame.args[0] as { type?: string; sessionId?: string; events?: string[] })
-    .filter(frame => frame.events?.includes('session.status'));
+const sessionFeedFrames = () => sentFrames().filter(frame => frame.events?.includes('session.status'));
+
+/** The frames the page sent, without the requestId that only matches the gateway's answer to one. */
+function sentFrames(): { type?: string; sessionId?: string; events?: string[] }[] {
+  return (lastSocket()?.emitted ?? []).map(frame =>
+    Object.fromEntries(Object.entries(frame.args[0] as object).filter(([key]) => key !== 'requestId')),
+  );
+}
 
 test("the page follows every session's status on the wildcard room, and each listed session for a key refused it", async () => {
   const { screen, waitFor, act } = rtl;

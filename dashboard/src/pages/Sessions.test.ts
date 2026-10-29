@@ -2316,8 +2316,11 @@ test('Sessions.css aligns text to the text direction, not a physical side', () =
 // builds the frames would follow it when one is dropped.
 const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
 
-/** The payload of every frame the page sent over the socket. */
-const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
+/** The payload of every frame the page sent over the socket, without the requestId that only matches its answer. */
+const feedFrames = (): unknown[] =>
+  (lastSocket()?.emitted ?? []).map(frame =>
+    Object.fromEntries(Object.entries(frame.args[0] as object).filter(([key]) => key !== 'requestId')),
+  );
 
 test('the page joins the live session feed once connected, with the events it renders', async () => {
   const { screen, waitFor } = rtl;
