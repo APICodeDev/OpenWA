@@ -40,7 +40,10 @@ and read back with an await in between; the reservation map is the only synchron
 **Defense:** the INITIALIZING row is written and its promise tracked
 (`session-engine-lifecycle.service.ts`, `initializeEngine`); a retiring control awaits the
 pending write before deciding what it is retiring.
-**Pinned by:** `session.service.spec.ts` (the stop/delete-during-start teardown cases).
+**Pinned by:** `session-initial-status-commit-order.spec.ts`, where the INITIALIZING update commits only
+after stop, logout, forceKill and delete have begun, and each verb's own write must still land last
+(it fails if the verbs stop awaiting the pending write). `session-initial-status-retirement.spec.ts`
+pins the other half: a late INITIALIZING reply announces nothing once its engine has retired.
 
 ### INV-3 — Ownership is re-validated by object identity, not by session id
 
@@ -89,14 +92,20 @@ stop/delete lands during start() (no resurrection to READY)'.
 **Interleaving:** node A holds session X's lease; node B adopts it after A's lease lapses; a
 stale in-flight write from A would clobber B's status.
 **Defense:** on lease loss, `stopOrphanEngines` destroys local engines; the session row is the
-owning node's alone (`session.service.ts` boot path). The one exception is the takeover sweep's
-`markLapsedDisconnected`, which marks a row disconnected only under the predicate it read (same
-`nodeId`, same status, lease expired more than two TTLs ago, and for a `qr_ready` row still no
-phone), so a row B has claimed, or a pairing that completed meanwhile, matches nothing. A `qr_ready`
-row with a phone is never marked: the adoption sweep would take the resulting disconnected row over.
+owning node's alone (`session.service.ts` boot path). Two writes are exceptions, each under a
+predicate. The takeover sweep's `markLapsedDisconnected` marks a row disconnected only under the
+predicate it read (same `nodeId`, same status, lease expired more than two TTLs ago, and for a
+`qr_ready` row still no phone), so a row B has claimed, or a pairing that completed meanwhile, matches
+nothing. A `qr_ready` row with a phone is never marked: the adoption sweep would take the resulting
+disconnected row over. And a start or reconnect whose post-init read finds its claim gone retires the
+engine it launched through `retireLaunchedEngine` (`session-engine-controls.ts`): the engine's own
+DISCONNECTED report is held back, because the in-memory ownership it is fenced on still lists the
+session until the next heartbeat, and the verb writes DISCONNECTED only on a row whose `nodeId` is this
+node's or empty, so a row B has claimed keeps B's status.
 **Pinned by:** `src/modules/takeover/session-takeover.service.spec.ts` +
 `session-ownership.service.spec.ts` + `session-ownership-status-fence.spec.ts` + the real-database
-predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts`.
+predicate spec for `markLapsedDisconnected` in `src/modules/session/session.service.spec.ts` +
+`session-retired-start-leaves-peer-row.spec.ts` for the retired launch.
 
 ### INV-7 — FAILED sessions are deliberately NOT adopted by takeover
 
@@ -143,14 +152,14 @@ for minutes; detaching from bootstrap means the API answers while engines warm.
 Every transition has a known, enumerated set of writers. When debugging a status surprise, find the
 writer before anything else:
 
-| Transition                      | Writers                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| → `INITIALIZING`                | `initializeEngine` (persisted before `initialize()`)                                                                                                                                                                                                                                                                                                                              |
-| → `QR_READY` / `AUTHENTICATING` | engine callbacks (wired in the lifecycle delegate), via the registry's liveness check                                                                                                                                                                                                                                                                                             |
-| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment)                                                                                                                                                                                                                                                                                         |
-| → `DISCONNECTED`                | init-timeout eviction, graceful stop, logout, forceKill, a delete whose teardown fence times out, the engine `onDisconnected` callback and the liveness watchdog (`handleEngineDisconnected`), the boot reset, a backup import (active rows restored as disconnected), engine-reported `DISCONNECTED` via `onStateChanged`, the takeover sweep's `markLapsedDisconnected` (INV-6) |
-| → `ACTION_REQUIRED`             | engine-reported `ACTION_REQUIRED` via `onStateChanged` (ownership-fenced status write; the whatsapp-web.js onboarding-modal fallback), and `onActionRequired` records the reason                                                                                                                                                                                                  |
-| → `FAILED`                      | five terminal paths only, all ownership-fenced: see below                                                                                                                                                                                                                                                                                                                         |
+| Transition                      | Writers                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| → `INITIALIZING`                | `initializeEngine` (persisted before `initialize()`), engine-reported `INITIALIZING` via `onStateChanged` (ownership-fenced; Baileys while connecting and through its own reconnect after a drop)                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| → `QR_READY` / `AUTHENTICATING` | engine callbacks (wired in the lifecycle delegate), via the registry's liveness check                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| → `READY`                       | `handleEngineReady` (also drops a recorded failure reason, see INV-7's rationale comment), engine-reported `READY` via `onStateChanged` (ownership-fenced; both engines report it next to `onReady`)                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| → `DISCONNECTED`                | init-timeout eviction, graceful stop, logout, forceKill, a delete whose teardown fence times out, the engine `onDisconnected` callback and the liveness watchdog (`handleEngineDisconnected`), the boot reset, a backup import (active rows restored as disconnected), engine-reported `DISCONNECTED` via `onStateChanged`, the takeover sweep's `markLapsedDisconnected` (INV-6), a start or reconnect retiring the engine it launched (`retireLaunchedEngine`, own or unowned row only, INV-6), a start whose transient-failure retry shutdown refused (`session.service.ts` hands a `FAILED` row it may claim back as `DISCONNECTED` for the next boot) |
+| → `ACTION_REQUIRED`             | engine-reported `ACTION_REQUIRED` via `onStateChanged` (ownership-fenced status write; the whatsapp-web.js onboarding-modal fallback), and `onActionRequired` records the reason                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| → `FAILED`                      | five terminal paths only, all ownership-fenced: see below                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
 `FAILED` is the one worth spelling out, because it is terminal (neither the boot reset nor the
 takeover sweep resumes a FAILED row, INV-7) and because more than one path reaches it:

@@ -137,6 +137,10 @@ export function GlobalSearch({ onHit, currentSessionId }: GlobalSearchProps) {
   return (
     <div
       className="global-search"
+      // Focus back inside before the close below runs (a quick Tab out and back) cancels it.
+      onFocus={() => {
+        if (blurTimer.current) clearTimeout(blurTimer.current);
+      }}
       // Close only when focus leaves the whole widget: tabbing from the input to the scope toggle or
       // the "more" button must keep the results open, or the button unmounts before it can be used.
       onBlur={e => {

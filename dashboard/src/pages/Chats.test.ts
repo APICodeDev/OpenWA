@@ -11,7 +11,7 @@
 // JSX), loader hooks registered before any app-module import (see test-helpers/register-hooks),
 // and JSDOM installed before importing modules that read `window` at import time.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach, type TestContext } from 'node:test';
+import { test, before, afterEach, mock, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -48,6 +48,8 @@ let sessionListStatus: number | null = null;
 
 // Hits the global search answers with.
 let searchHits: SearchHit[] = [];
+// The phone the gateway resolves a privacy id to, by id; an id it knows nothing about answers null.
+const lidPhones: Record<string, string> = {};
 
 // The engine the gateway reports: only whatsapp-web.js lists channels.
 let engineType = 'baileys';
@@ -377,6 +379,10 @@ function installFetchStub(): void {
     if (method === 'GET' && path.startsWith('/api/search?')) {
       return Promise.resolve(jsonResponse({ hits: searchHits, total: searchHits.length }));
     }
+    if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
+      const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
+      return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
+    }
     if (method === 'POST' && path === `/api/sessions/${SESSION.id}/status/send-text`) {
       return Promise.resolve(jsonResponse({ success: true }));
     }
@@ -424,6 +430,8 @@ before(async () => {
 });
 
 afterEach(async () => {
+  // A test that failed while it held the retry pauses on a fake clock must not leave it to the next one.
+  mock.timers.reset();
   rtl.cleanup();
   resetSocketDouble();
   // Cancel before clearing. clear() silently cancels a fetch still in flight, and that fetch's finally
@@ -442,6 +450,7 @@ afterEach(async () => {
   sendTextId = 'wamid.out.1';
   olderPageFails = false;
   chatsResponder = null;
+  for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   thirdSessionStatus = null;
   sessionListStatus = null;
   searchHits = [];
@@ -622,6 +631,71 @@ test('a typed draft survives closing and reopening the room', async () => {
   await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
   const input = screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
   assert.equal(input.value, 'draft survives');
+});
+
+// A draft is the chat's, like a staged file or reply: carried into another chat, the next Enter would deliver it to
+// the wrong recipient. It is kept for the chat it was typed in, so looking at another one loses nothing.
+test('a typed draft stays with its chat: another chat opens with its own, and the first gets it back', async () => {
+  const { screen, fireEvent, within } = rtl;
+  const { container } = renderChats();
+  const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+  const open = async (name: string) => {
+    fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText(name));
+    await within(container.querySelector('.room-header') as HTMLElement).findByText(name);
+  };
+
+  await screen.findByText(SESSION.name);
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  fireEvent.change(composer(), { target: { value: 'for alice' } });
+
+  await open('Carol');
+  assert.equal(composer().value, '', "Alice's draft followed the user into Carol's room");
+  fireEvent.change(composer(), { target: { value: 'for carol' } });
+
+  await open('Alice');
+  assert.equal(composer().value, 'for alice');
+  // Closing the room in between keeps the draft of the chat that was open, as closing and reopening it does.
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await open('Carol');
+  assert.equal(composer().value, 'for carol');
+});
+
+test('a typed draft stays with its session: the same chat on another account opens without it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    resetFetchCalls();
+    const { container } = renderChats();
+    const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+    const openAlice = async () => {
+      fireEvent.click(await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice'));
+      await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+    };
+
+    await screen.findByText(SESSION.name);
+    await openAlice();
+    fireEvent.change(composer(), { target: { value: 'from session one' } });
+
+    // Session 2 lists a chat with Alice's id (a contact both accounts share).
+    selectSession(container, SESSION_2.id);
+    await waitFor(() => assert.equal(container.querySelector('.room-header') === null, true));
+    await openAlice();
+    assert.equal(composer().value, '', 'the draft followed the user into the other session');
+    fireEvent.submit(container.querySelector('.input-form') as HTMLFormElement);
+    assert.equal(
+      countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/send-text`),
+      0,
+      'the draft was sent from the other session',
+    );
+
+    selectSession(container, SESSION.id);
+    await waitFor(() => assert.equal(container.querySelector('.room-header') === null, true));
+    await openAlice();
+    assert.equal(composer().value, 'from session one');
+  } finally {
+    twoSessions = false;
+  }
 });
 
 test('Escape dismisses the emoji picker instead of the conversation behind it', async () => {
@@ -849,6 +923,73 @@ test('a chat whose newest message has no text does not claim to have no messages
   });
   await waitFor(() => assert.ok(screen.queryByLabelText('3 unread messages'), 'the arrival did not reach the row'));
   assert.equal(row.querySelector('.no-message')?.textContent ?? null, null, 'the row reads "No messages yet"');
+});
+
+// The list draws every chat of the account, so a row is drawn again only when what it shows changes: a keystroke in
+// the composer redraws none, and a message redraws the row of its chat and moves it, nothing else. A row's time is
+// formatted from its timestamp each time the row is drawn, which is what this counts, by the row's own timestamp.
+test('typing in the composer draws no chat row again, and a message draws only the row of its chat', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  const others = Array.from({ length: 20 }, (_, n) => ({
+    ...CHAT_2,
+    id: `1555100${String(n).padStart(4, '0')}@c.us`,
+    name: `Other ${n}`,
+    timestamp: 1_650_000_200 + n,
+  }));
+  const alice = { ...CHAT, timestamp: 1_650_000_101 };
+  const carol = { ...CHAT_2, timestamp: 1_650_000_102 };
+  chatsResponder = () => Promise.resolve(jsonResponse([alice, carol, ...others]));
+  const drawn: number[] = [];
+  const original = Date.prototype.toDateString;
+  Date.prototype.toDateString = function (this: Date) {
+    drawn.push(this.getTime() / 1000);
+    return original.call(this);
+  };
+  const rowsDrawn = (timestamps: number[]) => drawn.filter(ts => timestamps.includes(ts)).length;
+  try {
+    const { container } = renderChats();
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+    await flush();
+
+    drawn.length = 0;
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'h' } });
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'hi' } });
+    await flush();
+    const listed = [alice, carol, ...others].map(chat => chat.timestamp);
+    assert.equal(rowsDrawn(listed), 0, `a keystroke drew ${rowsDrawn(listed)} chat rows again`);
+
+    drawn.length = 0;
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() =>
+      socket.receive('message', {
+        type: 'event',
+        timestamp: new Date(1_650_000_400_000).toISOString(),
+        payload: {
+          event: 'message.received',
+          sessionId: SESSION.id,
+          data: {
+            id: 'wamid.live.carol',
+            chatId: CHAT_2.id,
+            from: CHAT_2.id,
+            to: 'me',
+            body: 'news from carol',
+            type: 'text',
+            fromMe: false,
+            timestamp: 1_650_000_300,
+          },
+        },
+      }),
+    );
+    const names = () =>
+      Array.from(container.querySelectorAll('.chats-list .chat-item-name')).map(name => name.textContent);
+    await waitFor(() => assert.equal(names()[0], 'Carol', 'the row did not move to the top'));
+    assert.ok(rowsDrawn([1_650_000_300]) > 0, "Carol's row was not drawn with the message");
+    assert.equal(rowsDrawn(listed), 0, `the message drew ${rowsDrawn(listed)} rows of other chats again`);
+  } finally {
+    Date.prototype.toDateString = original;
+  }
 });
 
 test('a message arriving the moment the chat list commits updates the listed row without a refetch', async () => {
@@ -2376,6 +2517,10 @@ test("a search hit in another session opens that session's chat, not the one the
   }
 });
 
+// The notice a hit gives when no listed chat is found to be its chat. Only the newest privacy-id chats are asked for
+// their phone, so it says the chat was not found rather than that the list lacks it.
+const CHAT_NOT_LISTED = 'The chat of this message could not be found in the list';
+
 // Search reads stored messages while the list comes from the engine, so a hit's chat can be missing.
 test("a search hit whose chat the other session's list lacks does not open it later on its own", async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
@@ -2387,6 +2532,7 @@ test("a search hit whose chat the other session's list lacks does not open it la
     await screen.findByText('Alice');
     await clickSearchHit(container);
     await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await screen.findByText(CHAT_NOT_LISTED);
     await flush();
 
     fireEvent.click(await screen.findByText('Carol'));
@@ -2505,6 +2651,126 @@ test('a second search hit in the chat already open scrolls to it at once', async
   }
 });
 
+// A stored row keeps the chat id it was written with: an API client may send to the raw `@s.whatsapp.net` form of a
+// chat the list names by `@c.us`, or to the phone of a contact the list holds under its privacy id. The thread read
+// takes those as one chat, so the hit opens the listed chat and scrolls to the message there.
+for (const variant of ['the same session', 'another session', 'a privacy-id chat'] as const) {
+  test(`a search hit stored under another spelling of a listed chat opens it and scrolls to the message (${variant})`, async () => {
+    const { screen, waitFor, within } = rtl;
+    const LID_ALICE: Chat = { ...CHAT, id: '262813461250099@lid' };
+    if (variant === 'another session') twoSessions = true;
+    if (variant === 'a privacy-id chat') {
+      chatsResponder = () => Promise.resolve(jsonResponse([LID_ALICE, CHAT_2]));
+      lidPhones[LID_ALICE.id] = '15550001111';
+    }
+    searchHits = [
+      {
+        ...THIRD_SESSION_HIT,
+        sessionId: variant === 'another session' ? SESSION_2.id : SESSION.id,
+        chatId: variant === 'a privacy-id chat' ? '15550001111@c.us' : '15550001111@s.whatsapp.net',
+        waMessageId: DB_MESSAGE.waMessageId!,
+      },
+    ];
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const { container } = renderChats();
+      await screen.findByText('Carol');
+      await clickSearchHit(container);
+      await waitFor(() => assert.ok(container.querySelector('.room-header'), "the hit's chat did not open"));
+      await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+      await waitFor(() =>
+        assert.equal(
+          scrolled.filter(el => el.getAttribute('data-wa-message-id') === DB_MESSAGE.waMessageId).length,
+          1,
+          'the open chat did not scroll to the message',
+        ),
+      );
+      assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a hit that opened its chat said it is missing');
+    } finally {
+      Element.prototype.scrollIntoView = original;
+      twoSessions = false;
+    }
+  });
+}
+
+// A hit whose chat the list holds under no spelling, not even as a privacy-id chat of the same phone, opens nothing
+// and says why, rather than leaving the click without an answer.
+for (const variant of ['a phone id', 'a phone no privacy-id chat resolves to'] as const) {
+  test(`a search hit whose chat the list lacks under every spelling says so and opens nothing (${variant})`, async () => {
+    const { screen } = rtl;
+    if (variant === 'a phone no privacy-id chat resolves to') {
+      chatsResponder = () => Promise.resolve(jsonResponse([{ ...CHAT, id: '262813461250099@lid' }, CHAT_2]));
+      lidPhones['262813461250099@lid'] = '15550001111';
+    }
+    searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION.id, chatId: '15550005555@c.us' }];
+    const { container } = renderChats();
+    await screen.findByText('Carol');
+    await clickSearchHit(container);
+    await screen.findByText(CHAT_NOT_LISTED);
+    await flush();
+    assert.equal(container.querySelector('.room-header') === null, true, 'a chat opened for the hit');
+  });
+}
+
+// Only a list that landed for the hit's session can say it lacks the chat. A hit clicked while its session's list is
+// still loading waits for it and opens its chat once it lands, as a hit in another session does; a hit whose session's
+// list failed to load is dropped quietly, since the failure banner already answers and the chat may well be there.
+test('a search hit clicked while its session list loads opens its chat once the list lands', async () => {
+  const { screen, waitFor, within } = rtl;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => (release = resolve));
+  chatsResponder = () => gate.then(() => jsonResponse([CHAT, CHAT_2]));
+  searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION.id, chatId: CHAT.id }];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = () => {};
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    assert.equal(screen.queryByText('Carol') === null, true, 'the list landed before the click');
+    await clickSearchHit(container);
+    await flush();
+    assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a list still loading was said to lack the chat');
+    release();
+    await waitFor(() => assert.ok(container.querySelector('.room-header'), "the hit's chat did not open"));
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+    assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'the chat that opened was said to be missing');
+  } finally {
+    release();
+    Element.prototype.scrollIntoView = original;
+  }
+});
+
+for (const variant of ['the same session', 'another session'] as const) {
+  test(`a search hit whose session list failed to load is not said to lack its chat (${variant})`, async () => {
+    const { screen, waitFor } = rtl;
+    if (variant === 'another session') twoSessions = true;
+    const failing = variant === 'another session' ? SESSION_2.id : SESSION.id;
+    chatsResponder = sessionId =>
+      Promise.resolve(
+        sessionId === failing ? jsonResponse({ message: 'Bad Gateway' }, 502) : jsonResponse([CHAT, CHAT_2]),
+      );
+    searchHits = [{ ...THIRD_SESSION_HIT, sessionId: failing, chatId: CHAT.id }];
+    try {
+      const { container } = renderChats();
+      if (variant === 'another session') await screen.findByText('Carol');
+      else await screen.findByText(/Failed to load chats/);
+      await clickSearchHit(container);
+      await waitFor(() => assert.equal(selectedSessionId(container), failing));
+      await screen.findByText(/Failed to load chats/);
+      await flush();
+      await flush();
+      assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a list that failed was said to lack the chat');
+      assert.equal(container.querySelector('.room-header') === null, true, 'a chat opened for the hit');
+    } finally {
+      twoSessions = false;
+    }
+  });
+}
+
 test('changing the UI language keeps the selected session and the open chat', async () => {
   const { screen, fireEvent, within, waitFor, act } = rtl;
   const { default: i18n } = await import('../i18n/index.ts');
@@ -2616,6 +2882,32 @@ test('the media viewer saves an image under its file name, not its caption', asy
   }
   assert.equal(links.length, 1, 'expected one download link');
   assert.equal(links[0].download, 'photo.png');
+});
+
+// A sticker is drawn with the image's zoom affordance, and an archived one already opens in its own viewer.
+test('a sticker opens in the media viewer, as an image does', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  firstPageExtra = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-sticker',
+      waMessageId: 'wamid.sticker',
+      body: '',
+      type: 'sticker',
+      timestamp: 1_700_000_003,
+      createdAt: new Date(1_700_000_003_000).toISOString(),
+      metadata: { media: { mimetype: 'image/webp', data: 'http://localhost/media/sticker.webp' } },
+    },
+  ];
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const sticker = await waitFor(() => {
+    const found = container.querySelector('.room-messages img.chat-image-media');
+    assert.ok(found, 'the sticker bubble did not render');
+    return found;
+  });
+  fireEvent.click(sticker);
+  assert.ok(await screen.findByRole('button', { name: 'Download' }), 'the viewer did not open on the sticker');
 });
 
 // whatsapp-web.js reports that a channel post has media but gives no URL for it.
@@ -3645,15 +3937,17 @@ const MESSAGE_FEED_EVENTS = [
  * follows (session.status and the like, on the '*' room) is a subscription of its own and is left out.
  */
 const feedFrames = (): unknown[] =>
-  (lastSocket()?.emitted ?? [])
-    .map(frame => frame.args[0] as { sessionId?: string; events?: string[] })
-    .filter(frame => frame.sessionId !== '*' && !frame.events?.includes('session.status'));
+  sentFrames().filter(frame => frame.sessionId !== '*' && !frame.events?.includes('session.status'));
 
 const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
-const sessionFeedFrames = () =>
-  (lastSocket()?.emitted ?? [])
-    .map(frame => frame.args[0] as { type?: string; sessionId?: string; events?: string[] })
-    .filter(frame => frame.events?.includes('session.status'));
+const sessionFeedFrames = () => sentFrames().filter(frame => frame.events?.includes('session.status'));
+
+/** The frames the page sent, without the requestId that only matches the gateway's answer to one. */
+function sentFrames(): { type?: string; sessionId?: string; events?: string[] }[] {
+  return (lastSocket()?.emitted ?? []).map(frame =>
+    Object.fromEntries(Object.entries(frame.args[0] as object).filter(([key]) => key !== 'requestId')),
+  );
+}
 
 test("the page follows every session's status on the wildcard room, and each listed session for a key refused it", async () => {
   const { screen, waitFor, act } = rtl;
@@ -3703,6 +3997,271 @@ test("the page joins the open session's message events once connected, and moves
         { type: 'unsubscribe', sessionId: SESSION.id },
         { type: 'subscribe', sessionId: SESSION_2.id, events: MESSAGE_FEED_EVENTS },
       ]),
+    );
+  } finally {
+    twoSessions = false;
+  }
+});
+
+type SubscribeFrame = { type?: string; sessionId?: string; events?: string[]; requestId?: string };
+
+/** The subscribe frames the page sent, with the requestId the gateway's answer to each echoes. */
+const subscribeFrames = (): SubscribeFrame[] =>
+  (lastSocket()?.emitted ?? [])
+    .map(frame => frame.args[0] as SubscribeFrame)
+    .filter(frame => frame.type === 'subscribe');
+const isSessionFeed = (frame: SubscribeFrame) => !!frame.events?.includes('session.status');
+const isMessageFeed = (frame: SubscribeFrame) => !!frame.events?.includes('message.received');
+const answerSubscribe = (frame: SubscribeFrame, reply: Record<string, unknown>) =>
+  lastSocket()?.receive('message', { ...reply, requestId: frame.requestId });
+const KEY_UNREADABLE = { type: 'error', code: 'INTERNAL_ERROR', message: 'API key could not be checked' };
+const joined = (frame: SubscribeFrame) => ({ type: 'subscribed', sessionId: frame.sessionId, events: frame.events });
+
+// A session-scoped key holds two subscriptions of the open session: its session feed (the '*' room is refused) and
+// its message feed. The gateway answers INTERNAL_ERROR to a subscribe whose key it could not read, and the page
+// sends it again after a pause; joining the feed of that session meanwhile must not drop the message feed's retry.
+test("a scoped key's open session message feed is sent again after its session feed falls back", async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    const messages = subscribeFrames().find(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id);
+    assert.ok(wildcard && messages);
+    mock.timers.enable({ apis: ['setTimeout'] });
+    act(() => answerSubscribe(messages, KEY_UNREADABLE));
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    const perSession = subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*');
+    assert.deepEqual(perSession.map(frame => frame.sessionId).sort(), [SESSION.id, SESSION_2.id].sort());
+    act(() => {
+      for (const frame of perSession) answerSubscribe(frame, joined(frame));
+    });
+    act(() => mock.timers.tick(1_000));
+    const sent = subscribeFrames().filter(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id).length;
+    assert.equal(sent, 2, `the open session's message feed was sent ${sent} time(s)`);
+  } finally {
+    mock.timers.reset();
+    twoSessions = false;
+  }
+});
+
+test("after a reconnect whose subscribes all fail, every feed of a scoped key is sent again, both of the open session's", async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    assert.ok(wildcard);
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    await waitFor(() =>
+      assert.equal(subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*').length, 2),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().filter(frame => frame.sessionId !== '*')) {
+        answerSubscribe(frame, joined(frame));
+      }
+    });
+
+    const before = subscribeFrames().length;
+    act(() => lastSocket()?.receive('disconnect', 'transport close'));
+    act(() => lastSocket()?.receive('connect'));
+    await waitFor(() => assert.equal(subscribeFrames().length - before, 3));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, KEY_UNREADABLE);
+    });
+    act(() => mock.timers.tick(1_000));
+    const label = (frame: SubscribeFrame) => `${frame.sessionId}:${isSessionFeed(frame) ? 'session' : 'messages'}`;
+    assert.deepEqual(
+      subscribeFrames()
+        .slice(before + 3)
+        .map(label)
+        .sort(),
+      [`${SESSION.id}:session`, `${SESSION.id}:messages`, `${SESSION_2.id}:session`].sort(),
+    );
+  } finally {
+    mock.timers.reset();
+    twoSessions = false;
+  }
+  // The reconnect's own re-reads land before the test ends.
+  await flush();
+  await flush();
+});
+
+// The page reads the open thread again on a connect, and the chat list on a reconnect, because a room not joined meanwhile
+// missed its pushes for good. A subscribe the gateway joined only on a retry missed them the same way.
+test('the open thread and the chat list are read again once a retried message subscribe joins', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  resetFetchCalls();
+  const threadPath = `/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT.id)}`;
+  const threadReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(threadPath)).length;
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+
+  // A socket blip: the page joins again and reads again, but the gateway cannot read the key for the message feed.
+  const before = subscribeFrames().length;
+  act(() => lastSocket()?.receive('disconnect', 'transport close'));
+  act(() => lastSocket()?.receive('connect'));
+  await waitFor(() => assert.ok(subscribeFrames().slice(before).some(isMessageFeed)));
+  await waitFor(() => assert.equal(countFetchCalls('GET', chatsPath), 2));
+  await flush();
+  await flush();
+  const threadReadsBefore = threadReads();
+  const listReadsBefore = countFetchCalls('GET', chatsPath);
+  const rejoin = subscribeFrames().slice(before).find(isMessageFeed);
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) {
+        answerSubscribe(frame, frame === rejoin ? KEY_UNREADABLE : joined(frame));
+      }
+    });
+    act(() => mock.timers.tick(1_000));
+  } finally {
+    mock.timers.reset();
+  }
+  const retry = subscribeFrames().at(-1);
+  assert.ok(retry && retry !== rejoin && isMessageFeed(retry), 'the message subscribe was not sent again');
+  // A message received before this answer reached no one: the room was not joined.
+  act(() => answerSubscribe(retry, joined(retry)));
+  await waitFor(() => assert.ok(threadReads() > threadReadsBefore, 'the thread was not read again'));
+  await waitFor(() =>
+    assert.ok(countFetchCalls('GET', chatsPath) > listReadsBefore, 'the chat list was not read again'),
+  );
+  await flush();
+  await flush();
+});
+
+// The page sends '*' again itself on every session switch. One sent while the failed '*' waits for its retry ends the
+// same gap, so the sessions that connected or dropped meanwhile are read again once it joins.
+test('the session list is read again once the wildcard feed joins on a session switch during its pause', async () => {
+  const { waitFor, act, within } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    for (let n = 0; n < 5; n++) await flush();
+    const wildcard = subscribeFrames().find(frame => frame.sessionId === '*');
+    assert.ok(wildcard);
+    // The pause before the retry starts on a fake clock that is dropped unmoved, so the retry itself never goes out.
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      act(() => {
+        for (const frame of subscribeFrames())
+          answerSubscribe(frame, frame === wildcard ? KEY_UNREADABLE : joined(frame));
+      });
+    } finally {
+      mock.timers.reset();
+    }
+    const reads = countFetchCalls('GET', '/api/sessions');
+    const before = subscribeFrames().length;
+    selectSession(container, SESSION_2.id);
+    await waitFor(() =>
+      assert.ok(
+        subscribeFrames()
+          .slice(before)
+          .some(frame => frame.sessionId === '*'),
+      ),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, joined(frame));
+    });
+    await waitFor(() =>
+      assert.ok(countFetchCalls('GET', '/api/sessions') > reads, 'the session list was not read again'),
+    );
+    await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice');
+    for (let n = 0; n < 5; n++) await flush();
+  } finally {
+    twoSessions = false;
+  }
+});
+
+// A session-scoped key: leaving a session leaves its feed room too, a waiting retry of it included, and the page then
+// joins that feed again itself. That join ends the same gap.
+test("the session list is read again once a scoped key's failed feed is joined again on a switch away", async () => {
+  const { waitFor, act, within } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => frame.sessionId === '*');
+    assert.ok(wildcard);
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    await waitFor(() =>
+      assert.equal(subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*').length, 2),
+    );
+    for (let n = 0; n < 5; n++) await flush();
+    const openFeed = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === SESSION.id);
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      act(() => {
+        for (const frame of subscribeFrames().filter(frame => frame.sessionId !== '*')) {
+          answerSubscribe(frame, frame === openFeed ? KEY_UNREADABLE : joined(frame));
+        }
+      });
+    } finally {
+      mock.timers.reset();
+    }
+    const reads = countFetchCalls('GET', '/api/sessions');
+    const before = subscribeFrames().length;
+    selectSession(container, SESSION_2.id);
+    await waitFor(() =>
+      assert.ok(
+        subscribeFrames()
+          .slice(before)
+          .some(frame => isSessionFeed(frame) && frame.sessionId === SESSION.id),
+      ),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, joined(frame));
+    });
+    await waitFor(() =>
+      assert.ok(countFetchCalls('GET', '/api/sessions') > reads, 'the session list was not read again'),
+    );
+    await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice');
+    for (let n = 0; n < 5; n++) await flush();
+  } finally {
+    twoSessions = false;
+  }
+});
+
+// The '*' refusal is answered once and never again, so the fallback must not be lost to another error frame the page
+// handles in the same batch, here the open session's message subscribe whose key could not be read.
+test('a refused wildcard answered together with another error still falls back to each listed session', async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    const messages = subscribeFrames().find(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id);
+    assert.ok(wildcard && messages);
+    act(() => {
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' });
+      answerSubscribe(messages, KEY_UNREADABLE);
+    });
+    assert.deepEqual(
+      subscribeFrames()
+        .filter(frame => isSessionFeed(frame) && frame.sessionId !== '*')
+        .map(frame => frame.sessionId)
+        .sort(),
+      [SESSION.id, SESSION_2.id].sort(),
     );
   } finally {
     twoSessions = false;

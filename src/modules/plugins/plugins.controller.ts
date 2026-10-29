@@ -238,6 +238,7 @@ export class PluginsController {
       'A session-restricted key may not replace the full active set — full activation replacement requires an unrestricted key',
   })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
+  @ApiResponse({ status: 500, description: 'The plugin registry could not be written; nothing was changed' })
   updateSessions(@Param('id') id: string, @Body() dto: PluginSessionsDto): PluginDto {
     // This is a full-replacement PUT (setPluginSessions overwrites the entire activeSessions array),
     // so a scoped key must never reach it: sending [] or its own session would delete every other
@@ -276,6 +277,7 @@ export class PluginsController {
   @ApiResponse({ status: 400, description: 'Cannot uninstall (e.g. built-in)' })
   @ApiResponse({ status: 404, description: 'Plugin not found' })
   @ApiResponse({ status: 409, description: RESTORING_CONFLICT })
+  @ApiResponse({ status: 500, description: 'The plugin registry could not be written; nothing was removed' })
   async uninstall(@Param('id') id: string): Promise<{ success: boolean; message: string }> {
     const result = await this.pluginsService.uninstall(id);
     this.record(AuditAction.PLUGIN_UNINSTALLED, id);

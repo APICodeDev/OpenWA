@@ -92,8 +92,9 @@ plugin never loses events; the tiers scale independently with backpressure.
 
 Alongside this async pipeline, a route may additionally declare a `response` contract — host-side
 `preflight` checks and a declarative `ack` — that shapes the synchronous HTTP response the provider sees
-**without** altering the dispatch model. The plugin still always runs async (enqueued, full DLQ/retry);
-`response` only controls what the provider receives back on the request socket. See §25.4 and §25.8.
+**without** altering the dispatch model: `response` only controls what the provider receives back on the
+request socket. Where the plugin runs is decided by the queue: with it on, the delivery is enqueued and the
+worker runs it with retries and a dead letter; with it off, it runs inline. See §25.4 and §25.8.
 
 ## 25.4 Core components
 
@@ -103,8 +104,14 @@ Alongside this async pipeline, a route may additionally declare a `response` con
   `/api/ingress/:pluginId/:instanceId/:route` (a `GET` on a route that declares `challenge` is answered
   host-side as the verification handshake; every other request is a delivery). It is public to the
   API-key guard because an external provider cannot present the gateway's API key, so it self-validates
-  (see §25.6). It never runs the plugin inline — providers enforce short acknowledgement
-  deadlines, so the controller fast-acks and defers the work to the queue. A route may additionally
+  (see §25.6). With the queue on it never runs the plugin inline: providers enforce short acknowledgement
+  deadlines, so the controller fast-acks and defers the work to the queue, and dispatches inline only while
+  Redis is unreachable. With the queue off (the default) a route without a `response` contract runs the
+  plugin inline before its `202`, for at most `INGRESS_DISPATCH_TIMEOUT_MS` (5 s), and a route with one is
+  acked first and then dispatched inline, without the queue's retries. An inline dispatch that fails files a
+  dead letter and leaves the row for the reconciler, and a delivery on a route without a `response` contract
+  for a plugin still being restored is acked at once and dispatched by the reconciler once the plugin is up
+  (§25.7). A route may additionally
   declare a host-side `response` contract that shapes that synchronous reply without making the plugin
   inline. Its `preflight` checks (today: `session-alive`) run **after** signature verification and
   **before** the dedup persist — returning `503` only for a definitively-dead concrete-scoped WhatsApp
@@ -385,8 +392,8 @@ Within major 1 the surface grows additively. A route's optional `response` contr
 (host-side checks such as `session-alive`, evaluated after signature verify), `ack{}` (`status`/`body`/
 `headers`, rendered host-side with `{rawBody}`/`{timestamp}`/`{id}` templates from the verified request),
 and an advisory `deadlineMs` — lets an adapter shape the synchronous HTTP response the provider sees; the
-plugin still always runs async, and a route with no `response` is byte-identical to today's default
-fast-ack. `ack.body` and every `ack.headers` value must be strings, `ack.status` must be a final status
+ack of such a route never waits for the plugin, which runs from the queue or, with the queue off, inline after
+the ack (§25.4), and a route with no `response` is byte-identical to today's default fast-ack. `ack.body` and every `ack.headers` value must be strings, `ack.status` must be a final status
 (200-599), and a header value may hold no control character (other than HTAB) and nothing above U+00FF,
 since Node cannot write one; a manifest that declares otherwise is refused at install and at boot, which
 leaves that plugin in error until the manifest is fixed. A declared header is dropped rather than written

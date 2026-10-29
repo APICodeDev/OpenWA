@@ -429,9 +429,11 @@ export class WebhookDeliveryFailureDto {
 
   @ApiProperty({
     description:
-      'True when the row still holds the event data and can be replayed with ' +
-      '`POST /webhooks/delivery-failures/redrive`. Only terminal rows (attempts > 0) recorded while ' +
-      '`WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` > 0 are, until that window passes.',
+      'True when the row still holds the event data and its webhook still exists in the same session. Only ' +
+      'terminal rows (attempts > 0) recorded while `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` > 0 hold it, until ' +
+      'that window passes. `POST /webhooks/delivery-failures/redrive` replays such a row while its webhook is ' +
+      'active and subscribed to the event, so a row of a disabled or unsubscribed webhook stays replayable for ' +
+      'when the webhook is switched back.',
     example: false,
   })
   replayable!: boolean;
@@ -502,12 +504,19 @@ export class WebhookRedriveResultDto {
   failed!: number;
 
   @ApiProperty({
-    description: 'Rows not replayed: the webhook was removed, disabled or unsubscribed, or a plugin cancelled it.',
+    description:
+      'Selected rows not replayed: a hook cancelled the replay, or the row or its webhook changed during the call. ' +
+      'Rows of a removed, disabled or unsubscribed webhook are left out before the batch and not counted.',
     example: 0,
   })
   skipped!: number;
 
-  @ApiProperty({ description: 'Replayable rows still in scope after this call.', example: 0 })
+  @ApiProperty({
+    description:
+      'Rows the redrive would still take after this call: replayable, in scope, with an active webhook subscribed ' +
+      'to the event.',
+    example: 0,
+  })
   remaining!: number;
 }
 

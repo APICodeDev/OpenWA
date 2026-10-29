@@ -590,12 +590,16 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
         [TRIGRAM_BUILD_LOCK_KEY],
       );
       if (!locked) return CONTAINS_UNAVAILABLE.building;
+      let bound: string | undefined;
       try {
+        const [shown] = await runner.manager.query<Array<{ statement_timeout?: string }>>('SHOW statement_timeout');
+        bound = shown?.statement_timeout;
         await runner.query('SET statement_timeout = 0');
         return await this.createPostgresTrigramSchema(runner);
       } finally {
-        // The connection returns to the pool: the next borrower must find its timeout and no lock.
-        await runner.query('RESET statement_timeout');
+        // The connection returns to the pool: the next borrower must find its timeout and no lock. Put back
+        // by value: the pool sets the timeout on connect, and RESET would drop it to the server default.
+        if (bound !== undefined) await runner.query(`SELECT set_config('statement_timeout', $1, false)`, [bound]);
         await runner.query(`SELECT pg_advisory_unlock(${TRIGRAM_BUILD_LOCK})`, [TRIGRAM_BUILD_LOCK_KEY]);
       }
     } finally {

@@ -125,6 +125,9 @@ POSTGRES_SCHEMA=public   # Default behavior (historical)
 - The dashboard built-in database (`POSTGRES_BUILTIN=true`) always uses `public`
 - External/managed PostgreSQL: run `CREATE SCHEMA <name>;` once before first startup
 - SQLite ignores this setting
+- `scripts/backup.sh` dumps a schema other than `public` alone, with the `pg_trgm` and `unaccent` extensions, so a
+  database shared with other applications is neither read nor restored past it; see
+  [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup) for loading such a dump
 
 **Validation:**
 
@@ -133,7 +136,7 @@ POSTGRES_SCHEMA=public   # Default behavior (historical)
 - Invalid values cause fast boot failure rather than migration-time errors
 
 > [!NOTE]
-> TypeORM's `schema` option alone does not set the session `search_path`. OpenWA additionally sets `search_path=<schema>,public` via PostgreSQL's startup `options` parameter so raw, unqualified migration DDL resolves to the configured schema. The migration ledger and all tables land in the specified schema while keeping `public` accessible for `pg_catalog` and helpers.
+> TypeORM's `schema` option alone does not set the session `search_path`. OpenWA additionally sets `search_path=<schema>,public` on every pooled connection, by a statement right after it connects, so raw, unqualified migration DDL resolves to the configured schema. The migration ledger and all tables land in the specified schema while keeping `public` accessible for `pg_catalog` and helpers.
 
 #### Data Migration API
 
@@ -797,8 +800,8 @@ CREATE INDEX "IDX_audit_logs_createdAt" ON audit_logs("createdAt");
 -- Check index usage
 SELECT
     schemaname,
-    tablename,
-    indexname,
+    relname AS tablename,
+    indexrelname AS indexname,
     idx_scan,
     idx_tup_read,
     idx_tup_fetch
@@ -882,6 +885,9 @@ OpenWA runs **two separate TypeORM connections**, each with its own migrations d
 Migrations are hand-authored and idempotent (`IF NOT EXISTS`) so they are safe to adopt on a database originally created by `synchronize`. The two connections differ in how schema is managed:
 
 - **data** — `synchronize` defaults **off**, so this connection is migration-managed by default. On PostgreSQL `migrationsRun` is hardcoded on, and `DATABASE_SYNCHRONIZE=true` is rejected outright at boot validation (it would drop the migration-created `body_ts` tsvector column that `/search` depends on). The PostgreSQL chain runs at boot under a session-level advisory lock, so replicas that start together apply it once (`src/database/pg-boot-migrations.ts`); a PgBouncer in transaction pooling mode runs each transaction on whichever server connection is free, so the lock does not stay with the session that took it: point the data connection at PostgreSQL directly or at a pooler in session mode. On SQLite there is no such rejection and `migrationsRun` is the inverse of `synchronize` — so an opted-in `DATABASE_SYNCHRONIZE=true` switches the data connection to entity-synchronized schema and turns its migration chain **off**; only the deduplication of terminal `webhook_delivery_failures` rows still runs, ahead of the schema synchronization at every boot.
+
+  The data connection sends no session setting in the startup packet, which PgBouncer refuses for `statement_timeout`: the zone, the runtime `statement_timeout` and a custom schema's `search_path` are set by a statement on each new connection, and the boot lock connection turns `statement_timeout` off the same way, so PgBouncer in session mode needs no `ignore_startup_parameters` entry.
+
 - **main**: migration-managed by default, like data: `migrations-main/` creates and upgrades `api_keys` / `audit_logs` at boot. The chain is idempotent, so a `main.sqlite` an earlier release built with synchronize is adopted in place on the first boot (rows kept, missing columns added, the ledger written). `MAIN_DATABASE_SYNCHRONIZE=true` additionally synchronizes after the chain, for development; it cannot add an entity column that has no migration yet, because the missing-column check below refuses the boot first, so write the migration in `migrations-main/`. Boot logs a warning when it is set under `NODE_ENV=production`. Before any provider reads the file, boot refuses to start (in both modes) when the ledger records a migration this release does not ship (a newer release upgraded the file) or when an entity column is still missing after the chain ran (an older release rebuilt the table, so its values are gone, or the column has no migration yet); the error names the migration or column. For a newer ledger or a rebuilt table, the remedy is restoring `main.sqlite` from the backup taken before the downgrade or upgrade; for a column with no migration yet, it is adding one in `migrations-main/`. For a table rebuilt without `api_keys.allowedChats` and no backup, stop the instance, delete that migration's ledger row from the file the error names (the `MAIN_DATABASE_NAME` path, `data/main.sqlite` by default) and start it. On a source install that is `sqlite3 data/main.sqlite "DELETE FROM migrations WHERE name = 'AddApiKeyAllowedChats1786600000000'"`. On the compose deployment the file lives in the `openwa-data` volume, not on the host, and a stopped container cannot be exec'd into, so run the CLI in a one-off container of the service: `docker compose stop openwa-api && docker compose run --rm --no-deps openwa-api sqlite3 /app/data/main.sqlite "DELETE FROM migrations WHERE name = 'AddApiKeyAllowedChats1786600000000'"` (with `MAIN_DATABASE_NAME` set, use that path under `/app`). On the Helm chart, scale the StatefulSet to 0 and start the `openwa-restore` helper pod on the release's data PVC as [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup) does, run `kubectl exec openwa-restore -- sqlite3 /app/data/main.sqlite "DELETE FROM migrations WHERE name = 'AddApiKeyAllowedChats1786600000000'"`, then delete the pod and scale back to 1. Then the chain re-creates `api_keys.allowedChats` empty, which means every chat, so re-apply each key's `allowedChats` before exposing the API. A file whose ledger does not record the lost column's migration (0.23.6 and 0.23.7 wrote the ledger only with `MAIN_DATABASE_SYNCHRONIZE=false`) is not detected: the column comes back empty, which means every chat, so each key's `allowedChats` must be re-applied. Never delete or rename a `migrations-main/` file: its ledger row would read as a newer release's.
 
 ### Migration Files

@@ -203,7 +203,8 @@
       "delete": "메시지를 삭제하지 못했습니다",
       "clickButton": "버튼 클릭에 실패했습니다",
       "fileTooLarge": "파일이 너무 큽니다 (최대 18 MB)",
-      "searchHitSessionNotReady": "이 메시지의 세션이 연결되어 있지 않습니다"
+      "searchHitSessionNotReady": "이 메시지의 세션이 연결되어 있지 않습니다",
+      "searchHitChatNotListed": "목록에서 이 메시지의 채팅을 찾을 수 없습니다"
     },
     "loadMessagesError": "메시지를 불러올 수 없습니다. 서버 로그를 확인하세요.",
     "messageStatus": {
@@ -609,6 +610,7 @@
       "badge_other": "필터 {{count}}개",
       "addCondition": "조건 추가",
       "removeCondition": "조건 제거",
+      "removeValue": "{{value}} 제거",
       "caseSensitive": "대소문자 구분",
       "contactPlaceholder": "번호 또는 WhatsApp ID...",
       "textPlaceholder": "일치시킬 텍스트...",
@@ -658,6 +660,7 @@
       "updateFailed": "웹훅 업데이트 실패: {{message}}",
       "testOk": "웹훅 테스트 성공! 상태: {{status}}",
       "testFailed": "웹훅 테스트 실패: {{message}}",
+      "testStatus": "수신 측이 HTTP {{status}}(으)로 응답했습니다",
       "testError": "웹훅 테스트 중 오류 발생: {{message}}"
     },
     "actions": {
@@ -779,6 +782,7 @@
     "modalTitle": "API 키 생성",
     "createdTitle": "API 키 생성 완료",
     "createdHint": "지금 이 키를 복사해 두세요. 다시 확인할 수 없습니다.",
+    "copyKey": "키 복사",
     "namePlaceholder": "예: Production Key",
     "nameTooShort": "3자 이상 입력하세요.",
     "rolesTitle": "역할 안내",
@@ -1004,6 +1008,7 @@
     },
     "sendFailed": "메시지를 보내지 못했습니다",
     "notOnWhatsApp": "이 번호는 WhatsApp에 등록되어 있지 않습니다",
+    "tooLong": "{{max}}자리를 넘는 숫자는 하나의 전화번호가 아닙니다. 번호를 하나만 입력하세요.",
     "batch": {
       "status": {
         "pending": "대기 중",
@@ -1040,6 +1045,7 @@
       "phonePlaceholder": "예: 919876543210 또는 6281234567890",
       "check": "확인",
       "checking": "확인하는 중...",
+      "tooLong": "{{max}}자리를 넘는 숫자는 하나의 전화번호가 아닙니다. 한 번에 번호 하나씩 확인하세요.",
       "autoPrefix": "10자리 번호 앞에 <strong>+91</strong> 자동 추가 (12자리 번호는 그대로 유지)",
       "silent": "<strong>상대방에게 알려지지 않음:</strong> 이 조회는 WhatsApp의 등록 정보를 직접 확인합니다. 상대방에게는 알림, 소리, 메시지가 전달되지 않습니다.",
       "resultTitle": "확인 결과",
@@ -1102,6 +1108,7 @@
       "tenDigitAdded": "(10자리 {{ten}}개 → +91 추가됨)",
       "tenDigitAddedPreserved": "(10자리 {{ten}}개 → +91 추가됨, 12자리 {{twelve}}개 그대로 유지)",
       "tooMany": "번호가 너무 많습니다. {{parsed}}개가 인식되었으며 한 번에 최대 {{max}}개까지 가능합니다. 시작하려면 {{excess}}개를 삭제하세요.",
+      "tooLong": "제외됨, {{max}}자리 초과(하나의 번호가 아님): {{count}}. 번호를 한 줄에 하나씩 입력하세요.",
       "start": "배치 확인 시작",
       "stop": "확인 중지",
       "export": "결과 내보내기 (CSV)",

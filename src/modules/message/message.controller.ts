@@ -1,6 +1,7 @@
 import { Controller, Post, Get, Param, Body, Query, Res, HttpCode, HttpStatus, StreamableFile } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { storedFileAttachment } from '../../common/storage/storage-transfer';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
 import {
@@ -757,16 +758,11 @@ export class MessageController {
     @Param('messageId') messageId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const { buffer, mimetype } = await this.messageService.getChatMedia(sessionId, chatId, messageId);
+    const { mimetype, ...source } = await this.messageService.getChatMedia(sessionId, chatId, messageId);
     // attachment + nosniff together: the mimetype is already reduced to an inert set, and forcing a
     // download means even a mistake there cannot render as active content on the API origin. The
     // dashboard renders chat media from the inline copy, so nothing depends on inline display here.
-    res.set({
-      'Content-Type': mimetype,
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Disposition': 'attachment',
-    });
-    return new StreamableFile(buffer);
+    return storedFileAttachment(res, source, mimetype);
   }
 
   // ========== Delete Message ==========

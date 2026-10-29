@@ -71,13 +71,34 @@ export function ChatActions({
  * button, and a control nested in one is unreachable to assistive technology. A disclosure of plain
  * buttons, not role="menu", which would promise roving focus and arrow keys.
  */
-function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions }) {
+function ChatRowMenu({
+  chat,
+  actions,
+  onOpenChange,
+}: {
+  chat: Chat;
+  actions: ChatRowActions;
+  /** Told when the menu opens and closes: the list draws a row again for its actions only while its menu is open. */
+  onOpenChange?: (open: boolean) => void;
+}) {
   const { t } = useTranslation();
   const items = chatActionItems(chat, actions, t);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open || !onOpenChange) return;
+    onOpenChange(true);
+    return () => onOpenChange(false);
+  }, [open, onOpenChange]);
+  // A 1:1 chat's entries read the address book (Save or Rename), which is asked for once its menu is open. Asked from
+  // here, after the list has drawn the row again with the page's current actions, and again as they change.
+  const onMenuOpen = actions.onMenuOpen;
+  useEffect(() => {
+    if (open && chat.kind === 'individual') onMenuOpen?.();
+  }, [open, chat.kind, onMenuOpen]);
 
   // The popover is placed fixed against the viewport, so the scrolling chat list does not clip it: below
   // the chevron when it fits, above it otherwise, aligned to the chevron's end edge and kept on screen.
@@ -139,10 +160,7 @@ function ChatRowMenu({ chat, actions }: { chat: Chat; actions: ChatRowActions })
         ref={triggerRef}
         type="button"
         className="chat-row-menu-trigger"
-        onClick={() => {
-          if (!open && chat.kind === 'individual') actions.onMenuOpen?.();
-          setOpen(value => !value);
-        }}
+        onClick={() => setOpen(value => !value)}
         aria-expanded={open}
         aria-label={t('chats.rowActions.actionsFor', { name: chatTitle(chat) })}
         title={t('chats.moreActions')}

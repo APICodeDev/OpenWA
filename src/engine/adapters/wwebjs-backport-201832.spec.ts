@@ -353,6 +353,62 @@ describe('patch-wwebjs-201832 (build-time backport of upstream #201832)', () => 
       expect(res.stderr).toMatch(/skipped/);
       expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain('this.id = data.id');
     });
+
+    // A tree the install cannot write is refused by the applier before it touches a single file, so it
+    // is still pristine: the same unpatched-but-whole state the flag exists to accept, not a half-patched one.
+    it('degrades on a read-only tree, leaving it pristine', () => {
+      // Root ignores mode bits: the tree would stay writable and the case would prove nothing.
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      execFileSync('chmod', ['-R', 'a-w', dir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], { encoding: 'utf8' });
+
+        // Nothing was written, which is what makes degrading safe.
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).not.toMatch(/_normalizeId/);
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Message.js'), 'utf8')).toContain(
+          'this.id = data.id',
+        );
+        expect(res.stderr).toMatch(/skipped/);
+        expect(res.status).toBe(0);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', dir]);
+      }
+    });
+
+    // Without the flag the same untouched tree is still an install that did not get its patch.
+    it('still fails a read-only tree in a strict run', () => {
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      execFileSync('chmod', ['-R', 'a-w', dir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, dir], { encoding: 'utf8' });
+
+        expect(res.stderr).toMatch(/`patch` failed/);
+        expect(res.status).toBe(1);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', dir]);
+      }
+    });
+
+    // The same refusal one file later is not the pristine case: the applier wrote the files before the one it
+    // could not write, so the tree carries part of the backport and the flag must not wave it through.
+    it('still fails when the applier is refused part-way, after writing earlier files', () => {
+      if (process.getuid?.() === 0) return;
+      const dir = copyWwjs();
+      const injectedDir = path.join(dir, 'src', 'util', 'Injected');
+      execFileSync('chmod', ['-R', 'a-w', injectedDir]);
+      try {
+        const res = spawnSync(process.execPath, [SCRIPT, '--best-effort', dir], { encoding: 'utf8' });
+
+        expect(fs.readFileSync(path.join(dir, 'src', 'structures', 'Base.js'), 'utf8')).toMatch(/_normalizeId/);
+        // GNU patch stops with exit 2 here and Apple patch skips the file, so the refusal reads either way.
+        expect(res.stderr).not.toMatch(/skipped/);
+        expect(res.status).toBe(1);
+      } finally {
+        execFileSync('chmod', ['-R', 'u+w', injectedDir]);
+      }
+    });
   });
 
   describe('a Windows checkout of the patch file', () => {

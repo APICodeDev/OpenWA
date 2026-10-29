@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import {
@@ -56,13 +56,16 @@ function defaultValueFor(kind: FieldKind): WebhookFilterCondition['value'] {
   return [];
 }
 
-/** Accepts a full JID or a phone number; normalizes bare numbers to `<digits>@c.us`. */
+/**
+ * Accepts a full JID or a phone number; normalizes bare numbers to `<digits>@c.us`. More than 15 digits (E.164) is no
+ * phone number, such as two numbers typed with a space between them, so it is not added.
+ */
 function normalizeToJid(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
   if (value.includes('@')) return value.toLowerCase();
   const digits = normalizePhoneText(value).replace(/[^0-9]/g, '');
-  return digits ? `${digits}@c.us` : null;
+  return digits && digits.length <= 15 ? `${digits}@c.us` : null;
 }
 
 interface ContactChipsInputProps {
@@ -75,6 +78,9 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(blurTimer.current), []);
 
   const suggestions = useMemo(() => {
     const query = text.trim().toLowerCase();
@@ -93,6 +99,8 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   const add = (jid: string) => {
     if (jid && !value.includes(jid)) onChange([...value, jid]);
     setText('');
+    // A suggestion picked with the keyboard holds focus and is about to leave the list; keep focus in the field.
+    inputRef.current?.focus();
   };
   const addTyped = () => {
     const jid = normalizeToJid(text);
@@ -100,23 +108,43 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   };
 
   return (
-    <div className="chips-input">
+    <div
+      className="chips-input"
+      // The list closes only when focus leaves the whole widget: Tab from the field lands on the first suggestion,
+      // which a close on the field's own blur would remove from under the keyboard.
+      onFocus={() => clearTimeout(blurTimer.current)}
+      onBlur={e => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        blurTimer.current = setTimeout(() => setOpen(false), 120);
+      }}
+    >
       <div className="chips-row">
         {value.map(jid => (
           <span key={jid} className="chip" title={jid}>
             {labelFor(jid)}
-            <button type="button" className="chip-remove" onClick={() => onChange(value.filter(v => v !== jid))}>
+            <button
+              type="button"
+              className="chip-remove"
+              onClick={e => {
+                // A focused X is about to leave the page, and focus with it, unseen by the widget's blur; keep it in
+                // the field. An X clicked without taking focus (Safari) leaves focus where it was.
+                if (document.activeElement === e.currentTarget) inputRef.current?.focus();
+                onChange(value.filter(v => v !== jid));
+              }}
+              aria-label={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
+              title={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
+            >
               <X size={12} />
             </button>
           </span>
         ))}
         <input
+          ref={inputRef}
           className="chips-text"
           value={text}
           placeholder={t('webhooks.filters.contactPlaceholder')}
           onChange={e => setText(e.target.value)}
           onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
@@ -243,6 +271,7 @@ export function FilterBuilder({ filters, onChange, chats }: FilterBuilderProps) 
                       <button
                         key={option}
                         type="button"
+                        aria-pressed={selected}
                         className={`enum-tag ${selected ? 'selected' : ''}`}
                         onClick={() => {
                           const current = Array.isArray(condition.value) ? (condition.value as string[]) : [];

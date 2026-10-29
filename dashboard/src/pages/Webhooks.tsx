@@ -331,7 +331,11 @@ export function Webhooks() {
       if (result.success) {
         toast.success(t('webhooks.toasts.testOk', { status: result.statusCode }));
       } else {
-        toast.error(t('webhooks.toasts.testFailed', { message: result.error || `Status ${result.statusCode}` }));
+        toast.error(
+          t('webhooks.toasts.testFailed', {
+            message: result.error || t('webhooks.toasts.testStatus', { status: result.statusCode }),
+          }),
+        );
       }
     } catch (err) {
       toast.error(
@@ -489,6 +493,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleNewEvent(name)}
                 >
@@ -577,6 +582,7 @@ export function Webhooks() {
                 <button
                   key={name}
                   type="button"
+                  aria-pressed={isSelected}
                   className={`event-tag ${isSelected ? 'selected' : ''}`}
                   onClick={() => toggleEditEvent(name)}
                 >

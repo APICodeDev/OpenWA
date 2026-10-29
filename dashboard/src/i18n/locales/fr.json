@@ -208,7 +208,8 @@
       "delete": "Échec de la suppression du message",
       "clickButton": "Échec du clic sur le bouton",
       "fileTooLarge": "Le fichier est trop volumineux (max 18 Mo)",
-      "searchHitSessionNotReady": "La session de ce message n'est pas connectée"
+      "searchHitSessionNotReady": "La session de ce message n'est pas connectée",
+      "searchHitChatNotListed": "La discussion de ce message est introuvable dans la liste"
     },
     "loadMessagesError": "Impossible de charger les messages. Vérifiez les journaux du serveur.",
     "messageStatus": {
@@ -615,6 +616,7 @@
       "badge_many": "{{count}} filtres",
       "addCondition": "Ajouter une condition",
       "removeCondition": "Supprimer la condition",
+      "removeValue": "Retirer {{value}}",
       "caseSensitive": "Sensible à la casse",
       "contactPlaceholder": "Numéro ou identifiant WhatsApp...",
       "textPlaceholder": "Texte à rechercher...",
@@ -664,6 +666,7 @@
       "updateFailed": "Échec de la mise à jour du webhook : {{message}}",
       "testOk": "Test du webhook réussi ! Statut : {{status}}",
       "testFailed": "Test du webhook échoué : {{message}}",
+      "testStatus": "le destinataire a répondu HTTP {{status}}",
       "testError": "Impossible de tester le webhook : {{message}}"
     },
     "actions": {
@@ -785,6 +788,7 @@
     "modalTitle": "Créer une clé API",
     "createdTitle": "Clé API créée",
     "createdHint": "Copiez cette clé maintenant. Vous ne pourrez plus la revoir.",
+    "copyKey": "Copier la clé",
     "namePlaceholder": "ex : Clé de Production",
     "nameTooShort": "Utilisez au moins 3 caractères.",
     "rolesTitle": "Référence des rôles",
@@ -1010,6 +1014,7 @@
     },
     "sendFailed": "Échec de l'envoi du message",
     "notOnWhatsApp": "Ce numéro n'est pas enregistré sur WhatsApp",
+    "tooLong": "Plus de {{max}} chiffres ne forment pas un seul numéro. Saisissez un seul numéro.",
     "batch": {
       "status": {
         "pending": "En attente",
@@ -1046,6 +1051,7 @@
       "phonePlaceholder": "ex. : 919876543210 ou 6281234567890",
       "check": "Vérifier",
       "checking": "Vérification...",
+      "tooLong": "Plus de {{max}} chiffres ne forment pas un seul numéro. Vérifiez un numéro à la fois.",
       "autoPrefix": "Préfixer automatiquement par <strong>+91</strong> les numéros à 10 chiffres (les numéros à 12 chiffres restent inchangés)",
       "silent": "<strong>Totalement silencieux :</strong> cette requête interroge directement le registre des numéros enregistrés de WhatsApp. Le contact ne reçoit ni notification, ni son, ni message.",
       "resultTitle": "Résultat de la vérification",
@@ -1109,6 +1115,7 @@
       "tenDigitAdded": "({{ten}} à dix chiffres → +91 ajouté)",
       "tenDigitAddedPreserved": "({{ten}} à dix chiffres → +91 ajouté, {{twelve}} à douze chiffres sans changement)",
       "tooMany": "Trop de numéros : {{parsed}} détectés, {{max}} maximum par exécution. Retirez-en {{excess}} pour démarrer.",
+      "tooLong": "Ignorés, plus de {{max}} chiffres (pas un seul numéro) : {{count}}. Mettez chaque numéro sur sa propre ligne.",
       "start": "Démarrer la vérification par lot",
       "stop": "Arrêter la vérification",
       "export": "Exporter les résultats (CSV)",

@@ -2,7 +2,7 @@ import { ConfigService } from '@nestjs/config';
 import { createLogger } from '../../common/services/logger.service';
 import { HookManager } from '../hooks';
 import { IPlugin, PluginInstance, PluginManifest, PluginStatus, PluginType } from './plugin.interfaces';
-import { PluginStorageService } from './plugin-storage.service';
+import { PluginStorageService, type RegistryWriteOptions } from './plugin-storage.service';
 import { PluginHostServices } from './plugin-host-services';
 import { PluginCapabilityContext } from './plugin-capability-context';
 import { PluginSandboxBridge } from './plugin-sandbox-bridge';
@@ -214,21 +214,25 @@ export class PluginLifecycle {
     });
   }
 
-  updatePluginConfig(pluginId: string, config: Record<string, unknown>): void {
+  updatePluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
-    plugin.config = { ...plugin.config, ...config };
-
     // Persist only the operator's keys on top of what was persisted before, not the effective merge:
     // a built-in's effective config carries its env-derived defaults, and storing those would freeze
-    // them over later .env changes (see registerBuiltInPlugin).
-    this.pluginStorage.setPluginConfig(pluginId, {
-      ...(this.pluginStorage.getPluginConfig(pluginId) ?? {}),
-      ...config,
-    });
+    // them over later .env changes (see registerBuiltInPlugin). Persisted first: a write that must be stored
+    // and cannot be throws here and leaves the running config as it was.
+    this.pluginStorage.setPluginConfig(
+      pluginId,
+      {
+        ...(this.pluginStorage.getPluginConfig(pluginId) ?? {}),
+        ...config,
+      },
+      opts,
+    );
+    plugin.config = { ...plugin.config, ...config };
 
     // Notify the running plugin of the config change (fire and forget). A sandboxed plugin's
     // onConfigChange lives in the worker (plugin.instance is null), so route it through the live worker
@@ -254,7 +258,7 @@ export class PluginLifecycle {
    * an explicit list scopes it to those sessions, `[]` deactivates it everywhere. Takes effect on the
    * next hook event (the gate reads plugin.activeSessions live) and survives a restart.
    */
-  setPluginSessions(pluginId: string, sessions: string[]): PluginInstance {
+  setPluginSessions(pluginId: string, sessions: string[], opts?: RegistryWriteOptions): PluginInstance {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
@@ -263,8 +267,8 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} is global (not session-scoped) and cannot be activated per session`);
     }
 
+    this.pluginStorage.setPluginSessions(pluginId, sessions, opts);
     plugin.activeSessions = sessions;
-    this.pluginStorage.setPluginSessions(pluginId, sessions);
 
     this.logger.log(`Plugin active sessions updated: ${pluginId}`, {
       pluginId,
@@ -281,7 +285,12 @@ export class PluginLifecycle {
    * persisted across restart. An empty override removes it (the session falls back to the base).
    * Global plugins have no per-session config.
    */
-  setPluginSessionConfig(pluginId: string, sessionId: string, config: Record<string, unknown>): PluginInstance {
+  setPluginSessionConfig(
+    pluginId: string,
+    sessionId: string,
+    config: Record<string, unknown>,
+    opts?: RegistryWriteOptions,
+  ): PluginInstance {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) {
       throw new Error(`Plugin ${pluginId} not found`);
@@ -296,8 +305,8 @@ export class PluginLifecycle {
     } else {
       delete next[sessionId];
     }
+    this.pluginStorage.setPluginSessionConfig(pluginId, next, opts);
     plugin.sessionConfig = next;
-    this.pluginStorage.setPluginSessionConfig(pluginId, next);
 
     this.logger.debug(`Plugin session config updated: ${pluginId}`, {
       pluginId,

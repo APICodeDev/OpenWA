@@ -614,9 +614,14 @@ phase, waits included, is capped at 10 s; a plugin still running at the cap is t
 process. New enables are refused once teardown starts. A disable that arrives while the same plugin is
 still being disabled (shutdown overlapping a REST disable, an uninstall or an update unload) joins the
 running teardown, so `onDisable` runs once; an unload that joins this way gets no worker-side `onUnload`.
-`uninstallPlugin` disables + unloads, deletes the plugin's directory and its `ctx.storage` data dir, and
-drops the registry entry last (built-ins are protected and cannot be uninstalled). A package or storage
-folder that cannot be removed fails the uninstall and leaves the entry, so the same call can be repeated.
+`uninstallPlugin` first stores the plugin's registry entry emptied of its config, session activation,
+per-session config and enable decision, then disables + unloads, deletes the plugin's directory and its
+`ctx.storage` data dir, and drops the entry last (built-ins are protected and cannot be uninstalled). A
+`registry.json` that cannot take the first write refuses the uninstall with nothing changed. A package or
+storage folder that cannot be removed fails the uninstall and leaves the emptied entry, so the same call can
+be repeated, and a package left behind boots disabled and unconfigured. When only the final delete fails, the
+answer is a success that says the emptied entry stayed: a reinstall of the id starts fresh, a restart only
+reports the entry as a plugin with no code, and the same call removes it once the registry is writable.
 The unload path
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).

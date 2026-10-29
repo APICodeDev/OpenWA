@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { ConfigService } from '@nestjs/config';
 import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
@@ -647,6 +648,28 @@ describe('SessionService', () => {
       // credentials were torn down, so re-entering boot auto-start would only resurrect a session
       // that can no longer reach READY.
       expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+    });
+
+    // A session that never linked has no device to remove: its engine refuses the logout as not ready, and
+    // that refusal answers instead of the 502, whose advice to start the session and retry would only repeat.
+    it('logout() answers the 409 of a session that never linked, after the same local teardown', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const refusal = new EngineNotReadyError(
+        'This session was never linked to WhatsApp, so there is nothing to unlink.',
+      );
+      const engine = { logout: jest.fn().mockRejectedValue(refusal) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      const thrown = await service.logout('sess-uuid-1').catch((e: unknown) => e);
+
+      expect(thrown).toBe(refusal);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+      expect(repository.update).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
+      );
     });
 
     it('logout() rejects with 400 when no engine is loaded (session already stopped) and does NOT clear phone', async () => {
@@ -6080,10 +6103,10 @@ describe('SessionService', () => {
 
     // A terminal unlink leaves credentials that can never reach READY again, so the row must leave
     // the boot auto-start query and the takeover sweep (both key on a non-null phone), exactly as
-    // logout() already ensures. The in-process reconnect still shows one QR: scheduleReconnect gets
-    // the row object captured before the write, so its previouslyLinked flag survives.
+    // logout() already ensures. The in-process reconnect still shows one QR, and starts from the row
+    // as the clear left it: the phone is the account binding, and the unlink ended it.
     it.each(['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'logged out'])(
-      'clears phone on a terminal unlink (%s) without touching the captured reconnect row',
+      'clears phone on a terminal unlink (%s), for the row and for the reconnect it schedules',
       async reason => {
         const callbacks = await startAndCapture();
         const reconnectSpy = jest
@@ -6096,7 +6119,7 @@ describe('SessionService', () => {
 
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
         const [, passedSession] = reconnectSpy.mock.calls[0] as [string, Session];
-        expect(passedSession.phone).toBe('628123');
+        expect(passedSession.phone).toBeNull();
       },
     );
 
@@ -11814,6 +11837,30 @@ describe('SessionService', () => {
         maxReconnectAttempts: 20,
         reconnectBaseDelay: 1000,
       });
+    });
+
+    // A row created before the create body validated config, or carried in by a data import, can hold a
+    // fractional delay. The response field is an integer to every client that decodes it.
+    it('reports a fractional legacy reconnectBaseDelay as an integer on GET', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ config: { reconnectBaseDelay: 2500.5 } }),
+      );
+
+      const result = await service.getConfig('sess-uuid-1');
+
+      expect(result.reconnectBaseDelay).toBe(2500);
+    });
+
+    it('reports a fractional legacy reconnectBaseDelay as an integer after a PATCH of another key', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ config: { reconnectBaseDelay: 2500.5 } }),
+      );
+
+      const result = await service.updateConfig('sess-uuid-1', { autoRejectCalls: true });
+
+      // The stored value is the operator's and stays as it is; only the reported one is resolved.
+      expect(writtenConfig()).toEqual({ reconnectBaseDelay: 2500.5, autoRejectCalls: true });
+      expect(result.reconnectBaseDelay).toBe(2500);
     });
   });
 

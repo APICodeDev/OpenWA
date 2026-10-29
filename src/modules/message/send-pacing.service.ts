@@ -11,6 +11,7 @@ import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
 import { EngineNotSentError } from '../../common/errors/engine-not-sent.error';
+import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { SsrfBlockedError } from '../../common/security/ssrf-guard';
 import { toParticipantWid } from '../../engine/identity/wa-id';
 import { AuditService } from '../audit/audit.service';
@@ -42,11 +43,12 @@ export function isPacingLimitedError(error: unknown): boolean {
  * WhatsApp itself returned — EngineRefusedError (403) — and anything unclassified (a raw engine
  * error, a timeout, a 5xx) does. A rate limit WhatsApp answered (EngineThrottledError, a 503 on the wire)
  * counts as well: it is WhatsApp refusing this account's traffic, the signal the breaker exists to act on,
- * even though the send provably went nowhere (see sentNothing).
+ * even though the send provably went nowhere (see sentNothing). A whatsapp-web.js send whose recipient lookup did
+ * not answer (RecipientLookupUnansweredError) is a 500 that does not count: it says nothing about the account.
  */
 export function countsTowardSendBreaker(error: unknown): boolean {
   if (error instanceof EngineRefusedError || error instanceof EngineThrottledError) return true;
-  if (error instanceof SsrfBlockedError) return false;
+  if (error instanceof SsrfBlockedError || error instanceof RecipientLookupUnansweredError) return false;
   if (error instanceof HttpException) {
     const status = error.getStatus();
     // 4xx = the caller's request was wrong; 501 = this engine cannot do it; 503 = the engine is not

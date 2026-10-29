@@ -382,8 +382,11 @@ export class PluginSandboxBridge {
       onUnresponsive,
     );
     this.sandboxHosts.set(pluginId, host);
+    // The worker keeps this config as its base until a config-change arrives, and a save made while the
+    // plugin is still enabling is not pushed (it is not ENABLED yet). Every save replaces plugin.config.
+    const loadedConfig = plugin.config;
     try {
-      await host.load(mainPath, { pluginId, config: plugin.config }, SANDBOX_LIFECYCLE_TIMEOUT_MS);
+      await host.load(mainPath, { pluginId, config: loadedConfig }, SANDBOX_LIFECYCLE_TIMEOUT_MS);
       await host.runLifecycle('onLoad', SANDBOX_LIFECYCLE_TIMEOUT_MS);
       await host.runLifecycle('onEnable', SANDBOX_LIFECYCLE_TIMEOUT_MS);
     } catch (error) {
@@ -395,6 +398,9 @@ export class PluginSandboxBridge {
       await host.terminate().catch(() => undefined);
       throw error;
     }
+    // After onEnable, never during it: the worker runs messages concurrently, so a push mid-enable would run
+    // onConfigChange before onEnable finished.
+    if (plugin.config !== loadedConfig) host.sendConfigChange(plugin.config);
   }
 
   /**

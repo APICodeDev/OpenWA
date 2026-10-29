@@ -399,7 +399,12 @@ export function ApiKeys() {
         }),
         columnHelper.accessor('role', {
           header: () => t('apiKeys.columns.role'),
-          cell: info => <span className="permission-badge">{info.getValue()}</span>,
+          // The list keys on the API value; the badge names it as the role selects below do.
+          cell: info => (
+            <span className="permission-badge">
+              {t(`apiKeys.roles.${info.getValue()}`, { defaultValue: info.getValue() })}
+            </span>
+          ),
         }),
         columnHelper.accessor('allowedSessions', {
           id: 'sessions',
@@ -587,7 +592,12 @@ export function ApiKeys() {
                 >
                   {createdKey}
                 </code>
-                <button className="btn-primary" onClick={() => void handleCopy(createdKey, 'modal')}>
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleCopy(createdKey, 'modal')}
+                  aria-label={t('apiKeys.copyKey')}
+                  title={t('apiKeys.copyKey')}
+                >
                   {copied === 'modal' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
               </div>

@@ -352,6 +352,11 @@ export function Sessions() {
           void fetchSessions();
           dismissQrForSession(event.sessionId);
           toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
+        } else if (event.status === 'initializing' && prev?.status === 'qr_ready') {
+          // The wait to be linked ended with its connection (on Baileys also a pairing code left unused for five
+          // minutes), and the session registers again with a new QR. Neither the QR nor a pairing code on screen can
+          // link any more. From authenticating the code was used, and the modal closes on the ready that follows.
+          clearQrCodeForSession(event.sessionId);
         }
       },
       [toast, t, fetchSessions, queryClient, dismissQrForSession, clearQrCodeForSession, updateSessions],
@@ -646,11 +651,16 @@ export function Sessions() {
       // The error response carries no Session body, so re-fetch authoritative state regardless of
       // how we classify the toast — phone:null/status come from the list endpoint.
       await fetchSessions();
-      if (classifyUnlinkError(err) === 'incomplete') {
+      const kind = classifyUnlinkError(err);
+      if (kind === 'incomplete') {
         // 502 + SESSION_LOGOUT_INCOMPLETE — the session stopped locally but the unlink operation is
         // incomplete. Surface the server's specific message/retry guidance as a warning, not an error.
         const msg = err instanceof Error && err.message ? err.message : t('sessions.unlink.incomplete');
         toast.warning(t('sessions.unlink.incompleteTitle'), msg);
+      } else if (kind === 'notLinked') {
+        // 409: the session never linked, so there was nothing to unlink. The gateway's message says it was
+        // stopped and to start or delete it instead.
+        toast.error(t('sessions.unlink.failedTitle'), err instanceof Error ? err.message : t('sessions.unlink.failed'));
       } else {
         // A reverse-proxy 502 (bare or JSON without the exact code) may never have reached the
         // gateway, so nothing was stopped — generic failure, not retry guidance.

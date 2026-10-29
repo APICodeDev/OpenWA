@@ -214,11 +214,13 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > `skippedTables` lists optional tables absent from an older schema; the import tolerates them.
 
 > [!NOTE]
-> **Timestamps travel as UTC.** Every stamp in the archive is ISO 8601 with an explicit `Z`, and both
-> dialects store it as the same instant, so an archive moves between SQLite and PostgreSQL in either
-> direction without shifting and a repeated restore is a no-op. On PostgreSQL that is the connection's
-> UTC pin ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), not a
-> property of the host: a gateway restoring under `TZ=Asia/Jakarta` writes the same rows as one on UTC.
+> **Timestamps travel as UTC.** Every stamp in the archive is UTC. A PostgreSQL-made archive writes each
+> as ISO 8601 with an explicit `Z`; a SQLite-made one keeps SQLite's own text for the created and updated
+> columns (`YYYY-MM-DD HH:MM:SS`, sometimes with `.SSS`, no zone, still UTC) and ISO 8601 with `Z` for
+> the others. Both dialects store either form as the same instant, so an archive moves between SQLite
+> and PostgreSQL in either direction without shifting and a repeated restore is a no-op. On PostgreSQL
+> that is the connection's UTC pin ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)),
+> not a property of the host: a gateway restoring under `TZ=Asia/Jakarta` writes the same rows as one on UTC.
 > An archive taken by 0.23.5 or earlier from a PostgreSQL gateway that ran off UTC carries that host's
 > offset in its `DEFAULT now()` stamps, and one more offset in every stamp for each restore the table
 > had been through; read the 0.23.6 upgrade notes in `CHANGELOG.md` before restoring one.
@@ -1000,7 +1002,9 @@ git checkout "v${TARGET_VERSION}"
 #    so SQLite cannot replay them into the restored file.
 echo "📥 Restoring database..."
 if [ -f "$BACKUP_DIR/database.sql" ]; then
-    # PostgreSQL: load the dump into an empty database. Replayed over the upgraded tables, its CREATE
+    # PostgreSQL: load the dump into an empty database, in one transaction so a load that fails leaves
+    # nothing behind (a dump with database.schema beside it holds one schema: load that one as
+    # 11 - Runbook: Restore from Backup, step 3 says). Replayed over the upgraded tables, its CREATE
     # statements fail and its rows mix with theirs. This is the built-in PostgreSQL (the compose
     # `postgres` service, or the openwa-postgres container Dashboard > Infrastructure created, which
     # carries no compose labels, so step 1 left it running). docker start covers a leftover or
@@ -1023,7 +1027,7 @@ if [ -f "$BACKUP_DIR/database.sql" ]; then
       -c "ALTER DATABASE \"$POSTGRES_DB\" RENAME TO \"${POSTGRES_DB}_pre_restore_$(date +%Y%m%d%H%M%S)\"" \
       -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
     sed '/^SET transaction_timeout = 0;$/d' "$BACKUP_DIR/database.sql" |
-      docker exec -i openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+      docker exec -i openwa-postgres sh -c 'psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 else
     # SQLite
     rm -f ./data/openwa.sqlite-{wal,shm,journal}

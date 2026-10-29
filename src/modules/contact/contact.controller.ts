@@ -41,8 +41,18 @@ export class ContactController {
       'timeout. Retry shortly.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max contacts to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of contacts to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max contacts to return (1-1000, default 1000)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: 'integer',
+    description: 'Number of contacts to skip (for paging)',
+  })
   async findAll(
     @Param('sessionId') sessionId: string,
     @Query('limit') limit?: string,

@@ -1067,9 +1067,10 @@ export interface WebhookDeliveryFailure {
   /** ISO timestamp of when the row was recorded. */
   createdAt: string;
   /**
-   * True when the row still holds the event data and can be replayed with
-   * {@link WebhooksResource.redriveDeliveryFailures}: a terminal row (`attempts > 0`) recorded while the
-   * gateway's `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` is above 0, until that window passes.
+   * True when the row still holds the event data and its webhook still exists in the same session: a terminal
+   * row (`attempts > 0`) recorded while the gateway's `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` is above 0, until
+   * that window passes. {@link WebhooksResource.redriveDeliveryFailures} replays it while that webhook is active
+   * and subscribed to the event.
    */
   replayable: boolean;
 }
@@ -1096,9 +1097,12 @@ export interface WebhookRedriveResult {
   enqueued: number;
   /** Replays that failed again; their rows stay, with attempts raised by one. */
   failed: number;
-  /** Rows not replayed: the webhook was removed, disabled or unsubscribed, or a plugin cancelled it. */
+  /**
+   * Selected rows not replayed: a hook cancelled the replay, or the row or its webhook changed during the call.
+   * Rows of a removed, disabled or unsubscribed webhook are left out before the batch and not counted.
+   */
   skipped: number;
-  /** Replayable rows still in scope after this call. */
+  /** Rows the redrive would still take after this call: replayable, in scope, with an active subscribed webhook. */
   remaining: number;
 }
 

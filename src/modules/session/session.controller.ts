@@ -127,8 +127,18 @@ export class SessionController {
     description: 'List of sessions',
     type: [SessionResponseDto],
   })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max sessions to return (1-1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of sessions to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max sessions to return (1-1000, default 1000)',
+  })
+  @ApiQuery({
+    name: 'offset',
+    required: false,
+    type: 'integer',
+    description: 'Number of sessions to skip (for paging)',
+  })
   @ApiQuery({
     name: 'name',
     required: false,
@@ -441,6 +451,13 @@ export class SessionController {
   })
   @ApiResponse({ status: 404, description: 'Session not found' })
   @ApiResponse({
+    status: 409,
+    description:
+      'Baileys: the session never linked to WhatsApp, so there is nothing to unlink. It was stopped ' +
+      'locally and `phone` is cleared; no success audit is written. Start it to link a device, or delete it, ' +
+      'instead of retrying the logout.',
+  })
+  @ApiResponse({
     status: 502,
     description:
       'Session was stopped locally, but the logout operation is incomplete (no send, no ' +
@@ -563,8 +580,13 @@ export class SessionController {
       'request (code 429 or 408); retry after a pause.',
   })
   @ApiResponse({ status: 409, description: ENGINE_NOT_READY_409 })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max groups to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max groups to return (1-1000, default 1000)',
+  })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of groups to skip (for paging)' })
   async getGroups(
     @Param('sessionId', ParseUUIDPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,
@@ -592,8 +614,13 @@ export class SessionController {
       'protocol timeout, so nothing could be read. Deliberately not reported as an empty list: a page ' +
       'that went away says nothing about the chats.',
   })
-  @ApiQuery({ name: 'limit', required: false, description: 'Max chats to return (1–1000, default 1000)' })
-  @ApiQuery({ name: 'offset', required: false, description: 'Number of chats to skip (for paging)' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    type: 'integer',
+    description: 'Max chats to return (1-1000, default 1000)',
+  })
+  @ApiQuery({ name: 'offset', required: false, type: 'integer', description: 'Number of chats to skip (for paging)' })
   async getChats(
     @Param('sessionId', ParseUUIDPipe) id: string,
     @CurrentApiKey() apiKey?: ApiKey,

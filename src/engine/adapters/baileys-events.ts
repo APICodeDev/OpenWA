@@ -224,8 +224,14 @@ export interface BaileysEventsHost {
   recordMessage(msg: WAMessage, type?: MessageType, order?: number): void;
   /** Reserve a message's place in the observed order on arrival, ahead of any limiter, store or media wait. */
   nextMessageOrder?(): number;
-  /** Apply a message edit to the stored body. */
-  recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void;
+  /** Apply a message edit to the chat preview, when `accept` (if given) accepts the key the preview holds. */
+  recordMessageEdit(
+    chatId: string,
+    messageId: string,
+    text: string,
+    type?: MessageType,
+    accept?: (key: WAMessageKey) => boolean,
+  ): void;
   findPersistedLidPhone?(jid: string): Promise<string | null>;
   /** Persist an inbound message to the store; undefined when no store is configured. */
   putStoredMessage(msg: WAMessage): Promise<void> | undefined;
@@ -274,7 +280,7 @@ export interface BaileysEventsHost {
 
 /** The subset of a Baileys `messages.update` entry this adapter reads. */
 interface BaileysMessageUpdate {
-  key?: { id?: string | null; remoteJid?: string | null };
+  key?: { id?: string | null; remoteJid?: string | null; fromMe?: boolean | null };
   update?: { status?: number | null; eventResponses?: BaileysEventResponse[] | null };
 }
 
@@ -701,20 +707,46 @@ export class BaileysEvents {
     chatId: string,
     messageId: string,
     body: string,
-    type?: MessageType,
-    generation = this.storeGeneration,
+    type: MessageType | undefined,
+    generation: number,
+    accept: (key: WAMessageKey) => boolean,
   ): Promise<void> {
     if (generation !== this.storeGeneration) return;
-    if (type === undefined) this.host.recordMessageEdit(chatId, messageId, body);
-    else this.host.recordMessageEdit(chatId, messageId, body, type);
+    this.host.recordMessageEdit(chatId, messageId, body, type, accept);
     if (parseWaId(chatId).kind === 'lid') {
       const phone = await this.host.findPersistedLidPhone?.(chatId).catch(() => null);
       if (generation !== this.storeGeneration) return;
-      if (phone) {
-        if (type === undefined) this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, messageId, body);
-        else this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, messageId, body, type);
-      }
+      if (phone) this.host.recordMessageEdit(`${phone}@s.whatsapp.net`, messageId, body, type, accept);
     }
+  }
+
+  /**
+   * Whether an edit or delete sent under `envelope` may change the chat preview of the message keyed
+   * `key`. The preview is that chat's own, so only the author is judged: the account's message changes
+   * only by the account, a group member's only by that member, and a group delete comes from anyone,
+   * as an admin may delete. The change may name a message the store does not hold (a history-synced or
+   * an evicted one), which targetsForeignMessage then lets through for the session to judge; the
+   * preview is judged here instead. Ids that cannot be compared (a lid nothing resolves, against a
+   * phone) are not called different, as in readsAsForeign.
+   */
+  private previewAuthor(
+    envelope: WAMessageKey,
+    isDelete: boolean,
+    resolve: (jid: string) => string | null,
+  ): (key: WAMessageKey) => boolean {
+    const neutral = (jid: string): string => {
+      const phone = parseWaId(jid).kind === 'lid' ? resolve(jid) : null;
+      return phone ? `${phone}@c.us` : this.host.toNeutralJid(jid);
+    };
+    return key => {
+      if (isDelete && parseWaId(key.remoteJid ?? '').kind === 'group') return true;
+      if ((key.fromMe === true) !== (envelope.fromMe === true)) return false;
+      return (
+        key.fromMe === true ||
+        !key.participant ||
+        !differentWaIds([key.participant, key.participantAlt], [envelope.participant, envelope.participantAlt], neutral)
+      );
+    };
   }
 
   private async processInboundMessage(
@@ -866,7 +898,7 @@ export class BaileysEvents {
         const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
         this.watchOutcome(msg.key, receipt);
       }
-      this.host.recordMessage(msg, incoming.type, opts.order);
+      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order);
       if (deleted) {
         this.host.recordMessageEdit(chatJid, storedId, '', 'revoked');
       } else if (editedBody !== undefined && storedId !== null) {
@@ -1009,8 +1041,6 @@ export class BaileysEvents {
           body: '',
           timestamp: toUnixSeconds(msg.messageTimestamp),
         };
-        await this.recordPreviewChange(chatJid, revoked.id, '', 'revoked', opts.generation);
-        if (opts.generation !== this.storeGeneration) return;
         // While the target is still being processed, the store change waits for it and lands after
         // this delete is announced, and a repeat delivery may already hold the content in the store:
         // record the delete now, checked against the target's own key.
@@ -1023,6 +1053,15 @@ export class BaileysEvents {
         const resolveStored = await this.reportedPhones(
           (await this.readTarget(revoked.id, 'reading a delete target'))?.key,
           msg.key,
+        );
+        if (opts.generation !== this.storeGeneration) return;
+        await this.recordPreviewChange(
+          chatJid,
+          revoked.id,
+          '',
+          'revoked',
+          opts.generation,
+          this.previewAuthor(msg.key, true, resolveStored),
         );
         if (opts.generation !== this.storeGeneration) return;
         this.changeStoredMessage(pm.key?.id, stored =>
@@ -1076,8 +1115,6 @@ export class BaileysEvents {
           editedContentType === 'documentWithCaptionMessage' ||
           editedContentType === 'stickerMessage';
         const edited: EditedMessage = buildEditedMessage(base, hasMedia);
-        await this.recordPreviewChange(chatJid, edited.messageId, edited.body, undefined, opts.generation);
-        if (opts.generation !== this.storeGeneration) return;
         const target = this.inboundInFlight.get(edited.messageId);
         if (target && this.mayChange(target.key, msg.key, false)) {
           const earlier = this.editedWhileInFlight.get(edited.messageId);
@@ -1092,6 +1129,15 @@ export class BaileysEvents {
         const resolveStored = await this.reportedPhones(
           (await this.readTarget(edited.messageId, 'reading an edit target'))?.key,
           msg.key,
+        );
+        if (opts.generation !== this.storeGeneration) return;
+        await this.recordPreviewChange(
+          chatJid,
+          edited.messageId,
+          edited.body,
+          undefined,
+          opts.generation,
+          this.previewAuthor(msg.key, false, resolveStored),
         );
         if (opts.generation !== this.storeGeneration) return;
         this.changeStoredMessage(edited.messageId, stored => {
@@ -1652,7 +1698,9 @@ export class BaileysEvents {
   handleMessagesUpdate(updates: BaileysMessageUpdate[]): void {
     for (const u of updates) {
       const status = mapBaileysStatus(u.update?.status);
-      if (status && u.key?.id) {
+      // An ack is a receipt of a message the account sent. Baileys also raises a status update, keyed
+      // fromMe: false, when another device of the account reads a message it received (read-self).
+      if (status && u.key?.id && u.key.fromMe !== false) {
         // Canonicalize the update's chat exactly as the inbound mapper does, so an ack's chatId
         // matches the chatId of the message events it accompanies.
         const chatId = u.key.remoteJid ? this.host.toNeutralJid(u.key.remoteJid) : undefined;

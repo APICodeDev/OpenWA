@@ -9,7 +9,9 @@
  * directory, last matching rule wins, `!` re-includes) and asserts two things:
  *
  *   1. Non-build / sensitive material (private working notes, VCS metadata, runtime data, local
- *      env files, agent/tool workspaces, dependency and build-output dirs) is rejected.
+ *      env files, agent/tool workspaces, dependency and build-output dirs) is rejected. Dependency,
+ *      coverage and compiler-cache trees are checked below the root too, where a bare name in a
+ *      Docker rule does not reach.
  *   2. Every input the multi-stage build actually needs (package manifests, src/, the dashboard
  *      source, docker-entrypoint.sh, TS configs, and every file the Dockerfile COPYs or ADDs by
  *      name, derived from it) still passes.
@@ -95,12 +97,18 @@ const mustReject = [
   // Dependencies (reinstalled via npm ci in the image)
   'node_modules/typescript/package.json',
   'dashboard/node_modules/vite/package.json',
+  'sdk/javascript/node_modules/typescript/package.json',
+  'sdk/php/vendor/autoload.php',
+  'sdk/python/.venv/pyvenv.cfg',
+  'sdk/java/target/openwa.jar',
   // Build output / local compiler caches
   'dist/main.js',
   'dashboard/dist/index.html',
   'tsconfig.tsbuildinfo',
+  'dashboard/tsconfig.app.tsbuildinfo',
   // Test coverage
   'coverage/lcov.info',
+  'dashboard/coverage/lcov.info',
   // Environment files (secrets)
   '.env',
   '.env.minimal',
@@ -111,6 +119,7 @@ const mustReject = [
   'data/.api-key',
   'openwa.sqlite',
   'backup.db',
+  'uploads/s1/2026/10/photo.jpg',
   // Backup archives and pre-restore snapshots (scripts/backup.sh, scripts/restore.sh)
   'backups/openwa-backup-20260101-000000.tar.gz',
   'data.pre-restore-20260101-000000/.api-key',
@@ -145,8 +154,12 @@ const mustKeep = [
   'tsconfig.json',
   'tsconfig.build.json',
   'src/main.ts',
+  // Sources under names a runtime-data rule could also take (media/ is ignored by .gitignore).
+  'src/modules/media/media.module.ts',
+  'src/common/media/media-url.ts',
   'dashboard/package.json',
   'dashboard/package-lock.json',
+  'dashboard/.npmrc',
   'dashboard/index.html',
   'dashboard/vite.config.ts',
   'dashboard/src/main.tsx',

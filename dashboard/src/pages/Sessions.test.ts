@@ -12,7 +12,7 @@
 // tab switch would silently discard it, exactly like the chat draft and staged attachment bugs
 // Chats.test.ts caught.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
@@ -106,6 +106,7 @@ function resetFetchCalls(): void {
   proxyPatchFails = false;
   stopFailure = null;
   forceKillFailure = null;
+  logoutFailure = null;
   confirmGate = null;
   qrGate = null;
   listGate = null;
@@ -146,6 +147,8 @@ let proxyPatchFails = false;
 let stopFailure: { status: number; message: string } | null = null;
 // When set, POST .../force-kill answers with this status and body.
 let forceKillFailure: { status: number; body: Record<string, unknown> } | null = null;
+// When set, POST .../logout answers with this status and body.
+let logoutFailure: { status: number; body: Record<string, unknown> } | null = null;
 // When set, DELETE /api/sessions/:id and POST .../force-kill answer only once this settles.
 let confirmGate: Promise<void> | null = null;
 // When set, POST .../start answers, whichever way it answers, only once this settles.
@@ -311,6 +314,9 @@ function installFetchStub(): void {
         if (lifecycleMatch[2] === 'force-kill' && forceKillFailure) {
           return jsonResponse(forceKillFailure.body, forceKillFailure.status);
         }
+        if (lifecycleMatch[2] === 'logout' && logoutFailure) {
+          return jsonResponse(logoutFailure.body, logoutFailure.status);
+        }
         if (isStart && startResult) {
           const answered = { ...base, ...startResult.answer };
           if (found) Object.assign(found, startResult.leaves ?? startResult.answer);
@@ -362,6 +368,8 @@ before(async () => {
 });
 
 afterEach(() => {
+  // A test that failed while it held the retry pauses on a fake clock must not leave it to the next one.
+  mock.timers.reset();
   rtl.cleanup();
   window.sessionStorage.removeItem('openwa_api_key');
   resetSocketDouble();
@@ -803,6 +811,38 @@ test('the pairing phone field keeps a formatted paste whole and refuses one of m
   assert.equal(screen.queryByText(/Enter a valid phone number/) === null, true);
   assert.equal(generate.disabled, false);
 });
+
+// A pairing code belongs to the connection that was waiting to be linked. When that wait ends (Baileys ends it once a
+// code goes unused for five minutes, and registers again with a new QR) the code can no longer link, so it is taken off
+// the screen and the number stays for a new request. Entering the code moves the session on to authenticating, which
+// keeps it.
+for (const [status, cleared] of [
+  ['initializing', true],
+  ['authenticating', false],
+] as const) {
+  test(`a shown pairing code is ${cleared ? 'cleared' : 'kept'} when the session moves on to ${status}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+    const { phoneInput, generate } = await openPairingPhoneField();
+    fireEvent.change(phoneInput, { target: { value: '6281234567890' } });
+    fireEvent.click(generate);
+    const dialog = screen.getByRole('dialog');
+    await within(dialog).findByText('1234 - 5678');
+
+    pushSessionStatus(SESSION_QR.id, status);
+    if (cleared) {
+      assert.equal(
+        within(dialog).queryByText('1234 - 5678') === null,
+        true,
+        'a code that can no longer link is still shown',
+      );
+      assert.equal((within(dialog).getByLabelText('Phone Number') as HTMLInputElement).value, '6281234567890');
+      within(dialog).getByRole('button', { name: 'Generate Pairing Code' });
+    } else {
+      within(dialog).getByText('1234 - 5678');
+    }
+  });
+}
 
 // Joining the digit groups of text around a number makes a valid-looking one nobody typed: "Order 12 call +62 ..." and
 // "... ext. 12" both hold 15 digits. Only digits and the usual formatting are read; anything else is kept and refused.
@@ -2216,6 +2256,25 @@ for (const [label, body, shown] of [
   });
 }
 
+// A session that never linked has nothing to unlink: the gateway stops it and answers 409 with what to do instead
+// (start or delete it), which a retry of the unlink cannot change. That answer is shown, not a bare failure.
+test('an unlink of a session that never linked shows the reason the gateway gives', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const message =
+    'This session was never linked to WhatsApp, so there is nothing to unlink. It was stopped; start it to link a device, or delete it.';
+  logoutFailure = { status: 409, body: { statusCode: 409, message, error: 'Conflict' } };
+  renderSessions();
+
+  const card = (await screen.findByText('new-device')).closest('.session-card') as HTMLElement;
+  fireEvent.click(within(card).getByRole('button', { name: 'Unlink' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }));
+
+  const alert = await screen.findByRole('alert');
+  within(alert).getByText('Unlink Failed');
+  within(alert).getByText(message);
+});
+
 // The confirm modal closes only once its request answers, so a second click on its button in that
 // window must not send the request again.
 for (const [label, cardButton, confirmButton, method, path] of [
@@ -2259,8 +2318,11 @@ test('Sessions.css aligns text to the text direction, not a physical side', () =
 // builds the frames would follow it when one is dropped.
 const SESSION_FEED_EVENTS = ['session.status', 'session.qr', 'session.restriction'];
 
-/** The payload of every frame the page sent over the socket. */
-const feedFrames = (): unknown[] => (lastSocket()?.emitted ?? []).map(frame => frame.args[0]);
+/** The payload of every frame the page sent over the socket, without the requestId that only matches its answer. */
+const feedFrames = (): unknown[] =>
+  (lastSocket()?.emitted ?? []).map(frame =>
+    Object.fromEntries(Object.entries(frame.args[0] as object).filter(([key]) => key !== 'requestId')),
+  );
 
 test('the page joins the live session feed once connected, with the events it renders', async () => {
   const { screen, waitFor } = rtl;
@@ -2297,6 +2359,49 @@ test('a key refused the wildcard room joins each listed session instead', async 
   for (const frame of feedFrames().slice(1)) {
     assert.deepEqual((frame as { events: string[] }).events, SESSION_FEED_EVENTS);
   }
+});
+
+// Every push the room sent while it was not joined is gone, so the list is read again, as after a reconnect.
+test('the list is read again once a retried feed subscribe joins', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() => assert.equal(feedFrames().length, 1));
+  const listReads = (): number => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+  const readsBefore = listReads();
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  const requestIdOf = (index: number) => (socket.emitted[index]?.args[0] as { requestId?: string }).requestId;
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    act(() =>
+      socket.receive('message', {
+        type: 'error',
+        code: 'INTERNAL_ERROR',
+        message: 'API key could not be checked',
+        requestId: requestIdOf(0),
+      }),
+    );
+    act(() => mock.timers.tick(1_000));
+  } finally {
+    mock.timers.reset();
+  }
+  assert.equal(feedFrames().length, 2, 'the feed subscribe was not sent again');
+  act(() =>
+    socket.receive('message', {
+      type: 'subscribed',
+      sessionId: '*',
+      events: SESSION_FEED_EVENTS,
+      requestId: requestIdOf(1),
+    }),
+  );
+  await waitFor(() => assert.ok(listReads() > readsBefore, 'the list was not read again'));
+  await screen.findByText('new-device');
 });
 
 function pendingResponse() {

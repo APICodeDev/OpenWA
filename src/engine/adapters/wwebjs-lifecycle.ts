@@ -269,6 +269,20 @@ export class WwebjsLifecycle {
   private navigationEpisodeStartedAt = 0;
   /** Counts the navigations stamped, so a probe can tell that one landed while it was waiting. */
   private navigationCount = 0;
+  /**
+   * When the first navigation of a ready page that no probe has yet found re-injected happened, 0 when there is
+   * none. The library's re-emitted 'ready' closes the grace window but proves nothing about the page now
+   * loaded: it can come from a run that started in the previous document, and a re-inject that threw emits
+   * nothing at all. Only a probe that reads whatsapp-web.js's helpers in the current page clears it.
+   */
+  private reinjectUnverifiedSince = 0;
+  /**
+   * When the probe whose helpers read last answered no, or failed, started (Date.now()), 0 when none. Kept across the
+   * navigations of an episode, so a page stuck reloading still counts its answers. A read is kept only if no
+   * navigation landed while its probe ran, so one kept from an earlier episode predates the navigation that began the
+   * current one.
+   */
+  private helpersMissingProbeAt = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -529,10 +543,31 @@ export class WwebjsLifecycle {
       }
     }
     if (this.tearingDown || this.client !== client) return;
+    this.reportFailedReinjects(client);
     // whatsapp-web.js 1.34.x never observes the Chromium process/page it drives, so a crashed
     // browser leaves the client looking READY forever ("silent death"). Attach death listeners
     // to the puppeteer handles so a dead browser surfaces as a normal disconnect → reconnect.
     this.attachPuppeteerLifecycleListeners();
+  }
+
+  /**
+   * After its first inject, whatsapp-web.js runs inject() again from its own framenavigated listener, with
+   * nothing awaiting it, so a re-inject that threw in a reloaded page surfaced only as an unhandled rejection
+   * that named no session. Report it here instead. Installed once the first inject has settled, so the launch
+   * still sees its own inject reject.
+   */
+  private reportFailedReinjects(client: Client): void {
+    const target = client as unknown as { inject?: () => Promise<void> };
+    const inject = target.inject;
+    if (typeof inject !== 'function') return;
+    target.inject = () =>
+      inject.call(client).catch((error: unknown) => {
+        this.host.logger.warn('whatsapp-web.js could not re-inject into the reloaded WhatsApp Web page', {
+          sessionId: this.host.config.sessionId,
+          error: error instanceof Error ? error.message : String(error),
+          action: 'page_reinject_failed',
+        });
+      });
   }
 
   /**
@@ -789,6 +824,8 @@ export class WwebjsLifecycle {
       const now = Date.now();
       if (this.navigationEpisodeStartedAt === 0) this.navigationEpisodeStartedAt = now;
       this.lastMainFrameNavigationAt = now;
+      const ready = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
+      if (ready && this.reinjectUnverifiedSince === 0) this.reinjectUnverifiedSince = now;
       // `graced: false` here means the episode cap already expired — the stamp is recorded but the
       // probe/ensureReady grace is NOT being granted, so the log must not claim it is.
       this.host.logger.warn('Page navigated; whatsapp-web.js is re-injecting', {
@@ -1018,6 +1055,7 @@ export class WwebjsLifecycle {
     // Before the clientless early-return: a teardown must always close the navigation window, or a
     // stale stamp could grace the next generation's probe (single-use contract notwithstanding).
     this.clearNavigationReinjectWindow();
+    this.reinjectUnverifiedSince = 0;
     const client = this.client;
     if (!client) return null;
 
@@ -1180,7 +1218,8 @@ export class WwebjsLifecycle {
    * timeout. Probe failure or timeout means dead — a wedged page can keep reporting CONNECTED
    * (whatsapp-web.js #5728), so turning consecutive probe failures into a reconnect decision stays
    * the calling watchdog's job. One exception: inside the bounded navigation re-inject window a
-   * failing probe answers alive, since the page is healing, not dead (#1081).
+   * failing probe answers alive, since the page is healing, not dead (#1081). A page that answered
+   * CONNECTED in time is alive too when only the helpers read of an unverified reload is still pending.
    */
   async probeLiveness(): Promise<boolean> {
     // The watchdog also probes an ACTION_REQUIRED session, observe-only (it never reconnects one): the page
@@ -1189,26 +1228,66 @@ export class WwebjsLifecycle {
     const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
     if (!probeable || !this.client) return false;
     const navigationsBefore = this.navigationCount;
+    const startedAt = Date.now();
+    const client = this.client;
+    // Set once getState() answered CONNECTED, so a probe that could not then read the page still knows that.
+    let connected = false;
+    // True while the helpers read below is in flight, so a timeout can tell it never answered.
+    let helpersPending = false;
+    // CONNECTED is WhatsApp Web's socket, which comes back after a reload whether or not whatsapp-web.js
+    // re-injected into the new page. While a reload is unverified, ask the page for the helpers too.
+    const probe = async (): Promise<boolean> => {
+      if ((await client.getState()) !== WAState.CONNECTED) return false;
+      connected = true;
+      if (this.reinjectUnverifiedSince === 0) return true;
+      helpersPending = true;
+      let found = false;
+      try {
+        found = await this.pageHasWwebjsHelpers(client);
+        return found;
+      } finally {
+        helpersPending = false;
+        // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
+        if (!found && this.client === client && navigationsBefore === this.navigationCount) {
+          this.helpersMissingProbeAt = startedAt;
+        }
+      }
+    };
 
+    const running = probe();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      const state = await Promise.race([
-        this.client.getState(),
+      const injected = await Promise.race([
+        running,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error('liveness probe timed out')), 10_000);
           timeout.unref?.();
         }),
       ]);
-      if (state === WAState.CONNECTED) {
-        // Observed recovery closes the navigation episode. Without this, an episode whose re-inject
-        // died silently (no 'ready' re-emit, but WA Web's socket back up) would keep a stale episode
-        // anchor forever, denying the grace to every LATER navigation via the episode cap. Only an episode
-        // this answer can speak for: a navigation stamped while getState() was pending is a newer one.
-        if (navigationsBefore === this.navigationCount) this.clearNavigationReinjectWindow();
+      if (connected && injected) {
+        this.closeRecoveredEpisode(navigationsBefore);
         return true;
       }
+      if (connected) return this.reinjectStillHealing();
       return this.isInNavigationReinjectWindow();
     } catch {
+      // A helpers read the timeout cut short is no answer yet: the page answered CONNECTED in time, so it is alive
+      // unless the no or failure kept from an earlier read came from a probe that started past the cap of this episode,
+      // whose in-budget answer would have been dead too. So late reads recycle only pages that in-budget reads
+      // recycle, later by up to two watchdog intervals after one reload and by more while the page keeps reloading,
+      // never a page that re-injected since. When the late read answers, a yes verifies the reload and a no or a
+      // failure is kept.
+      if (connected && helpersPending) {
+        void running.then(
+          found => {
+            if (found && this.client === client) this.closeRecoveredEpisode(navigationsBefore);
+          },
+          () => undefined,
+        );
+        const since = this.reinjectUnverifiedSince;
+        return since === 0 || this.helpersMissingProbeAt - since < NAVIGATION_EPISODE_CAP_MS;
+      }
+      if (connected) return this.reinjectStillHealing();
       // Inside the navigation window the evaluate rejecting (context destroyed, window.require not
       // yet a function) means the page is healing, not dead — answer alive so the watchdog does not
       // tear down a session whatsapp-web.js is about to re-inject (#1081). The window is bounded, so
@@ -1218,6 +1297,37 @@ export class WwebjsLifecycle {
       // Never leave the timeout dangling when getState() settles first (Jest open-handle hygiene).
       if (timeout) clearTimeout(timeout);
     }
+  }
+
+  /**
+   * Observed recovery closes the navigation episode. Without this, an episode whose re-inject died silently (no
+   * 'ready' re-emit, but WA Web's socket back up) would keep a stale episode anchor forever, denying the grace to
+   * every LATER navigation via the episode cap. Only an episode this answer can speak for: a navigation stamped
+   * while the probe was pending is a newer one.
+   */
+  private closeRecoveredEpisode(navigationsBefore: number): void {
+    if (navigationsBefore !== this.navigationCount) return;
+    this.clearNavigationReinjectWindow();
+    this.reinjectUnverifiedSince = 0;
+  }
+
+  /**
+   * A connected page whose reload no probe has found re-injected: still healing until the episode cap, then not
+   * alive. Measured from the first unverified navigation, so a reload that is merely slow (the sync after a
+   * reload can take minutes on a loaded host) keeps answering alive far past the grace window, and the watchdog
+   * recycles the session only once the helpers read kept answering no, or failing, for that long.
+   */
+  private reinjectStillHealing(): boolean {
+    return this.reinjectUnverifiedSince === 0 || Date.now() - this.reinjectUnverifiedSince < NAVIGATION_EPISODE_CAP_MS;
+  }
+
+  /** Whether whatsapp-web.js's helpers exist in the page now loaded. A page that cannot be asked reads as yes. */
+  private async pageHasWwebjsHelpers(client: Client): Promise<boolean> {
+    const page = (client as unknown as { pupPage?: { evaluate?: <T>(fn: () => T) => Promise<T> } }).pupPage;
+    if (typeof page?.evaluate !== 'function') return true;
+    return (
+      (await page.evaluate(() => typeof (window as unknown as { WWebJS?: unknown }).WWebJS !== 'undefined')) === true
+    );
   }
 
   /**

@@ -728,6 +728,10 @@ git push origin v<version>
 The tag must be annotated and `v`-prefixed; `release.yml` triggers on `v*` and refuses to proceed if
 the tag string and `package.json` disagree.
 
+Release runs share one concurrency group, which holds the running release and at most one pending run.
+A tag pushed while one release runs and another waits cancels the waiting one, so push the next tag
+only once the previous run has started, and re-run any release run marked cancelled.
+
 ### What the tag automates
 
 ```mermaid

@@ -1487,7 +1487,7 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'ORIG1', body: 'new text', chatId: group, senderId: author }),
     );
-    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text', undefined, expect.any(Function));
     expect(onMessage).not.toHaveBeenCalled();
   });
 
@@ -1536,7 +1536,7 @@ describe('BaileysEvents encrypted edits and reactions', () => {
     expect(onMessageEdited).toHaveBeenCalledWith(
       expect.objectContaining({ messageId: 'ORIG1', body: 'new text', fromMe: true }),
     );
-    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text');
+    expect(recordMessageEdit).toHaveBeenCalledWith(group, 'ORIG1', 'new text', undefined, expect.any(Function));
   });
 
   it('reads an edit of a message that is still being processed, with the secret that copy carries', async () => {

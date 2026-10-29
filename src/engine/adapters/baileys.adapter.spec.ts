@@ -660,7 +660,9 @@ describe('BaileysAdapter lifecycle & status', () => {
 
   it('logout() with missing companion identity rejects, sends nothing, preserves auth, and stops locally', async () => {
     // No creds.me.id → the unlink cannot be addressed. The promise must reject, query()/rm() must NOT
-    // run, and the live socket must be torn down locally so no engine orphan remains.
+    // run, and the live socket must be torn down locally so no engine orphan remains. With no
+    // quarantined credentials in the auth dir the session never linked, which is not an unlink left
+    // incomplete (409, not 502).
     const rmSpy = jest.spyOn(fs.promises, 'rm').mockResolvedValue(undefined);
     try {
       const adapter = newAdapter();
@@ -668,7 +670,9 @@ describe('BaileysAdapter lifecycle & status', () => {
       fakeSock.user = undefined; // no linked companion identity
       (adapter as unknown as { sock: unknown }).sock = fakeSock;
 
-      await expect(adapter.logout()).rejects.toThrow(/no linked companion identity/i);
+      const outcome = adapter.logout();
+      await expect(outcome).rejects.toBeInstanceOf(EngineNotReadyError);
+      await expect(outcome).rejects.toThrow(/nothing to unlink/);
 
       expect(fakeSock.query).not.toHaveBeenCalled();
       expect(rmSpy).not.toHaveBeenCalled();

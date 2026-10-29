@@ -639,7 +639,7 @@ docker exec openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -
   -c "ALTER DATABASE \"$POSTGRES_DB\" RENAME TO \"${POSTGRES_DB}_pre_restore_$(date +%Y%m%d%H%M%S)\"" \
   -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
 tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
-  docker exec -i openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  docker exec -i openwa-postgres sh -c 'psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 
 # An external PostgreSQL server: rename the upgraded database and create an empty one under the
 # DATABASE_NAME the app uses in the same way, then load the dump into it. DATABASE_URL is not an
@@ -648,9 +648,23 @@ tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/
 # run psql under PGSSLMODE=verify-full (require when DATABASE_SSL_REJECT_UNAUTHORIZED=false), as the
 # command restore.sh prints does; libpq's default sslmode=prefer accepts any certificate. verify-full
 # also needs PGSSLROOTCERT set to the server's CA file: libpq otherwise reads ~/.postgresql/root.crt,
-# and sslrootcert=system needs libpq 16+ and a system CA store, which the image lacks
+# and sslrootcert=system needs libpq 16+ and a system CA store, which the image lacks. One transaction:
+# a load that fails leaves nothing behind. An archive holding database.schema (a POSTGRES_SCHEMA other
+# than public) has that schema only: skip the rename and the empty database and load it into the
+# database the app uses, as restore.sh prints, as a role that may create schemas and extensions there
+# and, when pg_trgm and unaccent live in that schema, owns them (the role that created them: the app's
+# own, or the one an earlier load ran as), or as a superuser. It moves the current copy of the schema
+# aside as <schema>_pre_restore_<time>, rows and all, and leaves the other schemas alone; pg_trgm and
+# unaccent, when they live in it, are dropped from the copy with its trigram index
+# (idx_messages_body_trgm) so the dump can create them again. A load that stops at "cannot drop
+# extension" means another schema uses them and nothing was changed; its DETAIL lines name what. When
+# that is another OpenWA deployment's idx_messages_body_trgm, drop that index and load again: that
+# deployment's contains search then reads its whole messages table until its next start builds the
+# index again, and answers 501 while it builds. Drop anything else named first and recreate it after
+# the load. Into an empty database, an extension it uses (pg_trgm, unaccent) that lives in another
+# application's schema has to exist first, and on PostgreSQL 12 or older so does pgcrypto
 tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
-  psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
+  psql --single-transaction -v ON_ERROR_STOP=1 "$DATABASE_URL"
 
 # 3. Check out the previous release and rebuild the image
 git checkout v<old-version>
@@ -729,7 +743,9 @@ User-managed files outside that list (for example the project-level `.env`) must
 # scripts/backup.sh captures:
 #   - main.sqlite   — auth (API keys) + audit log   (ALWAYS SQLite; MAIN_DATABASE_NAME, default ./data/main.sqlite)
 #   - openwa.sqlite — user data                      (DATABASE_NAME, default ./data/openwa.sqlite;
-#                                                     or a pg_dump when DATABASE_TYPE=postgres)
+#                                                     or a pg_dump when DATABASE_TYPE=postgres; a
+#                                                     POSTGRES_SCHEMA other than public is dumped
+#                                                     alone, and database.schema names it)
 #   - sessions/     — whatsapp-web.js state (SESSION_DATA_PATH)
 #   - baileys/      — Baileys credentials (BAILEYS_AUTH_DIR)
 #   - media/        — local media                    (STORAGE_LOCAL_PATH, archived whenever present; with
@@ -941,7 +957,7 @@ docker exec openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -
   -c "ALTER DATABASE \"$POSTGRES_DB\" RENAME TO \"${POSTGRES_DB}_pre_restore_$(date +%Y%m%d%H%M%S)\"" \
   -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
 tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
-  docker exec -i openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+  docker exec -i openwa-postgres sh -c 'psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 
 #    An external PostgreSQL server: rename the current database and create an empty one under the
 #    DATABASE_NAME the app uses in the same way, then load the dump into it. DATABASE_URL is not an
@@ -951,9 +967,24 @@ tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET
 #    DATABASE_SSL_REJECT_UNAUTHORIZED=false), as the command restore.sh prints does; libpq's default
 #    sslmode=prefer accepts any certificate. verify-full also needs PGSSLROOTCERT set to the server's
 #    CA file: libpq otherwise reads ~/.postgresql/root.crt, and sslrootcert=system needs libpq 16+
-#    and a system CA store, which the image lacks
+#    and a system CA store, which the image lacks. One transaction: a load that fails leaves nothing
+#    behind. An archive holding database.schema (a POSTGRES_SCHEMA other than public) has that schema
+#    only: skip the rename and the empty database and load it into the database the app uses, as
+#    restore.sh prints, as a role that may create schemas and extensions there and, when pg_trgm and
+#    unaccent live in that schema, owns them (the role that created them: the app's own, or the one
+#    an earlier load ran as), or as a superuser. It moves the current copy of the schema aside as
+#    <schema>_pre_restore_<time>, rows and all, and leaves the other schemas alone; pg_trgm and
+#    unaccent, when they live in it, are dropped from the copy with its trigram index
+#    (idx_messages_body_trgm) so the dump can create them again. A load that stops at "cannot drop
+#    extension" means another schema uses them and nothing was changed; its DETAIL lines name what.
+#    When that is another OpenWA deployment's idx_messages_body_trgm, drop that index and load again:
+#    that deployment's contains search then reads its whole messages table until its next start
+#    builds the index again, and answers 501 while it builds. Drop anything else named first and
+#    recreate it after the load. Into an empty database, an extension it uses (pg_trgm, unaccent)
+#    that lives in another application's schema has to exist first, and on PostgreSQL 12 or older so
+#    does pgcrypto
 tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
-  psql -v ON_ERROR_STOP=1 "$DATABASE_URL"
+  psql --single-transaction -v ON_ERROR_STOP=1 "$DATABASE_URL"
 
 # 4. Start the app and CONFIRM an existing API key still authenticates
 docker compose up -d

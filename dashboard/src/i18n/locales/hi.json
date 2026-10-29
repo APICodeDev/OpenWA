@@ -203,7 +203,8 @@
       "delete": "संदेश हटाने में विफल",
       "clickButton": "बटन पर क्लिक करने में विफल",
       "fileTooLarge": "फ़ाइल बहुत बड़ी है (अधिकतम 18 MB)",
-      "searchHitSessionNotReady": "इस संदेश का सत्र कनेक्ट नहीं है"
+      "searchHitSessionNotReady": "इस संदेश का सत्र कनेक्ट नहीं है",
+      "searchHitChatNotListed": "इस संदेश की चैट सूची में नहीं मिल सकी"
     },
     "loadMessagesError": "संदेश लोड नहीं किए जा सके। सर्वर लॉग्स की जाँच करें।",
     "messageStatus": {
@@ -609,6 +610,7 @@
       "badge_other": "{{count}} फ़िल्टर",
       "addCondition": "शर्त जोड़ें",
       "removeCondition": "शर्त हटाएँ",
+      "removeValue": "{{value}} हटाएँ",
       "caseSensitive": "केस संवेदी (Case sensitive)",
       "contactPlaceholder": "नंबर या WhatsApp ID...",
       "textPlaceholder": "मेल खाने वाला टेक्स्ट...",
@@ -658,6 +660,7 @@
       "updateFailed": "वेबहुक अपडेट करने में विफल: {{message}}",
       "testOk": "वेबहुक परीक्षण सफल! स्थिति: {{status}}",
       "testFailed": "वेबहुक परीक्षण विफल: {{message}}",
+      "testStatus": "प्राप्तकर्ता ने HTTP {{status}} लौटाया",
       "testError": "वेबहुक का परीक्षण करने में विफल: {{message}}"
     },
     "actions": {
@@ -779,6 +782,7 @@
     "modalTitle": "API कुंजी बनाएँ",
     "createdTitle": "API कुंजी बनाई गई",
     "createdHint": "इस कुंजी को अभी कॉपी करें। आप इसे फिर से नहीं देख पाएंगे।",
+    "copyKey": "कुंजी कॉपी करें",
     "namePlaceholder": "उदा. Production Key",
     "nameTooShort": "कम से कम 3 वर्ण उपयोग करें।",
     "rolesTitle": "भूमिका संदर्भ",
@@ -1004,6 +1008,7 @@
     },
     "sendFailed": "संदेश भेजने में विफल",
     "notOnWhatsApp": "यह नंबर WhatsApp पर पंजीकृत नहीं है",
+    "tooLong": "{{max}} से अधिक अंक एक फ़ोन नंबर नहीं हैं। एक ही नंबर दर्ज करें।",
     "batch": {
       "status": {
         "pending": "लंबित",
@@ -1040,6 +1045,7 @@
       "phonePlaceholder": "उदा. 919876543210 या 6281234567890",
       "check": "जाँचें",
       "checking": "जाँच हो रही है...",
+      "tooLong": "{{max}} से अधिक अंक एक फ़ोन नंबर नहीं हैं। एक बार में एक नंबर जाँचें।",
       "autoPrefix": "10 अंकों वाले नंबरों में अपने आप <strong>+91</strong> जोड़ें (12 अंकों वाले नंबर जैसे हैं वैसे ही रहेंगे)",
       "silent": "<strong>पूरी तरह चुपचाप:</strong> यह जाँच सीधे WhatsApp के पंजीकरण रिकॉर्ड से पूछताछ करती है। संपर्क को कोई सूचना, आवाज़ या संदेश नहीं मिलता।",
       "resultTitle": "जाँच परिणाम",
@@ -1102,6 +1108,7 @@
       "tenDigitAdded": "({{ten}} दस अंकों वाले → +91 जोड़ा गया)",
       "tenDigitAddedPreserved": "({{ten}} दस अंकों वाले → +91 जोड़ा गया, {{twelve}} बारह अंकों वाले यथावत रखे गए)",
       "tooMany": "बहुत अधिक नंबर: {{parsed}} पहचाने गए, एक बार में अधिकतम {{max}}। शुरू करने के लिए {{excess}} नंबर हटाएँ।",
+      "tooLong": "छोड़े गए, {{max}} से अधिक अंक (एक नंबर नहीं): {{count}}। हर नंबर को अलग पंक्ति में रखें।",
       "start": "बैच जाँच शुरू करें",
       "stop": "जाँच रोकें",
       "export": "परिणाम निर्यात करें (CSV)",
