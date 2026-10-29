@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { In, IsNull, Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Message } from '../message/entities/message.entity';
+import { updateMessageMetadata } from '../message/message-metadata';
 import { StorageService } from '../../common/storage/storage.service';
 import { sweepOrphanedFiles } from '../../common/storage/orphan-sweep';
 import { startGuardedInterval } from '../../common/utils/guarded-interval';
@@ -32,6 +33,8 @@ const SWEEP_CHUNK_SIZE = 500;
 
 /** `metadata.media.data` holding a remote URL (a URL-based send) rather than base64 bytes. */
 const MEDIA_URL_POINTER = /^https?:\/\//i;
+/** Largest stored metadata the purge reads for an archived marker; a row with inline base64 is far above it. */
+const ARCHIVED_MARKER_MAX_METADATA_BYTES = 64 * 1024;
 
 /** The inline media shape carried on a persisted row's `metadata.media`. */
 interface InlineMedia {
@@ -300,12 +303,17 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
         this.purgeCursor = after;
         break;
       }
-      // Rows whose delete failed keep their columns; they are retried once the walk wraps around.
-      await this.repository.update(clearableIds, {
-        mediaPath: null as unknown as undefined,
-        mediaMimetype: null as unknown as undefined,
-      });
-      cleared += clearableIds.length;
+      // Rows whose delete failed keep their columns; they are retried once the walk wraps around. So does a row
+      // whose archived marker could not be dropped, which the next run then retries with the file already gone.
+      const markerKept = await this.dropArchivedMarkers(clearableIds);
+      const clearedIds = clearableIds.filter(id => !markerKept.has(id));
+      if (clearedIds.length > 0) {
+        await this.repository.update(clearedIds, {
+          mediaPath: null as unknown as undefined,
+          mediaMimetype: null as unknown as undefined,
+        });
+      }
+      cleared += clearedIds.length;
 
       // A short batch means the backlog is drained and the next run starts over from the lowest id;
       // a run that hits the batch cap resumes where it stopped.
@@ -315,6 +323,43 @@ export class ChatMediaArchiveService implements OnModuleInit, OnModuleDestroy {
 
     if (cleared > 0) this.logger.log(`Chat media retention purge cleared ${cleared} file(s)`);
     return cleared;
+  }
+
+  /**
+   * Under MESSAGE_INLINE_MEDIA=archive a row also points at its file through `metadata.media.archived`, which a
+   * client reads as "the bytes are behind the media route". Drop it once the file is gone, through the same
+   * compare-and-set every metadata writer uses, so a reaction written meanwhile survives. Only a small metadata
+   * can carry the marker (an archive-only row holds no base64), and the size is checked first, so the inline
+   * copies of the default mode are never read. Returns the ids whose marker is still there.
+   */
+  private async dropArchivedMarkers(ids: string[]): Promise<Set<string>> {
+    const marked = await this.repository
+      .createQueryBuilder('m')
+      .select('m.id', 'id')
+      .where('m.id IN (:...ids)', { ids })
+      .andWhere('CASE WHEN OCTET_LENGTH(m.metadata) <= :maxBytes THEN m.metadata LIKE :marker ELSE FALSE END', {
+        maxBytes: ARCHIVED_MARKER_MAX_METADATA_BYTES,
+        marker: '%"archived":true%',
+      })
+      .getRawMany<{ id: string }>();
+    const kept = new Set<string>();
+    for (const { id } of marked) {
+      try {
+        await updateMessageMetadata(this.repository, { id }, metadata => {
+          const media = metadata.media as Record<string, unknown> | undefined;
+          if (!media || !('archived' in media)) return metadata;
+          const { archived: _archived, ...rest } = media;
+          void _archived;
+          return { ...metadata, media: rest };
+        });
+      } catch (error) {
+        kept.add(id);
+        this.logger.warn(`Failed to drop the archived marker of message ${id}; keeping its row for the next sweep`, {
+          error: String(error),
+        });
+      }
+    }
+    return kept;
   }
 
   /**
