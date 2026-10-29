@@ -297,6 +297,9 @@ export class SessionEngineLifecycle {
   // the engine-driven DISCONNECTED for the instance being torn down; the verb announces it after the
   // eviction. Identity-keyed, never on the id alone: a replacement engine from a concurrent start()
   // must still announce, and a mark outliving a refused verb must not mute a later real disconnect.
+  // A start or reconnect retiring the engine it just launched marks it too (retireLaunchedEngine): the
+  // claim it would be written under may be a peer's by then, so that verb writes the status itself, on
+  // a row that is still this node's or has no owner.
   private readonly operatorTeardowns = new Map<string, IWhatsAppEngine>();
 
   // The ONE-SHOT budget for an automatic stuck-auth credential reset, hoisted out of the adapter
@@ -1446,11 +1449,9 @@ export class SessionEngineLifecycle {
         retired = false;
       }
       if (retired) {
-        // The read can outlive this attempt. Only its captured engine is ours to retire.
-        if (mine && this.engines.isLive(id, mine)) {
-          await this.fences.destroyWithEscalation(id, mine);
-          this.engines.deleteIfLive(id, mine);
-        }
+        // The read can outlive this attempt. Only its captured engine is ours to retire, and only while it
+        // is still the live one (retireLaunchedEngine checks), so a peer's row is not written over.
+        if (mine) await this.controls.retireLaunchedEngine(id, mine);
         // Nothing will re-register an engine for this episode now. A state left pending would keep the
         // session counted as active: its lease renewed with no engine behind it, and its cap slot held.
         if (!this.engines.has(id) && this.reconnectStates.get(id) === state && state.started === attempt) {

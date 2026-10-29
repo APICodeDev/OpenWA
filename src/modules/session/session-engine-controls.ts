@@ -196,7 +196,7 @@ export interface SessionEngineControlsHost {
   /** True once shutdown() has begun; the lifecycle never reopens. */
   isClosed(): boolean;
   stoppingSessions: StopMarks;
-  /** The engine each operator-initiated teardown is retiring; see the lifecycle field of the same name. */
+  /** The engine each teardown that writes its own status is retiring; see the lifecycle field of the same name. */
   operatorTeardowns: Map<string, IWhatsAppEngine>;
   reconnectStates: Map<string, ReconnectState>;
   stuckAuthRecoveryUsed: Set<string>;
@@ -557,18 +557,15 @@ export class SessionEngineControls {
   }
 
   /**
-   * Tears down the engine a start registered for a session that was stopped or deleted meanwhile, and drops
-   * the reconnect state it armed for it.
+   * Tears down the engine a start registered for a session that was stopped or deleted meanwhile, or whose
+   * claim this node lost, and drops the reconnect state it armed for it.
    */
   private async reapRetiredEngine(
     id: string,
     resurrected: IWhatsAppEngine | undefined,
     reconnectState?: ReconnectState,
   ): Promise<void> {
-    if (resurrected && this.engines.isLive(id, resurrected)) {
-      await this.fences.destroyWithEscalation(id, resurrected);
-      this.engines.deleteIfLive(id, resurrected);
-    }
+    if (resurrected) await this.retireLaunchedEngine(id, resurrected);
     // The reconnect state this start armed up front serves no engine now, and the stop or delete that retired it
     // may have run before the state was armed, so nothing else would drop it. A replacement engine that
     // registered meanwhile keeps its own.
@@ -578,6 +575,41 @@ export class SessionEngineControls {
     // A delete() that raced this start purged the on-disk auth dirs BEFORE this init re-created them, so
     // purge again: the window then leaves no credential residue behind (no-op for a stop()).
     await this.host.purgeAuthDirsIfDeleted(id);
+  }
+
+  /**
+   * Tear down the engine a start or a reconnect registered for a session retired while it initialized: a
+   * stop, a delete, or a claim this node no longer holds. The read that found the claim gone is newer than
+   * the in-memory ownership the engine callbacks are fenced on, so the engine's own DISCONNECTED report is
+   * held back like an operator teardown's, and the status is written instead only on a row that is still
+   * this node's or has no owner: a peer's row keeps the status its own engine gave it (INV-6).
+   */
+  async retireLaunchedEngine(id: string, engine: IWhatsAppEngine): Promise<void> {
+    if (!this.engines.isLive(id, engine)) return;
+    this.operatorTeardowns.set(id, engine);
+    try {
+      await this.fences.destroyWithEscalation(id, engine);
+      this.engines.deleteIfLive(id, engine);
+    } finally {
+      if (this.operatorTeardowns.get(id) === engine) this.operatorTeardowns.delete(id);
+    }
+    const nodeId = this.host.nodeId;
+    const ours =
+      nodeId === undefined
+        ? { id }
+        : [
+            { id, nodeId },
+            { id, nodeId: IsNull() },
+          ];
+    try {
+      const { affected } = await this.sessionRepository.update(ours, { status: SessionStatus.DISCONNECTED });
+      if (affected) this.broadcaster.announce(id, SessionStatus.DISCONNECTED);
+    } catch (error) {
+      this.logger.warn('Failed to persist the disconnected status of a retired launch', {
+        sessionId: id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async stop(id: string, hooks: StopHooks = {}): Promise<Session> {
