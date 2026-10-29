@@ -2150,12 +2150,14 @@ describe('MessageProjector (inbound projection)', () => {
   });
 
   describe('handleMessageAck payload', () => {
-    it('carries the chat the engine named, on the socket and on both webhook events', () => {
+    it('carries the chat the engine named, on the socket and on both webhook events', async () => {
       const engine = makeEngine();
       engines.set(SESSION_ID, engine);
 
       projector.handleMessageAck(SESSION_ID, engine, 'M1', 'delivered', '120363000@g.us');
       projector.handleMessageAck(SESSION_ID, engine, 'M2', 'failed', '120363000@g.us');
+      // An ack that names its chat is announced once the stored row has been read.
+      for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
 
       const expected = { id: 'M1', messageId: 'M1', status: 'delivered', ack: 2, chatId: '120363000@g.us' };
       expect(eventsGateway.emitMessageAck).toHaveBeenCalledWith(SESSION_ID, expected);
