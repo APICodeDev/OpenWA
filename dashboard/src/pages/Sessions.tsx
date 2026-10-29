@@ -352,6 +352,11 @@ export function Sessions() {
           void fetchSessions();
           dismissQrForSession(event.sessionId);
           toast.error(t('sessions.toasts.failedTitle'), t('sessions.toasts.failedDesc'));
+        } else if (event.status === 'initializing' && prev?.status === 'qr_ready') {
+          // The wait to be linked ended with its connection (on Baileys also a pairing code left unused for five
+          // minutes), and the session registers again with a new QR. Neither the QR nor a pairing code on screen can
+          // link any more. From authenticating the code was used, and the modal closes on the ready that follows.
+          clearQrCodeForSession(event.sessionId);
         }
       },
       [toast, t, fetchSessions, queryClient, dismissQrForSession, clearQrCodeForSession, updateSessions],

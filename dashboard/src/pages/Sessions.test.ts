@@ -810,6 +810,38 @@ test('the pairing phone field keeps a formatted paste whole and refuses one of m
   assert.equal(generate.disabled, false);
 });
 
+// A pairing code belongs to the connection that was waiting to be linked. When that wait ends (Baileys ends it once a
+// code goes unused for five minutes, and registers again with a new QR) the code can no longer link, so it is taken off
+// the screen and the number stays for a new request. Entering the code moves the session on to authenticating, which
+// keeps it.
+for (const [status, cleared] of [
+  ['initializing', true],
+  ['authenticating', false],
+] as const) {
+  test(`a shown pairing code is ${cleared ? 'cleared' : 'kept'} when the session moves on to ${status}`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    window.sessionStorage.setItem('openwa_api_key', 'test-key');
+    const { phoneInput, generate } = await openPairingPhoneField();
+    fireEvent.change(phoneInput, { target: { value: '6281234567890' } });
+    fireEvent.click(generate);
+    const dialog = screen.getByRole('dialog');
+    await within(dialog).findByText('1234 - 5678');
+
+    pushSessionStatus(SESSION_QR.id, status);
+    if (cleared) {
+      assert.equal(
+        within(dialog).queryByText('1234 - 5678') === null,
+        true,
+        'a code that can no longer link is still shown',
+      );
+      assert.equal((within(dialog).getByLabelText('Phone Number') as HTMLInputElement).value, '6281234567890');
+      within(dialog).getByRole('button', { name: 'Generate Pairing Code' });
+    } else {
+      within(dialog).getByText('1234 - 5678');
+    }
+  });
+}
+
 // Joining the digit groups of text around a number makes a valid-looking one nobody typed: "Order 12 call +62 ..." and
 // "... ext. 12" both hold 15 digits. Only digits and the usual formatting are read; anything else is kept and refused.
 test('the pairing phone field accepts formatted numbers whole and refuses text with other characters', async () => {
