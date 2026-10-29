@@ -504,12 +504,19 @@ export class WebhookRedriveResultDto {
   failed!: number;
 
   @ApiProperty({
-    description: 'Rows not replayed: the webhook was removed, disabled or unsubscribed, or a plugin cancelled it.',
+    description:
+      'Selected rows not replayed: a hook cancelled the replay, or the row or its webhook changed during the call. ' +
+      'Rows of a removed, disabled or unsubscribed webhook are left out before the batch and not counted.',
     example: 0,
   })
   skipped!: number;
 
-  @ApiProperty({ description: 'Replayable rows still in scope after this call.', example: 0 })
+  @ApiProperty({
+    description:
+      'Rows the redrive would still take after this call: replayable, in scope, with an active webhook subscribed ' +
+      'to the event.',
+    example: 0,
+  })
   remaining!: number;
 }
 

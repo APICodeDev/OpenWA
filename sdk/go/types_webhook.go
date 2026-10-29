@@ -239,10 +239,13 @@ type WebhookRedriveResult struct {
 	Enqueued int `json:"enqueued"`
 	// Failed replays failed again; their rows stay, with attempts raised by one.
 	Failed int `json:"failed"`
-	// Skipped rows were not replayed: the webhook was removed, disabled or
-	// unsubscribed, or a plugin cancelled it.
+	// Skipped is the selected rows not replayed: a hook cancelled the replay,
+	// or the row or its webhook changed during the call. Rows of a removed,
+	// disabled or unsubscribed webhook are left out before the batch and not
+	// counted.
 	Skipped int `json:"skipped"`
-	// Remaining is the replayable rows still in scope after this call.
+	// Remaining is the rows the redrive would still take after this call:
+	// replayable, in scope, with an active subscribed webhook.
 	Remaining int `json:"remaining"`
 }
 
