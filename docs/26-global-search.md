@@ -332,6 +332,21 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   and rebuilds. The candidate query walks the existing `IDX_messages_createdAt` index, so contains search
   adds no other index.
 
+  The index holds `openwa_unaccent(body)`, which PostgreSQL only indexes because the wrapper is declared
+  IMMUTABLE, while `unaccent` follows its rules file, which a major upgrade may change. After an upgrade
+  whose rules changed (`pg_upgrade` keeps the index as it was built), rebuild the index so it folds
+  messages the way the queries now fold terms; until then a message stored before the upgrade may be
+  missed:
+
+  ```sql
+  REINDEX INDEX CONCURRENTLY idx_messages_body_trgm;
+  ```
+
+  The build lock is a session-level advisory lock, as the boot migration lock is
+  ([05 - Database Design](./05-database-design.md#56-migration-strategy)): a PgBouncer in transaction
+  pooling mode runs each transaction on whichever server connection is free, so neither lock stays with
+  the session that took it. Point OpenWA at PostgreSQL directly or at a pooler in session mode.
+
 **Turning it off** later stops `match=contains` (`501` again) but keeps the index, and with it the cost
 on every write, so turning it back on needs no rebuild. To reclaim the space, drop it by hand:
 
