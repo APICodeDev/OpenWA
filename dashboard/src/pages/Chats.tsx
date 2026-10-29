@@ -28,7 +28,7 @@ import {
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
-import { formatPhoneForDisplay } from '../utils/formatPhone';
+import { chatTitle, formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
@@ -1004,11 +1004,21 @@ export function Chats() {
         await readSessions();
       } while (relist.again);
     } catch {
-      // The next status event, or a search hit in that session, reads the list again.
+      // The next status event, the page being shown again, or a search hit in that session, reads the list again.
     } finally {
       relist.running = false;
     }
   }, [readSessions]);
+  // A deleted session sends no frame of its own: a running one reports disconnected while its row still exists, and
+  // one that was not running reports nothing. Coming back to the page reads the list again, so a session deleted
+  // from another tab or by another client is not kept open.
+  useEffect(() => {
+    const relistWhenShown = () => {
+      if (document.visibilityState !== 'hidden') void relistSessions();
+    };
+    document.addEventListener('visibilitychange', relistWhenShown);
+    return () => document.removeEventListener('visibilitychange', relistWhenShown);
+  }, [relistSessions]);
   const handleSessionStatus = useCallback(
     (event: { sessionId: string; status: string }) => {
       if (!listedSessionsRef.current.some(session => session.id === event.sessionId)) {
@@ -1638,7 +1648,7 @@ export function Chats() {
       .unblock(sessionId, chat.id)
       .then(expectSuccess)
       .then(() => {
-        showSuccessToast(t('chats.rowActions.unblocked', { name: chat.name || chat.id.split('@')[0] }));
+        showSuccessToast(t('chats.rowActions.unblocked', { name: chatTitle(chat) }));
         return queryClient.invalidateQueries({ queryKey: ['contacts-blocked', sessionId] });
       })
       .catch(failWith('chats.rowActions.blockFailed'));
@@ -1679,7 +1689,7 @@ export function Chats() {
     const started = confirmAction;
     const { kind, chat } = started;
     const sessionId = selectedSessionId;
-    const name = chat.name || chat.id.split('@')[0];
+    const name = chatTitle(chat);
     setConfirmRunning(started);
     try {
       if (kind === 'leave') {
@@ -1976,7 +1986,7 @@ export function Chats() {
                           must never be formatted as one). Only under a saved name: an unnamed chat's
                           title already is the number. The raw JID is in the contact panel. */}
                       {activePhoneText && activeChat.name && (
-                        <span className="room-contact-phone">
+                        <span className="room-contact-phone" title={activePhoneText}>
                           <bdi dir="ltr">{activePhoneText}</bdi>
                         </span>
                       )}
@@ -2297,11 +2307,7 @@ export function Chats() {
             </>
           }
         >
-          <p>
-            {t(CONFIRM_TEXT[confirmAction.kind].question, {
-              name: confirmAction.chat.name || confirmAction.chat.id.split('@')[0],
-            })}
-          </p>
+          <p>{t(CONFIRM_TEXT[confirmAction.kind].question, { name: chatTitle(confirmAction.chat) })}</p>
           <p className="text-muted">{t(CONFIRM_TEXT[confirmAction.kind].warning)}</p>
         </Modal>
       )}

@@ -702,11 +702,44 @@ test('the chat list search clear button returns focus to the field it cleared', 
   assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
 });
 
+// A number in a title is isolated left to right, so a right-to-left page keeps its digit groups in order.
+const isolated = (number: string) => `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
+
+test('an unnamed chat is titled by its number on its row, in its menu, its dialogs and its reply banner', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceNow.name = '';
+  aliceThread = [threadRow(1)];
+  const { container } = renderPage();
+  const number = isolated('+1 555 000 1111');
+  await screen.findByText(number);
+  assert.equal(container.querySelector('.chat-item-name')?.textContent, number, 'the row shows the bare digits');
+
+  fireEvent.click(screen.getByRole('button', { name: `Actions for ${number}` }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.ok(screen.getByRole('dialog', { name: `Mute "${number}"` })));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  fireEvent.click(screen.getByText(number));
+  await screen.findByText('message 1');
+  fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+  await waitFor(() =>
+    assert.equal(container.querySelector('.replying-to-title')?.textContent, `Replying to ${number}`),
+  );
+});
+
+test('an unnamed privacy-id chat keeps the digits of its id on its row and in its menu, never formatted', async () => {
+  const { screen } = rtl;
+  Object.assign(aliceNow, { id: '262813461250073@lid', name: '' });
+  renderPage();
+  await screen.findByText('262813461250073');
+  assert.ok(screen.getByRole('button', { name: 'Actions for 262813461250073' }));
+});
+
 test('an unnamed chat is titled by its number, formatted and isolated left to right, in the header and the panel', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   aliceNow.name = '';
   const { container } = renderPage();
-  fireEvent.click(await screen.findByText('15550001111'));
+  fireEvent.click(await screen.findByText(isolated('+1 555 000 1111')));
   const title = await waitFor(() => {
     const name = container.querySelector('.room-header .room-contact-name') as HTMLElement;
     assert.equal(name?.textContent, '+1 555 000 1111');
@@ -1035,6 +1068,20 @@ test('the session switcher lists every session with its state, and only a connec
   assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
 });
 
+test('the session switcher gives the whole number of each session in its title, for a list column that cuts it', async () => {
+  const { screen, fireEvent } = rtl;
+  listOffline = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const titleIn = (scope: Element | null) => scope?.querySelector('.session-phone-line bdi')?.getAttribute('title');
+  assert.equal(titleIn(container.querySelector('.session-switcher-btn')), '+1 555 123 4567');
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  assert.deepEqual(
+    screen.getAllByRole('option').map(option => titleIn(option)),
+    ['+1 555 123 4567', '+49 174 156 5212'],
+  );
+});
+
 test('the session switcher matches a number only for a query that reads as one, and a name with a digit by name', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listSecond = true;
@@ -1249,6 +1296,31 @@ test('an open session deleted on the server with no other one ready leaves none 
   await screen.findByText('No connected sessions');
   assert.equal(screen.queryByRole('dialog') === null, true, "the deleted session's mute dialog stayed open");
   assert.equal(container.querySelector('.session-switcher') === null, true);
+});
+
+test('an open session deleted with no status frame gives way once the page is shown again', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  const reads = sessionReads();
+  const visibilityChanged = () => act(() => void document.dispatchEvent(new window.Event('visibilitychange')));
+
+  // Deleted from another tab while this one was hidden: a session that was not running sends no frame at all.
+  setTabHidden(true);
+  try {
+    visibilityChanged();
+    mainDeleted = true;
+    assert.equal(sessionReads(), reads, 'a hidden page read the session list');
+  } finally {
+    setTabHidden(false);
+  }
+  visibilityChanged();
+  await waitFor(() => assert.equal(selectedSessionName(container), SECOND_SESSION.name));
+  assert.equal(sessionReads(), reads + 1, 'showing the page did not read the session list once');
+  assert.equal(container.querySelector('.room-header') === null, true, "the deleted session's chat stayed open");
 });
 
 test('the session list read at load does not undo a newer list a status frame read before it answered', async () => {

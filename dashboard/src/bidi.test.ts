@@ -26,7 +26,7 @@ const CHATS_TSX = readFileSync(join(SRC, 'pages/Chats.tsx'), 'utf8');
 test('the open chat header isolates the phone number, and the contact panel the raw id', () => {
   assert.match(
     CHATS_TSX,
-    /<span className="room-contact-phone">\s*<bdi dir="ltr">\{activePhoneText\}<\/bdi>/,
+    /<span className="room-contact-phone"[^>]*>\s*<bdi dir="ltr">\{activePhoneText\}<\/bdi>/,
     'the header number is not isolated',
   );
   assert.match(
@@ -41,6 +41,28 @@ test('the header number keeps the page direction, so it sits at the start edge w
   // right and, in a box the header column stretches, sit at the left edge of an Arabic header with the name at the
   // right; the name, which is cut and so takes its own direction, hugs the start edge instead (see below).
   assert.doesNotMatch(body('pages/Chats.css', '.chats-page .room-contact-phone'), /unicode-bidi/);
+});
+
+test('the header number stays on one line in a narrow room, cut by its own isolate, with the whole number in its title', () => {
+  // At the room's 262px minimum the number wrapped onto a second line under the name. Cut by the isolate, written left
+  // to right, it loses its last digits in either page direction, as the session number does.
+  assert.match(
+    CHATS_TSX,
+    /<span className="room-contact-phone" title=\{activePhoneText\}>/,
+    'the header number has no title',
+  );
+  const line = body('pages/Chats.css', '.chats-page .room-contact-phone');
+  assert.match(line, /display:\s*flex/);
+  assert.match(line, /min-width:\s*0/);
+  const cut = body('pages/Chats.css', '.chats-page .room-contact-phone > bdi');
+  for (const declaration of [
+    /white-space:\s*nowrap/,
+    /overflow:\s*hidden/,
+    /text-overflow:\s*ellipsis/,
+    /min-width:\s*0/,
+  ]) {
+    assert.match(cut, declaration);
+  }
 });
 
 test('text cut with an ellipsis takes its direction from its own characters', () => {
@@ -81,6 +103,7 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
     '.chats-page .preview-filename',
     '.chats-page .replying-to-body',
     '.chats-page .session-name',
+    '.chats-page .group-info-member .name',
   ];
   for (const selector of hugging) {
     const rule = body('pages/Chats.css', selector);
@@ -93,6 +116,15 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
 });
 
+test("a group member's number hugs the start edge, where the name above it is", () => {
+  // Isolated left to right, the number takes start as left: stretched across the column it sat at the left edge of an
+  // Arabic page.
+  const dialog = readFileSync(join(SRC, 'components/chats/GroupInfoDialog.tsx'), 'utf8');
+  assert.match(dialog, /<bdi className="number" dir="ltr">/);
+  assert.match(body('pages/Chats.css', '.chats-page .group-info-member'), /flex-direction:\s*column/);
+  assert.match(body('pages/Chats.css', '.chats-page .group-info-member .number'), /align-self:\s*flex-start/);
+});
+
 test('a message body takes its direction from its own characters', () => {
   // Under the page direction an English question in an Arabic page drew its question mark at the left.
   assert.match(body('pages/Chats.css', '.chats-page .message-content > .message-text'), /unicode-bidi:\s*plaintext/);
@@ -101,7 +133,7 @@ test('a message body takes its direction from its own characters', () => {
 test('the session number is cut by its own isolate, so an RTL page keeps its first digits', () => {
   // The line around it keeps the page direction; cut there, an Arabic page lost "+4" and kept the last digits.
   const picker = readFileSync(join(SRC, 'components/chats/SessionPicker.tsx'), 'utf8');
-  assert.match(picker, /<span className="session-phone-line">[\s\S]*?<bdi dir="ltr">/);
+  assert.match(picker, /<span className="session-phone-line">[\s\S]*?<bdi dir="ltr"[^>]*>/);
   const cut = body('pages/Chats.css', '.chats-page .session-phone-line > bdi');
   assert.match(cut, /text-overflow:\s*ellipsis/);
   assert.match(cut, /min-width:\s*0/);

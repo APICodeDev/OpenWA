@@ -71,6 +71,9 @@ const CHAT_TEXT_ON: Array<[string, string[]]> = [
   // bubble has its own.
   ['--chat-link', ['--chat-bubble-in']],
   ['--chat-link-out', ['--chat-bubble-out']],
+  // A group sender's name heads an incoming bubble in one of eight colours. One hex for both themes measured 3.92:1 at
+  // worst on the light bubble and 2.44:1 on the dark one.
+  ...Array.from({ length: 8 }, (_, i): [string, string[]] => [`--chat-sender-${i + 1}`, ['--chat-bubble-in']]),
 ];
 const CHAT_ANCHORS = [
   '.chats-page {',
@@ -90,6 +93,13 @@ for (const anchor of CHAT_ANCHORS) {
   });
 }
 
+test('a group sender is named in the eight palette colours measured above, not in a hex of its own', () => {
+  const thread = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/chats/ChatThread.tsx'), 'utf8');
+  assert.match(thread, /const SENDER_COLORS = 8;/);
+  assert.match(thread, /return `var\(--chat-sender-\$\{\(Math\.abs\(hash\) % SENDER_COLORS\) \+ 1\}\)`;/);
+  assert.match(thread, /<div className="message-sender" style=\{\{ color: senderColor\(/);
+});
+
 const chatRule = (selector: string): string => {
   const css = CHATS_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
   for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
@@ -106,8 +116,32 @@ test('the group dialog fields draw their placeholders in the chat meta token, no
   }
 });
 
-test('the outgoing bubble draws its links in their own token', () => {
+test('the outgoing bubble draws its links in their own token, and a quote its links in the same tokens', () => {
   assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
+  assert.match(chatRule('.chats-page .quote-body a'), /color:\s*var\(--chat-link\)/);
+  assert.match(chatRule('.chats-page .message-bubble.outgoing .quote-body a'), /color:\s*var\(--chat-link-out\)/);
+});
+
+// The accent fill is one green in every theme. The New group check mark sits on it, and the group dialog's tile draws
+// its glyph on a gradient from a lighter green into it: as graphics each needs 3:1 on every colour under it.
+test('the glyphs drawn on the accent fill clear 3:1 on it, and on both ends of the group tile gradient', () => {
+  const accent = rgb(chatToken(chatBlock('.chats-page {'), '--chat-accent'));
+  const check = chatRule('.chats-page .select-check.checked');
+  assert.match(check, /background:\s*var\(--chat-accent\)/);
+  const tile = chatRule('.chats-page .group-info-tile');
+  const light = /background:\s*linear-gradient\(135deg, (#[0-9a-f]{6}), var\(--chat-accent\)\)/.exec(tile)?.[1];
+  assert.ok(light, 'the group tile is no longer the gradient this test measures');
+  for (const [name, rule, fills] of [
+    ['check mark', check, [accent]],
+    ['group tile', tile, [rgb(light), accent]],
+  ] as const) {
+    const glyph = /(?:^|;)\s*color:\s*(#[0-9a-f]{6})/.exec(rule)?.[1];
+    assert.ok(glyph, `the ${name} sets no glyph colour of its own`);
+    for (const fill of fills) {
+      const ratio = contrast(rgb(glyph), fill);
+      assert.ok(ratio >= 3, `the ${name} glyph is ${ratio.toFixed(2)}:1 on its fill`);
+    }
+  }
 });
 
 // The muted lines a bubble holds are --chat-meta in an incoming one. On the dark outgoing green that token is 3.27:1,
@@ -149,6 +183,9 @@ const TEXT_FILLS: Array<[string, string[], string?]> = [
   ['--chat-accent-text', ['.chats-page .session-avatar']],
   ['--chat-meta', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
   ['--chat-meta-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
+  // A link in a quote: the outgoing blue measured 4.30:1 on the quote in both the light and the dark green.
+  ['--chat-link', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
+  ['--chat-link-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
 ];
 
 for (const anchor of CHAT_ANCHORS) {
@@ -488,8 +525,20 @@ test('text that uses --text-muted is not faded again with opacity', () => {
 
 test('muted text on a tinted row uses --text-secondary, which clears AA on the tint in both themes', () => {
   // The chat list rows are no tint: the active one is the opaque --chat-active, on which the chat text tests above
-  // check the time and the preview (--chat-meta) in every theme.
+  // check the time and the preview (--chat-meta) in every theme. Those are the tokens the row draws them in, and no
+  // rule for the active row paints them in another.
   assert.match(chatRule('.chats-page .chat-item-card.active'), /background:\s*var\(--chat-active\)/);
+  assert.match(chatRule('.chats-page .chat-item-time'), /(?:^|;)\s*color:\s*var\(--chat-meta\)/);
+  assert.match(chatRule('.chats-page .chat-item-snippet'), /(?:^|;)\s*color:\s*var\(--chat-meta\)/);
+  assert.match(chatRule('.chats-page .chat-item-card.unread .chat-item-time'), /color:\s*var\(--chat-accent-text\)/);
+  const repainted = [...CHATS_CSS.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(m => /\.active\b[^,]*\.chat-item-(?:time|snippet)/.test(m[1]) && /(?:^|;)\s*color:/.test(m[2]))
+    .map(m => m[1].trim());
+  assert.deepEqual(
+    repainted,
+    [],
+    'the active row paints its time or preview in a token the tests above do not measure',
+  );
   // [stylesheet, selector, tint alpha in light, tint alpha in dark, surface under the tint]
   const rules: [string, string, number, number, string][] = [
     // The selected template row is --primary-soft: 12 percent in light, 18 percent in dark.

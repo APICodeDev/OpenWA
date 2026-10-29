@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, Plus, Send, Smile, X } from 'lucide-react';
 import { messageApi, type Chat, type MessageType } from '../../services/api';
 import { type ChatMessageView } from '../../utils/chatMessages';
+import { chatTitle } from '../../utils/formatPhone';
 import { buildMediaSendPayload, buildOptimisticMetadata, quotedIdOf } from '../../utils/composerSend';
 import { messagesQueryKey, useChatMessagesActions, upsertCachedMessage } from '../../hooks/useChatMessages';
 import { useRole } from '../../hooks/useRole';
@@ -317,7 +318,11 @@ function ChatComposer({
             <span className="preview-filename">{attachment.filename}</span>
             <span className="preview-filesize">({(attachment.file.size / 1024).toFixed(1)} KB)</span>
           </div>
-          <button className="btn-banner-close btn-remove-attachment" onClick={handleRemoveAttachment}>
+          <button
+            className="btn-banner-close btn-remove-attachment"
+            onClick={handleRemoveAttachment}
+            aria-label={t('messageTester.removeFile')}
+          >
             <X size={18} />
           </button>
         </div>
@@ -343,15 +348,18 @@ function ChatComposer({
           <div className="replying-preview-content">
             <div className="replying-to-title">
               {t('chats.replyingTo', {
-                name:
-                  replyingTo.direction === 'outgoing' ? t('chats.you') : activeChat.name || activeChat.id.split('@')[0],
+                name: replyingTo.direction === 'outgoing' ? t('chats.you') : chatTitle(activeChat),
               })}
             </div>
             <div className="replying-to-body">
               {replyingTo.type !== 'text' ? typeLabel(replyingTo.type) : replyingTo.body}
             </div>
           </div>
-          <button className="btn-banner-close btn-close-reply" onClick={() => setReplyingTo(null)}>
+          <button
+            className="btn-banner-close btn-close-reply"
+            onClick={() => setReplyingTo(null)}
+            aria-label={t('common.close')}
+          >
             <X size={18} />
           </button>
         </div>

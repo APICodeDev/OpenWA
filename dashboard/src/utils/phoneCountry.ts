@@ -1,7 +1,13 @@
 // The country a phone number dials into, for a flag beside it. Like formatPhone, this reads the E.164
 // country code off the leading digits rather than pulling in libphonenumber: WhatsApp numbers arrive
-// digits-only with the code in place, and a flag is decoration, so a code shared by several countries
-// (1 for the whole NANP) answers no country rather than a wrong one.
+// digits-only with the code in place. A code several territories share answers a territory only for the
+// ranges that are its alone (see SHARED_CODES). A range a territory borrows from the main country of the
+// plan answers that main country, as the mobiles Svalbard, Aland, the Vatican, the Cocos and Christmas
+// Islands and Western Sahara take from Norway, Finland, Italy, Australia and Morocco do. Only a range that
+// two or more territories share without the main country answers no country. The flag is decoration
+// (aria-hidden), so the main country's flag on a borrowed number costs little, and no flag on every one of
+// those mobiles would cost more. 1 answers no country: the NANP's countries differ by area code, which this
+// table does not hold.
 
 // Country code → ISO 3166-1 alpha-2 region. Codes are prefix-free, so the first match by length wins.
 const REGION_BY_CODE: Record<string, string> = {
@@ -14,14 +20,11 @@ const REGION_BY_CODE: Record<string, string> = {
   '33': 'FR',
   '34': 'ES',
   '36': 'HU',
-  '39': 'IT',
   '40': 'RO',
   '41': 'CH',
   '43': 'AT',
-  '44': 'GB',
   '45': 'DK',
   '46': 'SE',
-  '47': 'NO',
   '48': 'PL',
   '49': 'DE',
   '51': 'PE',
@@ -33,7 +36,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '57': 'CO',
   '58': 'VE',
   '60': 'MY',
-  '61': 'AU',
   '62': 'ID',
   '63': 'PH',
   '64': 'NZ',
@@ -52,7 +54,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '98': 'IR',
   // Three digits: Africa and the Atlantic
   '211': 'SS',
-  '212': 'MA',
   '213': 'DZ',
   '216': 'TN',
   '218': 'LY',
@@ -96,7 +97,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '258': 'MZ',
   '260': 'ZM',
   '261': 'MG',
-  '262': 'RE',
   '263': 'ZW',
   '264': 'NA',
   '265': 'MW',
@@ -104,6 +104,7 @@ const REGION_BY_CODE: Record<string, string> = {
   '267': 'BW',
   '268': 'SZ',
   '269': 'KM',
+  // Tristan da Cunha also dials 290; ISO 3166-1 counts it, with Ascension, in Saint Helena's region.
   '290': 'SH',
   '291': 'ER',
   '297': 'AW',
@@ -118,7 +119,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '355': 'AL',
   '356': 'MT',
   '357': 'CY',
-  '358': 'FI',
   '359': 'BG',
   '370': 'LT',
   '371': 'LV',
@@ -152,7 +152,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '507': 'PA',
   '508': 'PM',
   '509': 'HT',
-  '590': 'GP',
   '591': 'BO',
   '592': 'GY',
   '593': 'EC',
@@ -161,7 +160,6 @@ const REGION_BY_CODE: Record<string, string> = {
   '596': 'MQ',
   '597': 'SR',
   '598': 'UY',
-  '599': 'CW',
   // Oceania and Asia
   '670': 'TL',
   '672': 'NF',
@@ -216,13 +214,66 @@ const REGION_BY_CODE: Record<string, string> = {
   '998': 'UZ',
 };
 
-/** The region of a digits-only international number, or null when the code is unknown or shared. */
+// Codes several regions share. Each range is the leading digits after the code that only the territory it names uses,
+// or that only territories other than the main country share (null), from libphonenumber's metadata; any other number
+// answers the main country of the plan.
+const SHARED_CODES: Record<string, { ranges: Array<[RegExp, string | null]>; main: string | null }> = {
+  // The whole NANP: the United States, Canada and the Caribbean, told apart by area code.
+  '1': { ranges: [], main: null },
+  // Kazakhstan took the 6 and 7 ranges of the Russian plan.
+  '7': { ranges: [[/^[67]/, 'KZ']], main: 'RU' },
+  // The Vatican's own landlines; its mobiles are Italian ones.
+  '39': { ranges: [[/^06698/, 'VA']], main: 'IT' },
+  // Jersey, Guernsey and the Isle of Man have their own landline codes and mobile blocks, and Guernsey premium numbers.
+  '44': {
+    ranges: [
+      [/^(?:1534|7(?:509|700[378]|797|829|937))/, 'JE'],
+      [/^(?:1481|7(?:781|839|911[17])|98[01])/, 'GG'],
+      [/^(?:1624|7(?:4576|524|624))/, 'IM'],
+    ],
+    main: 'GB',
+  },
+  // Svalbard's own landlines; its mobiles are Norwegian ones.
+  '47': { ranges: [[/^79/, 'SJ']], main: 'NO' },
+  // The Cocos and Christmas Islands' own exchanges; their mobiles are Australian ones.
+  '61': {
+    ranges: [
+      [/^8(?:51(?:0(?:02|31|60|89)|1(?:18|76)|223)|91(?:62|703))/, 'CC'],
+      [/^8(?:51(?:0(?:01|30|59|88)|1(?:17|46|75)|2(?:22|35))|91(?:64|958))/, 'CX'],
+    ],
+    main: 'AU',
+  },
+  // Western Sahara has no range of its own: its landlines and mobiles are in Morocco's plan.
+  '212': { ranges: [], main: 'MA' },
+  // Mayotte's own landlines, mobiles and VoIP ranges.
+  '262': { ranges: [[/^(?:26(?:89|9)|639|7093|9(?:398[01]|478[01]|769))/, 'YT']], main: 'RE' },
+  // Aland's own landlines; its mobiles are Finnish ones.
+  '358': { ranges: [[/^18/, 'AX']], main: 'FI' },
+  // Saint Martin's own landline ranges, and the ones it shares with Saint Barthelemy but not Guadeloupe. Their mobiles
+  // are Guadeloupe's.
+  '590': {
+    ranges: [
+      [/^590(?:0[079]|[14]3|30|5[068]|7[79])/, 'MF'],
+      [/^590(?:2[79]|5[12]|87)/, null],
+    ],
+    main: 'GP',
+  },
+  // Bonaire, Sint Eustatius and Saba.
+  '599': { ranges: [[/^[347]/, 'BQ']], main: 'CW' },
+};
+
+/** The region of a digits-only international number, or null when its code is unknown or its range shared. */
 export function regionOfPhone(phone: string | null | undefined): string | null {
   const digits = phone?.replace(/\D/g, '') ?? '';
   if (digits.length < 7) return null;
-  // 7 is Russia, except 76 and 77, which Kazakhstan took. 1 is the whole NANP: no single country.
-  if (digits[0] === '7') return /^7[67]/.test(digits) ? 'KZ' : 'RU';
-  if (digits[0] === '1') return null;
+  // Codes are prefix-free, so the first length that names a shared code is the code.
+  const shared = [1, 2, 3].find(length => digits.slice(0, length) in SHARED_CODES);
+  if (shared) {
+    const { ranges, main } = SHARED_CODES[digits.slice(0, shared)];
+    const rest = digits.slice(shared);
+    const range = ranges.find(([leading]) => leading.test(rest));
+    return range ? range[1] : main;
+  }
   return REGION_BY_CODE[digits.slice(0, 2)] ?? REGION_BY_CODE[digits.slice(0, 3)] ?? null;
 }
 

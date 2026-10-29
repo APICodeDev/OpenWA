@@ -73,3 +73,14 @@ export function formatPhoneForDisplay(phoneOrJid: string): string | null {
 export function isolateNumber(number: string): string {
   return `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
 }
+
+/**
+ * What a chat is called on its row, in its menu and in a sentence: its name, else the formatted number of a phone id,
+ * isolated left to right, else the digits of its id. A privacy id (@lid) is no phone number, so its digits are never
+ * formatted as one.
+ */
+export function chatTitle(chat: { id: string; name?: string }): string {
+  if (chat.name) return chat.name;
+  const phone = formatPhoneForDisplay(chat.id);
+  return phone ? isolateNumber(phone) : chat.id.split('@')[0];
+}

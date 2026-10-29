@@ -39,13 +39,14 @@ import ArchivedMediaPreview, { type ArchivedMediaKind } from './ArchivedMediaPre
 import MessageBody from './MessageBody';
 
 // Stable per-sender colour for group message labels, like WhatsApp gives each participant a colour.
-// Hashed from the sender's name so the same person keeps the same colour across a session. The palette
-// is tuned to stay legible on both the light and dark incoming-bubble backgrounds.
-const SENDER_COLORS = ['#d1416f', '#7c5cff', '#0a86c4', '#1a8f5c', '#c26a00', '#c0392b', '#0e7c86', '#8e44ad'];
+// Hashed from the sender's name so the same person keeps the same colour across a session. The colours
+// are the chat palette's --chat-sender-1 to -8 (Chats.css), which each theme sets to clear 4.5:1 on its
+// incoming bubble: no one hex does that on both the light and the dark bubble.
+const SENDER_COLORS = 8;
 const senderColor = (name: string): string => {
   let hash = 0;
   for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  return SENDER_COLORS[Math.abs(hash) % SENDER_COLORS.length];
+  return `var(--chat-sender-${(Math.abs(hash) % SENDER_COLORS) + 1})`;
 };
 
 /** A message's time in epoch seconds: the WhatsApp timestamp, else when the gateway stored it. */

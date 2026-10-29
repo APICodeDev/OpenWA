@@ -23,12 +23,22 @@
   --chat-accent-hover: #008f6f;
   --chat-quote-accent: #06cf9c;
   --chat-link: #0271a6;
-  --chat-link-out: #0271a6;
+  --chat-link-out: #026c9e;
   /* The WhatsApp read blue is 2.13:1 on the outgoing bubble; this one clears 3:1 for the icon there. Read
      and delivered also differ in aria-label and title, never by colour alone. */
   --chat-tick-read: #1f8fc4;
   --chat-icon: #54656f;
   --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  /* A group sender's name on the incoming bubble (ChatThread picks one per sender): each hue clears 4.5:1 there, so
+     the dark set below lightens every one of them. */
+  --chat-sender-1: #d03c6b;
+  --chat-sender-2: #7756ff;
+  --chat-sender-3: #097cb5;
+  --chat-sender-4: #188556;
+  --chat-sender-5: #b06000;
+  --chat-sender-6: #c0392b;
+  --chat-sender-7: #0e7c86;
+  --chat-sender-8: #8e44ad;
 
   width: 100%;
   height: 100vh;
@@ -55,10 +65,18 @@
   --chat-pill-active-bg: #0a332c;
   --chat-pill-active-text: #1fbf95;
   --chat-link: #53bdeb;
-  --chat-link-out: #8fd4f4;
+  --chat-link-out: #9edaf5;
   --chat-tick-read: #53bdeb;
   --chat-icon: #aebac1;
   --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+  --chat-sender-1: #dc7093;
+  --chat-sender-2: #987eff;
+  --chat-sender-3: #0c9be2;
+  --chat-sender-4: #1ea76b;
+  --chat-sender-5: #dd7900;
+  --chat-sender-6: #dd7469;
+  --chat-sender-7: #12a2b0;
+  --chat-sender-8: #b57dcc;
 }
 
 /* System-dark twin: the default 'system' theme removes data-theme entirely, so the explicit rule above
@@ -82,10 +100,18 @@
     --chat-pill-active-bg: #0a332c;
     --chat-pill-active-text: #1fbf95;
     --chat-link: #53bdeb;
-    --chat-link-out: #8fd4f4;
+    --chat-link-out: #9edaf5;
     --chat-tick-read: #53bdeb;
     --chat-icon: #aebac1;
     --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+    --chat-sender-1: #dc7093;
+    --chat-sender-2: #987eff;
+    --chat-sender-3: #0c9be2;
+    --chat-sender-4: #1ea76b;
+    --chat-sender-5: #dd7900;
+    --chat-sender-6: #dd7469;
+    --chat-sender-7: #12a2b0;
+    --chat-sender-8: #b57dcc;
   }
 }
 
@@ -1199,7 +1225,8 @@
   height: 52px;
   border-radius: 14px;
   background: linear-gradient(135deg, #5fd17b, var(--chat-accent));
-  color: #fff;
+  /* Dark on both ends of the green: white was 1.93:1 on the light one. */
+  color: #0f172a;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1405,6 +1432,9 @@
   flex: 1;
 }
 
+/* The name and the number hug the start edge, as a chat name does (see .chat-item-name): stretched across the column,
+   a Latin name (by its own direction) and the number (isolated left to right) sat at the left edge of an Arabic
+   page, away from the avatar and the names beside them. */
 .chats-page .group-info-member .name {
   font-weight: 500;
   color: var(--text-primary);
@@ -1412,11 +1442,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .group-info-member .number {
   font-size: 0.8125rem;
   color: var(--chat-meta);
+  align-self: flex-start;
 }
 
 .chats-page .group-info-role {
@@ -1534,12 +1567,13 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: #fff;
 }
 
+/* Content on the accent fill is dark: white on it is 3.03:1 (see contrast-pairs.test.ts). */
 .chats-page .select-check.checked {
   background: var(--chat-accent);
   border-color: var(--chat-accent);
+  color: #0f172a;
 }
 
 .chats-page .new-group-fields {
@@ -1702,6 +1736,8 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  /* The room menu hangs from the room (see .room-menu-popover). */
+  position: relative;
 }
 
 .chats-page .room-header,
@@ -1775,11 +1811,21 @@
 }
 
 /* The number under the name is isolated left to right in the markup (<bdi dir="ltr">), so the line keeps the page
-   direction and sits at the start edge with the name. */
-
+   direction and sits at the start edge with the name. It stays on one line in a narrow room, cut by its own isolate
+   as the session number is (see .session-phone-line): its last digits give way, in either page direction, and the
+   whole number is in its title. */
 .chats-page .room-contact-phone {
+  display: flex;
+  min-width: 0;
   font-size: 0.8125rem;
   color: var(--chat-meta);
+}
+
+.chats-page .room-contact-phone > bdi {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chats-page .room-header-actions {
@@ -1789,14 +1835,17 @@
   flex-shrink: 0;
 }
 
-.chats-page .room-menu {
-  position: relative;
-}
-
+/* The chat layout clips what runs past its bottom edge, so the menu is placed against the room rather than its button:
+   6px under the button, which the 64px header centres (40px tall, 12px from the top), and at the button's end edge,
+   which the header's end padding, the contact panel button and the gap between them keep from the room's. Capped by
+   the room's height, the entries scroll inside it on a short window or a phone held sideways, as the session
+   picker's do. */
 .chats-page .room-menu-popover {
   position: absolute;
-  top: calc(100% + 6px);
-  inset-inline-end: 0;
+  top: calc(64px - 6px);
+  inset-inline-end: calc(0.75rem + 40px + 0.25rem);
+  max-height: calc(100% - 64px + 6px - 0.75rem);
+  overflow-y: auto;
   z-index: 30;
   min-width: 200px;
   padding: 0.375rem;
@@ -2141,6 +2190,14 @@
   background: var(--chat-bubble-out);
 }
 
+/* Forced colours paint every bubble in the page colour and drop its shadow, which ran one message into the next on
+   the wallpaper: each bubble draws its edge instead. */
+@media (forced-colors: active) {
+  .chats-page .message-bubble {
+    border: 1px solid CanvasText;
+  }
+}
+
 /* The tail on the first bubble of a run, on the side the bubble comes from. */
 .chats-page .run-start .message-bubble.incoming {
   border-start-start-radius: 0;
@@ -2226,13 +2283,16 @@
   padding-inline-start: 1.25rem;
 }
 
-.chats-page .message-text a {
+/* A link in a quote takes the same tokens: the app's link green is 4.23:1 on a quote in a light outgoing bubble. */
+.chats-page .message-text a,
+.chats-page .quote-body a {
   color: var(--chat-link);
   text-decoration: underline;
 }
 
 /* The blue of an incoming link is 4.07:1 on the light green and 3.74:1 on the dark one. */
-.chats-page .message-bubble.outgoing .message-text a {
+.chats-page .message-bubble.outgoing .message-text a,
+.chats-page .message-bubble.outgoing .quote-body a {
   color: var(--chat-link-out);
 }
 
@@ -2547,6 +2607,15 @@
 .chats-page .message-bubble-container:hover .message-actions-menu,
 .chats-page .room-messages:not([data-pointer]) .message-bubble-container:focus-within .message-actions-menu {
   display: flex;
+}
+
+/* A touch screen reveals the actions with a tap, as a mouse does with hover. iOS Safari gives :hover on a tap only to an
+   element it takes for clickable, and a message has no click handler of its own; a pointer cursor marks it as one,
+   with no other effect on a screen that has no pointer to show. */
+@media (hover: none) {
+  .chats-page .message-bubble-container {
+    cursor: pointer;
+  }
 }
 
 /* A bubble is a keyboard stop (ChatThread): the ring says which message the arrow keys act on. */

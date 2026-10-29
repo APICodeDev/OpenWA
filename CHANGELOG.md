@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Group dashboard phone numbers in threes and fours, so `+49 157 333 4 4455` now reads `+49 157 3334 4455`; 10-digit numbers keep their shape (#1940).
 - Make the deleted-message and omitted-media labels in outgoing dashboard chat bubbles readable in dark mode.
 - Match the dashboard New chat search against contact numbers only when the query reads as a phone number, so a name with a digit no longer lists every contact whose number holds that digit.
+- Read the dashboard Chats page's session list again when the page is shown, so a session deleted elsewhere no longer stays open.
+- Draw group sender names in dashboard chat threads in colours that clear 4.5:1 on the incoming bubble in light and dark themes.
+- Draw links inside a quoted dashboard chat message in the chat link colours, which clear 4.5:1 on the quote in light and dark themes.
+- Draw the selection check in the dashboard New group list dark on its green fill, where white measured under 3:1.
+- Name the buttons that remove a staged file and close a reply above the dashboard chat composer for screen readers.
+- Announce the unread badges on dashboard chat list rows to screen readers, including the dot of a chat marked as unread.
+- Mark dashboard chat messages as tappable on touch screens, so iOS reveals their reply, react and delete actions on a tap as hover does with a mouse.
+- Fit the dashboard chat room's menu to the room's height, scrolling its entries, so a short window no longer cuts off the last ones.
+- Keep a member's name and number at the start edge of the dashboard group dialog in right-to-left languages, where a Latin name and every number sat at the left.
+- Name an unnamed dashboard chat by its formatted number on its list row, in its menu, dialogs and toasts and on the reply banner, instead of the bare digits of its id.
 
 ## [0.26.0] - 2026-10-28
 
