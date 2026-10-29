@@ -277,10 +277,11 @@ export class WwebjsLifecycle {
    */
   private reinjectUnverifiedSince = 0;
   /**
-   * The unverified reload episode (its reinjectUnverifiedSince) in which a helpers read last answered no, or failed;
-   * 0 when none. Kept per episode, not per navigation, so a page stuck reloading still counts its answers.
+   * When a helpers read last answered no, or failed (Date.now()), 0 when none. Kept across the navigations of an
+   * episode, so a page stuck reloading still counts its answers. A read is kept only if no navigation landed while it
+   * ran, so one kept from an earlier episode predates the navigation that began the current one.
    */
-  private helpersMissingInEpisode = 0;
+  private helpersMissingReadAt = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -1246,7 +1247,7 @@ export class WwebjsLifecycle {
         helpersPending = false;
         // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
         if (!found && this.client === client && navigationsBefore === this.navigationCount) {
-          this.helpersMissingInEpisode = this.reinjectUnverifiedSince;
+          this.helpersMissingReadAt = Date.now();
         }
       }
     };
@@ -1269,8 +1270,9 @@ export class WwebjsLifecycle {
       return this.isInNavigationReinjectWindow();
     } catch {
       // A helpers read the timeout cut short is no answer yet: the page answered CONNECTED in time, so it is alive
-      // unless an earlier read in this reload episode already answered no, or failed, which counts toward the cap as
-      // an in-budget one does. When the late read answers, a yes verifies the reload and a no or a failure is kept.
+      // unless the no or failure kept from an earlier read was itself read past the cap of this episode. Judged at
+      // that read's time, late reads recycle the pages in-budget reads recycle, one interval later, and never a page
+      // that re-injected since. When the late read answers, a yes verifies the reload and a no or a failure is kept.
       if (connected && helpersPending) {
         void running.then(
           found => {
@@ -1278,7 +1280,8 @@ export class WwebjsLifecycle {
           },
           () => undefined,
         );
-        return this.helpersMissingInEpisode === this.reinjectUnverifiedSince ? this.reinjectStillHealing() : true;
+        const since = this.reinjectUnverifiedSince;
+        return since === 0 || this.helpersMissingReadAt - since < NAVIGATION_EPISODE_CAP_MS;
       }
       if (connected) return this.reinjectStillHealing();
       // Inside the navigation window the evaluate rejecting (context destroyed, window.require not

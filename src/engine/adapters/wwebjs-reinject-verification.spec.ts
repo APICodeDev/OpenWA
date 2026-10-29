@@ -68,6 +68,21 @@ describe('liveness of a ready page after a reload', () => {
     return answers;
   };
 
+  /** The watchdog's verdict on a run of answers: two dead in a row recycle the session. */
+  const recycled = (answers: boolean[]): boolean => answers.some((alive, i) => i > 0 && !alive && !answers[i - 1]);
+  /**
+   * Nine watchdog answers for one page, read in budget (1 s + 1 s) or late (7 s + 5 s): its helpers are missing until
+   * read number `found` (from 0), after a single reload or while it keeps reloading between probes.
+   */
+  const pageAnswers = async (found: number, late: boolean, loop: boolean): Promise<boolean[]> => {
+    const { adapter, client } = wire();
+    let reads = 0;
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, late ? 7_000 : 1_000));
+    client.pupPage.evaluate.mockImplementation(() => delayed(reads++ >= found, late ? 5_000 : 1_000));
+    reload(client);
+    return loop ? loopAnswers(adapter, client, 9) : watchdogAnswers(adapter, 9);
+  };
+
   beforeEach(() => {
     jest.useFakeTimers();
   });
@@ -172,8 +187,8 @@ describe('liveness of a ready page after a reload', () => {
   });
 
   // The same loaded host after a reload that never re-injected: every helpers read answers no, or fails, but only
-  // after the budget. Such an answer is still about the page now loaded, so it counts toward the cap on the next
-  // probe and the watchdog sees the page dead, twice in a row, once the cap has passed (ticks 4 to 6 of 60 s).
+  // after the budget. Such an answer is still about the page now loaded, so the next probe counts it once it was
+  // itself read past the cap, and the watchdog sees the page dead twice in a row (ticks 5 and 6 of 60 s).
   it.each([
     ['answers no', () => delayed(false, 5_000)],
     [
@@ -188,7 +203,7 @@ describe('liveness of a ready page after a reload', () => {
 
     const answers = await watchdogAnswers(adapter, 6);
 
-    expect(answers).toEqual([true, true, true, false, false, false]);
+    expect(answers).toEqual([true, true, true, true, false, false]);
     expect(client.pupPage.evaluate).toHaveBeenCalledTimes(6);
   });
 
@@ -202,11 +217,12 @@ describe('liveness of a ready page after a reload', () => {
 
     const answers = await loopAnswers(adapter, client, 8);
 
-    expect(answers).toEqual([true, true, true, false, false, false, false, false]);
+    expect(answers).toEqual([true, true, true, true, false, false, false, false]);
   });
 
   // The same loop on a page that does re-inject, only slowly and only from the fourth read on: the no kept from the
-  // reloads before costs one dead answer at most, the late yes closes the episode, and the next reload starts clean.
+  // reloads before was read under the cap and costs nothing, the late yes closes the episode, and the next reload
+  // starts clean.
   it('keeps a slow reloading page alive once it re-injects, after late no answers earlier in the episode', async () => {
     const { adapter, client } = wire();
     let reads = 0;
@@ -216,8 +232,26 @@ describe('liveness of a ready page after a reload', () => {
 
     const answers = await loopAnswers(adapter, client, 8);
 
-    expect(answers.some((alive, i) => i > 0 && !alive && !answers[i - 1])).toBe(false);
+    expect(recycled(answers)).toBe(false);
     expect(answers.slice(-4)).toEqual([true, true, true, true]);
+  });
+
+  // Helpers still missing at the first probe past the cap and found by the next: in budget that is one dead answer,
+  // then alive, and the session is kept. A late read answers from the no kept before it, so it must count that no
+  // only when it was itself read past the cap, or this healthy page would be recycled.
+  it.each([false, true])('keeps a page that re-injects in the first interval past the cap (loop %s)', async loop => {
+    expect(recycled(await pageAnswers(4, false, loop))).toBe(false);
+    expect(recycled(await pageAnswers(4, true, loop))).toBe(false);
+  });
+
+  // Wherever the re-inject lands, late reads recycle exactly the pages in-budget reads recycle (one interval later).
+  it.each(
+    [0, 1, 2, 3, 4, 5, 6, 7].flatMap((found): [number, boolean][] => [
+      [found, false],
+      [found, true],
+    ]),
+  )('decides alike for late and in-budget reads when the helpers appear at read %i (loop %s)', async (found, loop) => {
+    expect(recycled(await pageAnswers(found, true, loop))).toBe(recycled(await pageAnswers(found, false, loop)));
   });
 
   // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the
