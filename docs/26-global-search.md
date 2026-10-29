@@ -87,7 +87,10 @@ Japanese ones (`東京`) are: search those with `word`. What counts differs by d
 trigrams from any three characters, so a term needs three (`id` and `pm` only narrow, `:-)` searches,
 and a Hangul syllable is one character however it is encoded); `pg_trgm` takes them from letters and
 digits only, so on Postgres a term needs three of them in a row (`:-)`, `...`, `😂😂😂`, `a.b` and
-superscript digits such as `¹²³` only narrow there, and alone answer `400`). The terms may also hold
+superscript digits such as `¹²³` only narrow there, and alone answer `400`). On a database whose ctype
+(`LC_CTYPE`, `pg_database.datctype`) is `C` or `POSIX`, `pg_trgm` knows no letter or digit outside
+ASCII, so there the three must be ASCII letters or digits once accents are folded: `cafe` and `Café`
+search, while `서울역` or `東京都` alone answer `400`. The terms may also hold
 at most **64 characters** together, spaces not counted, or the query answers `400`: every character of
 a term is checked on every message holding the term's trigrams, on SQLite on the event loop every
 session shares, and on 200k messages a query of 1,000 characters took 2.8 s where one of 64 took about
@@ -235,8 +238,8 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   backend answered (e.g. `builtin-fts`).
 - **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric numeric param,
   an unknown `match`, or a `match=contains` query with no term the trigram index can look up (three
-  characters; on Postgres, three letters or digits in a row) or with more than 64 characters in its
-  terms (an FTS5 query-grammar error is also mapped to `400`, but since the
+  characters; on Postgres, three letters or digits in a row, ASCII ones under a `C` ctype) or with more
+  than 64 characters in its terms (an FTS5 query-grammar error is also mapped to `400`, but since the
   SQLite path quotes every token ordinary input no longer reaches that fallback) · `401`/`403` auth ·
   `501` no provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) / for
   `match=contains`, `SEARCH_CONTAINS_ENABLED` off, the index still building, or no way to build it (e.g.

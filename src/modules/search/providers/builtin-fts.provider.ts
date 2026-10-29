@@ -94,6 +94,12 @@ const POSTGRES_TRIGRAM_SOURCE = new RegExp(
 );
 
 /**
+ * POSTGRES_TRIGRAM_SOURCE on a database whose ctype is C or POSIX: pg_trgm classifies characters with the
+ * C library there, which knows no letter or digit outside ASCII, so it takes no trigram from any other.
+ */
+const POSTGRES_ASCII_TRIGRAM_SOURCE = new RegExp(`[A-Za-z0-9]{${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`);
+
+/**
  * The contains candidate SELECT list. It carries no snippet or score column: searchContains computes
  * both in the application (see containsSnippet and containsScore).
  */
@@ -164,9 +170,10 @@ function isShortTerm(term: string): boolean {
 /**
  * Whether pg_trgm can look `term` up. It takes trigrams from runs of letters and digits only, so `:-)` or
  * `😂😂😂` give it nothing and the search would scan the table; SQLite's trigram tokenizer indexes them.
+ * `asciiOnly` is a database with a C or POSIX ctype (POSTGRES_ASCII_TRIGRAM_SOURCE).
  */
-function postgresCanIndex(term: string): boolean {
-  return POSTGRES_TRIGRAM_SOURCE.test(foldSearchText(term));
+function postgresCanIndex(term: string, asciiOnly: boolean): boolean {
+  return (asciiOnly ? POSTGRES_ASCII_TRIGRAM_SOURCE : POSTGRES_TRIGRAM_SOURCE).test(foldSearchText(term));
 }
 
 /** A build that could not get the shared SQLite connection free of another transaction: it is tried again later. */
@@ -220,6 +227,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private containsBuildRetry?: NodeJS.Timeout;
   private readonly containsBuildRetryMs = TRIGRAM_BUILD_RETRY_MS;
   private destroyed = false;
+
+  /** Whether the Postgres database has a C or POSIX ctype, read by each build (see postgresCanIndex). */
+  private postgresAsciiTrigrams = false;
 
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
   // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
@@ -569,6 +579,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
     try {
+      const [{ ctype }] = await runner.manager.query<Array<{ ctype: string }>>(
+        `SELECT datctype AS ctype FROM pg_database WHERE datname = current_database()`,
+      );
+      this.postgresAsciiTrigrams = ctype === 'C' || ctype === 'POSIX';
       const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
         `SELECT pg_try_advisory_lock(${TRIGRAM_BUILD_LOCK}) AS locked`,
         [TRIGRAM_BUILD_LOCK_KEY],
@@ -711,7 +725,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private async searchContains(query: SearchQuery): Promise<SearchResults> {
     await this.ensureContains();
     const isPostgres = this.dataSource.options.type === 'postgres';
-    const terms = BuiltInFtsProvider.containsTermsOf(query.q, isPostgres);
+    const terms = BuiltInFtsProvider.containsTermsOf(query.q, isPostgres, this.postgresAsciiTrigrams);
     const start = Date.now();
     const limit = Math.max(1, Math.min(query.limit ?? 50, SEARCH_LIMIT_MAX));
     const offset = Math.max(0, query.offset ?? 0);
@@ -799,14 +813,14 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * it takes no trigram from (FTS5 returns nothing for it, pg_trgm scans every row), so such terms only
    * narrow the rows another term already found, and a query made of them alone is a 400 rather than a
    * full-table scan. SQLite takes trigrams from any three characters, pg_trgm only from three letters or
-   * digits in a row (see postgresCanIndex). The terms together are bounded by
-   * SEARCH_CONTAINS_TERMS_MAX_LENGTH, since each of their characters costs a check on every candidate.
+   * digits in a row, ASCII ones on a C or POSIX ctype (see postgresCanIndex). The terms together are bounded
+   * by SEARCH_CONTAINS_TERMS_MAX_LENGTH, since each of their characters costs a check on every candidate.
    */
-  private static containsTermsOf(q: string, isPostgres: boolean): string[] {
+  private static containsTermsOf(q: string, isPostgres: boolean, asciiOnly: boolean): string[] {
     const terms = containsTerms(q);
-    const canIndex = isPostgres ? postgresCanIndex : (term: string) => !isShortTerm(term);
+    const canIndex = (term: string) => (isPostgres ? postgresCanIndex(term, asciiOnly) : !isShortTerm(term));
     if (!terms.some(canIndex)) {
-      const unit = isPostgres ? 'letters or digits in a row' : 'characters';
+      const unit = isPostgres ? `${asciiOnly ? 'ASCII ' : ''}letters or digits in a row` : 'characters';
       throw new ContainsTermsRefusedError(
         `A contains search needs at least one term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more ${unit}.`,
       );
