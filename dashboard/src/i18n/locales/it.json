@@ -1014,6 +1014,7 @@
     },
     "sendFailed": "Impossibile inviare il messaggio",
     "notOnWhatsApp": "Questo numero non è registrato su WhatsApp",
+    "tooLong": "Più di {{max}} cifre non sono un solo numero di telefono. Inserisci un solo numero.",
     "batch": {
       "status": {
         "pending": "In attesa",

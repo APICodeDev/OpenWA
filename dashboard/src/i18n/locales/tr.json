@@ -1008,6 +1008,7 @@
     },
     "sendFailed": "Mesaj gönderilemedi",
     "notOnWhatsApp": "Bu numara WhatsApp'ta kayıtlı değil",
+    "tooLong": "{{max}} haneden uzun bir değer tek bir telefon numarası değildir. Tek bir numara girin.",
     "batch": {
       "status": {
         "pending": "Beklemede",

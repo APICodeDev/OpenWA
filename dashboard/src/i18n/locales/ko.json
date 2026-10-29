@@ -1008,6 +1008,7 @@
     },
     "sendFailed": "메시지를 보내지 못했습니다",
     "notOnWhatsApp": "이 번호는 WhatsApp에 등록되어 있지 않습니다",
+    "tooLong": "{{max}}자리를 넘는 숫자는 하나의 전화번호가 아닙니다. 번호를 하나만 입력하세요.",
     "batch": {
       "status": {
         "pending": "대기 중",

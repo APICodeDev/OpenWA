@@ -1008,6 +1008,7 @@
     },
     "sendFailed": "发送消息失败",
     "notOnWhatsApp": "该号码未在 WhatsApp 注册",
+    "tooLong": "超过 {{max}} 位数字不是一个电话号码。请只输入一个号码。",
     "batch": {
       "status": {
         "pending": "等待中",

@@ -1145,7 +1145,8 @@ for (const field of ['recipient', 'forward target'] as const) {
       }
       await rtl.waitFor(() => assert.equal(sendButton().disabled, false));
       rtl.fireEvent.click(sendButton());
-      await rtl.screen.findByText('This number is not registered on WhatsApp');
+      // The refusal names its reason: the number was never looked up, so nothing is said about its registration.
+      await rtl.screen.findByText('More than 15 digits is not one phone number. Enter one number.');
       assert.deepEqual(checked, field === 'recipient' ? [] : ['6281234567890'], 'the joined digits were looked up');
       assert.deepEqual(sent, [], 'a message was sent');
     } finally {

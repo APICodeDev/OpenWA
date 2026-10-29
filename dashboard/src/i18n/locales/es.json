@@ -964,6 +964,7 @@
     },
     "sendFailed": "Error al enviar el mensaje",
     "notOnWhatsApp": "Este número no está registrado en WhatsApp",
+    "tooLong": "Más de {{max}} dígitos no es un solo número de teléfono. Introduce un solo número.",
     "batch": {
       "status": {
         "pending": "Pendiente",

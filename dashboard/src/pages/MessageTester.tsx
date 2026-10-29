@@ -523,7 +523,10 @@ export function MessageTester() {
           setResponse({
             success: false,
             timestamp: new Date().toISOString(),
-            error: t('messageTester.notOnWhatsApp'),
+            error:
+              digits === null
+                ? t('messageTester.tooLong', { max: PHONE_DIGITS_MAX })
+                : t('messageTester.notOnWhatsApp'),
           });
           return;
         }
@@ -600,7 +603,7 @@ export function MessageTester() {
             let toChatId = forwardTo.trim();
             if (!toChatId.includes('@')) {
               const digits = phoneDigits(toChatId);
-              if (digits === null) throw new Error(t('messageTester.notOnWhatsApp'));
+              if (digits === null) throw new Error(t('messageTester.tooLong', { max: PHONE_DIGITS_MAX }));
               const resolvedTo = await contactApi.checkNumber(session, digits);
               assertCurrent();
               if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));

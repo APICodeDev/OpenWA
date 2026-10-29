@@ -1008,6 +1008,7 @@
     },
     "sendFailed": "Gagal mengirim pesan",
     "notOnWhatsApp": "Nomor ini tidak terdaftar di WhatsApp",
+    "tooLong": "Lebih dari {{max}} digit bukan satu nomor telepon. Masukkan satu nomor saja.",
     "batch": {
       "status": {
         "pending": "Menunggu",
