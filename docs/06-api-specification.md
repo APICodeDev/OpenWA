@@ -201,7 +201,7 @@ Single-recipient send routes under `/messages` return **HTTP 201** with `{ "mess
 
 Two consequences worth knowing:
 
-1. **A number reported as unregistered is refused before sending.** Baileys checks a phone destination when it has no LID mapping: a negative answer returns `400`, and an unanswered lookup returns `503`. Known LIDs skip that query. whatsapp-web.js also returns `400` when its lookup answers that the recipient cannot be resolved, which can include its first-contact limitation; a lookup that does not answer ends the send with the `500` engine error (`ENGINE_PAGE_ERROR`), whose outcome is not proven. Neither result guarantees that a registered recipient will receive the message.
+1. **A number reported as unregistered is refused before sending.** Baileys checks a phone destination when it has no LID mapping: a negative answer returns `400`, and an unanswered lookup returns `503`. Known LIDs skip that query. whatsapp-web.js also returns `400` when its lookup answers that the recipient cannot be resolved, which can include its first-contact limitation; a lookup that does not answer ends the send with the `500` engine error (`ENGINE_PAGE_ERROR`), whose outcome is not proven, while one cut short by a page reload keeps its retryable `409`. Neither result guarantees that a registered recipient will receive the message.
 2. **There is no synchronous delivery confirmation on either engine** (whatsapp-web.js or Baileys), so the `201` cannot be made to mean "delivered."
 
 **Before sending to a new number**, you can confirm it is a registered WhatsApp account with `GET /api/sessions/:sessionId/contacts/check/:number` (returns `{ exists, whatsappId }`; needs an `OPERATOR` key, like the send itself; see the Contacts reference).
