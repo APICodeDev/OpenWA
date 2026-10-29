@@ -16434,6 +16434,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The plugin registry could not be written; nothing was removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "summary": "Uninstall a plugin (removes its files; built-ins are protected)",
@@ -16881,6 +16891,16 @@
           },
           "404": {
             "description": "Plugin not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The plugin registry could not be written; nothing was changed",
             "content": {
               "application/json": {
                 "schema": {
