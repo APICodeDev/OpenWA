@@ -1,6 +1,7 @@
 /* istanbul ignore file -- PG-gated: only runs under DATABASE_TYPE=postgres (test-postgres CI job);
    skipped in the default test job, so its lines would be unread and skew the global coverage gate. */
 import 'reflect-metadata';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { createBootDataSource } from '../../pg-boot-migrations';
@@ -76,6 +77,39 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
     } finally {
       await a.destroy();
       await b.destroy();
+    }
+  }, 120_000);
+});
+
+(POSTGRES_ENABLED ? describe : describe.skip)('docs/05 index maintenance queries on a chain-built database', () => {
+  // The REINDEX line of the same block rewrites a real table and needs no check of its column names.
+  const selects = (): string[] => {
+    const doc = readFileSync(path.join(__dirname, '..', '..', '..', '..', 'docs', '05-database-design.md'), 'utf8');
+    const block = /```sql\n([\s\S]*?)```/.exec(doc.slice(doc.indexOf('### Index Maintenance')))?.[1] ?? '';
+    return block
+      .split(';')
+      .map(statement => statement.replace(/^\s*--.*$/gm, '').trim())
+      .filter(statement => statement.startsWith('SELECT'));
+  };
+
+  it('runs every SELECT the block hands operators, as written', async () => {
+    const ds = await createBootDataSource({
+      type: 'postgres',
+      host: process.env.DATABASE_HOST || 'localhost',
+      port: Number(process.env.DATABASE_PORT || 5432),
+      username: process.env.DATABASE_USERNAME || 'openwa',
+      password: process.env.DATABASE_PASSWORD || 'openwa',
+      database: process.env.DATABASE_NAME || 'openwa',
+      migrations: [path.join(__dirname, '..', '*{.ts,.js}')],
+    });
+    try {
+      const statements = selects();
+      expect(statements).toHaveLength(2);
+      for (const statement of statements) {
+        await expect(ds.query(statement)).resolves.toEqual(expect.any(Array));
+      }
+    } finally {
+      await ds.destroy();
     }
   }, 120_000);
 });
