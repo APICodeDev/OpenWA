@@ -313,7 +313,9 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   meanwhile are indexed by the triggers. A trigram index holds every three-character window of the body:
   on a synthetic corpus of 1,000,000 messages it took 289 MB, about 3.1 times the message text, and a
   9.4 s backfill. Later boots only check it; an index whose document count differs from `messages` (an
-  interrupted backfill, or rowids renumbered by a table rebuild) is emptied and backfilled again.
+  interrupted backfill, or rowids renumbered by a table rebuild) is emptied and backfilled again. A build
+  that finds another transaction holding the connection for more than 10 seconds (a data import, for
+  one) tries again every 30 seconds instead of failing.
 - **PostgreSQL** creates the `pg_trgm` and `unaccent` extensions when they are missing and the role may,
   the IMMUTABLE `openwa_unaccent(text)` wrapper, and the `idx_messages_body_trgm` GIN index on
   `openwa_unaccent(body)` with `CREATE INDEX CONCURRENTLY`, so writes go on during the build (it cannot

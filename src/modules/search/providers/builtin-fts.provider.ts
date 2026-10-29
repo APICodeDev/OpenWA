@@ -66,7 +66,7 @@ const TRIGRAM_BACKFILL_BATCH = 1000;
 export const TRIGRAM_BUILD_LOCK_KEY = 0x7472676d;
 export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
 
-/** How long a replica that found the build lock taken waits before trying it again. */
+/** How long a build kept from running (see retryContainsBuild) waits before trying again. */
 const TRIGRAM_BUILD_RETRY_MS = 30_000;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
@@ -168,6 +168,9 @@ function isShortTerm(term: string): boolean {
 function postgresCanIndex(term: string): boolean {
   return POSTGRES_TRIGRAM_SOURCE.test(foldSearchText(term));
 }
+
+/** A build that could not get the shared SQLite connection free of another transaction: it is tried again later. */
+class ConnectionBusyError extends Error {}
 
 /** Shape returned by the dialect-specific SELECT in buildSqlite / buildPostgres. */
 interface FtsResultRow {
@@ -473,7 +476,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       `SELECT max("rowid") AS last FROM "messages"`,
     );
     for (let from = 0; from < (last ?? 0); from += TRIGRAM_BACKFILL_BATCH) {
-      if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
+      if (!(await awaitNoOpenTransaction(this.dataSource))) {
+        throw new ConnectionBusyError('Another database transaction stayed open');
+      }
       await this.dataSource.query(
         `INSERT INTO "${table}"("rowid", "body")
            SELECT m."rowid", m."body" FROM "messages" m
@@ -499,9 +504,13 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
           ? await this.buildPostgresTrigramIndex()
           : await this.buildSqliteTrigramIndex();
     } catch (e) {
-      this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
-      this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      if (!(e instanceof ConnectionBusyError)) {
+        this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
+        this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      this.containsUnavailable = CONTAINS_UNAVAILABLE.building;
+      this.logger.warn(`Trigram index build postponed: ${e.message}`);
     }
     if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) this.retryContainsBuild();
     else if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
@@ -513,6 +522,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * with no valid index, and only a build attempt of this replica's own finds that, so it tries the lock
    * again until the index is ready or the attempt fails for a cause of its own. A search in the meantime
    * still finds an index the other replica finished (probePostgresTrigram).
+   *
+   * On SQLite, another transaction (a data import, for one) held the shared connection longer than the
+   * build waits for it. The next attempt starts a backfill it cut short again from empty.
    */
   private retryContainsBuild(): void {
     if (this.destroyed) return;
@@ -532,7 +544,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     if (!(await this.sqliteHasFts5())) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     const rows: Array<{ version: string }> = await this.dataSource.query(`SELECT sqlite_version() AS version`);
     if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return CONTAINS_UNAVAILABLE.sqliteTrigram;
-    if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
+    if (!(await awaitNoOpenTransaction(this.dataSource))) {
+      throw new ConnectionBusyError('Another database transaction stayed open');
+    }
     await this.ensureSqliteIndex(TRIGRAM_INDEX);
     return null;
   }

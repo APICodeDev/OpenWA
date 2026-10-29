@@ -5,6 +5,7 @@ import { DataSource } from 'typeorm';
 import { Message, MessageDirection } from '../../../modules/message/entities/message.entity';
 import { Session } from '../../../modules/session/entities/session.entity';
 import { AddMessagesFts1782400000000 } from '../../../database/migrations/1782400000000-AddMessagesFts';
+import * as sharedConnection from '../../../common/utils/shared-connection';
 import { SEARCH_CONTAINS_TERMS_MAX_LENGTH, SEARCH_CONTAINS_WINDOW } from '../search.constants';
 import { ContainsTermsRefusedError } from '../search-terms';
 import {
@@ -292,6 +293,86 @@ describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
     expect((await provider.search({ q: 'edited', match: 'contains' })).total).toBe(1);
     expect((await provider.search({ q: 'receipt 2400', match: 'contains' })).total).toBe(0);
     expect((await provider.search({ q: 'receipt 2401', match: 'contains' })).total).toBe(0);
+  });
+
+  describe('while another transaction holds the shared connection', () => {
+    let provider: BuiltInFtsProvider;
+
+    beforeEach(() => {
+      // A data import holds it for as long as it runs; the build gives up on it after 20 ms here.
+      const wait = sharedConnection.awaitNoOpenTransaction;
+      jest.spyOn(sharedConnection, 'awaitNoOpenTransaction').mockImplementation(source => wait(source, 20));
+      provider = new BuiltInFtsProvider(ds, containsOn);
+      Object.assign(provider, { containsBuildRetryMs: 20 });
+    });
+    afterEach(() => {
+      provider.onModuleDestroy();
+      jest.restoreAllMocks();
+    });
+
+    const searchOnceBuilt = async (q: string) => {
+      for (let i = 0; ; i++) {
+        try {
+          return await provider.search({ q, match: 'contains' });
+        } catch (e) {
+          if (i === 200 || !/still being built/.test(String(e))) throw e;
+          await new Promise(r => setTimeout(r, 10));
+        }
+      }
+    };
+
+    it('builds the index once the transaction ends instead of failing for good', async () => {
+      const importing = ds.createQueryRunner();
+      await importing.startTransaction();
+      try {
+        await provider.buildContainsIndex();
+        await expect(provider.search({ q: 'voic', match: 'contains' })).rejects.toThrow(/still being built/);
+      } finally {
+        await importing.rollbackTransaction();
+        await importing.release();
+      }
+
+      expect((await searchOnceBuilt('voic')).total).toBe(2);
+    });
+
+    it('builds again from empty a backfill the transaction cut short', async () => {
+      await insertBulk(2500, i => `Bulk receipt ${i}`);
+      const importing = ds.createQueryRunner();
+      const query = ds.query.bind(ds);
+      let begun = false;
+      jest.spyOn(ds, 'query').mockImplementation(async (sql: string, params?: Parameters<DataSource['query']>[1]) => {
+        const result: unknown = await query(sql, params);
+        // The first batch is in; the import begins before the second.
+        if (!begun && /m\."rowid" > \?/.test(sql)) {
+          begun = true;
+          await importing.startTransaction();
+        }
+        return result;
+      });
+
+      await provider.buildContainsIndex();
+      await expect(provider.search({ q: 'receipt', match: 'contains' })).rejects.toThrow(/still being built/);
+      await importing.rollbackTransaction();
+      await importing.release();
+
+      expect((await searchOnceBuilt('receipt 2499')).total).toBe(1);
+      await expect(integrityCheck()).resolves.toBeDefined();
+    });
+
+    it('still fails a build for good on any other error', async () => {
+      const query = ds.query.bind(ds);
+      const ddl = jest
+        .spyOn(ds, 'query')
+        .mockImplementation((sql: string, params?: Parameters<DataSource['query']>[1]) =>
+          /CREATE VIRTUAL TABLE/.test(sql) ? Promise.reject(new Error('disk I/O error')) : query(sql, params),
+        );
+
+      await provider.buildContainsIndex();
+      await new Promise(r => setTimeout(r, 60));
+
+      await expect(provider.search({ q: 'voic', match: 'contains' })).rejects.toThrow(/building its index failed/);
+      expect(ddl.mock.calls.filter(([sql]) => /CREATE VIRTUAL TABLE/.test(sql))).toHaveLength(1);
+    });
   });
 });
 
