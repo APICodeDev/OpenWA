@@ -4,7 +4,9 @@ import 'reflect-metadata';
 import { readFileSync } from 'fs';
 import * as path from 'path';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import { ConfigService } from '@nestjs/config';
 import { createBootDataSource } from '../../pg-boot-migrations';
+import { BuiltInFtsProvider } from '../../../modules/search/providers/builtin-fts.provider';
 
 /**
  * Postgres runtime coverage for the boot-migration advisory lock. Two "replicas" (independent
@@ -110,6 +112,159 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
       }
     } finally {
       await ds.destroy();
+    }
+  }, 120_000);
+});
+
+/**
+ * The session settings the data connection relies on, read back on every pooled connection: the runtime
+ * statement_timeout, the configured search_path and the UTC zone. Directly against PostgreSQL, and through
+ * PgBouncer in session mode when PGBOUNCER_PORT names one in front of the same server (docs/05 allows a
+ * session-mode pooler; PgBouncer refuses statement_timeout in the startup packet).
+ */
+(POSTGRES_ENABLED ? describe : describe.skip)('data connection session settings on every pooled connection', () => {
+  const host = process.env.DATABASE_HOST || 'localhost';
+  const credentials = {
+    username: process.env.DATABASE_USERNAME || 'openwa',
+    password: process.env.DATABASE_PASSWORD || 'openwa',
+  };
+  const directPort = Number(process.env.DATABASE_PORT || 5432);
+  const poolerPort = process.env.PGBOUNCER_PORT ? Number(process.env.PGBOUNCER_PORT) : undefined;
+  let admin: DataSource;
+
+  beforeAll(async () => {
+    admin = await new DataSource({
+      type: 'postgres',
+      host,
+      port: directPort,
+      ...credentials,
+      database: process.env.DATABASE_NAME || 'openwa',
+    }).initialize();
+  });
+
+  afterAll(async () => {
+    await admin?.destroy();
+  });
+
+  // The options app.module.ts builds for the data connection.
+  const appOptions = (port: number, database: string, schema: string): DataSourceOptions => ({
+    type: 'postgres',
+    schema,
+    host,
+    port,
+    ...credentials,
+    database,
+    migrations: [path.join(__dirname, '..', '*{.ts,.js}')],
+    migrationsRun: true,
+    extra: {
+      max: 10,
+      statement_timeout: 30000,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+      ...(schema !== 'public' ? { options: `-c search_path=${schema},public` } : {}),
+    },
+  });
+
+  /** What four connections held at once report, so four pooled clients answer. */
+  const settings = async (ds: DataSource): Promise<unknown[]> => {
+    const runners = await Promise.all(
+      [0, 1, 2, 3].map(async () => {
+        const runner = ds.createQueryRunner();
+        await runner.connect();
+        return runner;
+      }),
+    );
+    try {
+      return await Promise.all(
+        runners.map(async runner => {
+          const [row] = (await runner.query(
+            `SELECT current_setting('statement_timeout') AS timeout, current_setting('search_path') AS path,
+                    current_setting('TimeZone') AS zone, to_regclass('messages') IS NOT NULL AS messages`,
+          )) as unknown[];
+          return row;
+        }),
+      );
+    } finally {
+      await Promise.all(runners.map(runner => runner.release()));
+    }
+  };
+
+  const cases: Array<[string, number | undefined, string]> = [
+    ['directly', directPort, 'public'],
+    ['directly', directPort, 'boot_settings_schema'],
+    ['through PgBouncer in session mode', poolerPort, 'public'],
+    ['through PgBouncer in session mode', poolerPort, 'boot_settings_schema'],
+  ];
+
+  it.each(cases)(
+    '%s (port %s), schema %s: boots, and every connection carries them, also after a reconnect',
+    async (_how, port, schema) => {
+      if (port === undefined) return; // no pooler configured for this run
+      const database = `boot_settings_${process.pid}_${port}_${schema}`.slice(0, 63);
+      await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      await admin.query(`CREATE DATABASE "${database}"`);
+      if (schema !== 'public') {
+        const scoped = await new DataSource({
+          type: 'postgres',
+          host,
+          port: directPort,
+          ...credentials,
+          database,
+        }).initialize();
+        await scoped.query(`CREATE SCHEMA "${schema}"`);
+        await scoped.destroy();
+      }
+      const expected = {
+        timeout: '30s',
+        path: schema === 'public' ? '"$user", public' : `${schema},public`,
+        zone: 'UTC',
+        messages: true,
+      };
+      const ds = await createBootDataSource(appOptions(port, database, schema));
+      try {
+        expect(await settings(ds)).toEqual([expected, expected, expected, expected]);
+        await admin.query(
+          `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+          [database],
+        );
+        await new Promise(resolve => setTimeout(resolve, 300));
+        let after: unknown[] = [];
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            after = await settings(ds);
+            break;
+          } catch {
+            // A pooled client still holding a terminated backend fails once and leaves the pool.
+          }
+        }
+        expect(after).toEqual([expected, expected, expected, expected]);
+      } finally {
+        await ds.destroy();
+        await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+      }
+    },
+    120_000,
+  );
+
+  it('keeps the runtime bound on the connection the contains index build lifted it on', async () => {
+    const database = `boot_settings_${process.pid}_trigram`;
+    await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
+    await admin.query(`CREATE DATABASE "${database}"`);
+    const ds = await createBootDataSource(appOptions(directPort, database, 'public'));
+    try {
+      const provider = new BuiltInFtsProvider(ds, new ConfigService({ search: { containsEnabled: true } }));
+      await provider.buildContainsIndex();
+      const [{ valid }] = await ds.query<Array<{ valid: boolean }>>(
+        `SELECT indisvalid AS valid FROM pg_index WHERE indexrelid = to_regclass('idx_messages_body_trgm')`,
+      );
+      expect(valid).toBe(true);
+      // The pool hands out its last released connection first, so the build's own is among these.
+      const timeouts = (await settings(ds)).map(row => (row as { timeout: string }).timeout);
+      expect(timeouts).toEqual(['30s', '30s', '30s', '30s']);
+      provider.onModuleDestroy();
+    } finally {
+      await ds.destroy();
+      await admin.query(`DROP DATABASE IF EXISTS "${database}" WITH (FORCE)`);
     }
   }, 120_000);
 });
