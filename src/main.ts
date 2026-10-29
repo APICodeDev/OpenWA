@@ -17,6 +17,7 @@ import {
 } from './config/swagger.config';
 import { registerUncaughtExceptionMonitor, registerUnhandledRejectionHandler } from './config/process-error-monitor';
 import { runBootstrapOrExit } from './config/bootstrap-fatal';
+import { installStopSignalHandlers } from './config/stop-signals';
 import { s3EndpointError, validateEnv } from './config/env.validation';
 import { warnUnusableAllowedHosts } from './common/security/ssrf-guard';
 import { resolveStorageRoot } from './config/storage-root';
@@ -202,21 +203,10 @@ async function bootstrap() {
 
   // On SIGTERM/SIGINT: drain gracefully. shutdown() flips readiness to 503 immediately (the LB stops
   // routing), keeps serving in-flight requests for a bounded grace, then runs app.close() (the SAME
-  // Nest lifecycle hooks Nest's own handler would run) and exits deterministically. A SECOND signal
-  // forces an immediate exit — a dev double-Ctrl+C, or an operator not willing to wait out a wedged
-  // teardown. The gate is a dedicated "a signal already arrived" flag, NOT isShuttingDown() (which an
-  // admin restart also sets) — so a first real signal during an admin-restart grace still drains
-  // gracefully instead of hard-exiting.
-  let signalReceived = false;
-  for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.on(signal, () => {
-      if (signalReceived) {
-        process.exit(130);
-      }
-      signalReceived = true;
-      shutdownService.shutdown();
-    });
-  }
+  // Nest lifecycle hooks Nest's own handler would run) and exits deterministically. A repeat signal
+  // one second or more after the first forces an immediate exit (130); a repeat inside that second is
+  // the same stop request delivered twice, which npm and the Nest CLI do. See stop-signals.ts.
+  installStopSignalHandlers({ shutdown: () => shutdownService.shutdown() });
 
   // Shared production/e2e prefix and DTO validation contract.
   applyGlobalValidation(app);
