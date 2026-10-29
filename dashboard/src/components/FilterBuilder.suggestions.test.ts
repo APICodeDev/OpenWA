@@ -21,9 +21,9 @@ before(async () => {
 
 afterEach(() => rtl.cleanup());
 
-function Harness() {
+function Harness({ chosen = [] }: { chosen?: string[] }) {
   const [filters, setFilters] = useState<WebhookFilters | null>({
-    conditions: [{ field: 'sender', operator: 'is', value: [] }],
+    conditions: [{ field: 'sender', operator: 'is', value: chosen }],
   });
   return createElement(
     'div',
@@ -82,4 +82,41 @@ test('picking a suggestion from the keyboard adds it and leaves focus in the fie
   rtl.fireEvent.click(suggestion);
   assert.ok(rtl.screen.getByRole('button', { name: 'Remove Alice' }), 'the picked contact was not added');
   assert.equal((document.activeElement as HTMLElement | null)?.className, 'chips-text', 'focus left the field');
+});
+
+// The X of a chosen contact holds focus when pressed (Chrome and Edge focus a clicked button, a keyboard user reaches it
+// with Shift+Tab), and the removal takes it off the page. Focus would fall to the page with no blur reaching the widget,
+// leaving the list open over the form; it goes back to the field instead.
+test('removing a chosen contact with its focused X keeps focus in the field, and leaving closes the suggestions', async () => {
+  const { container } = rtl.render(createElement(Harness, { chosen: ['6281111111111@c.us'] }));
+  const input = container.querySelector<HTMLInputElement>('.chips-text')!;
+  focus(input);
+  const remove = rtl.screen.getByRole('button', { name: 'Remove Alice' });
+  focus(remove);
+  rtl.fireEvent.click(remove);
+  assert.equal(
+    rtl.screen.queryByRole('button', { name: 'Remove Alice' }) === null,
+    true,
+    'the contact was not removed',
+  );
+  assert.equal((document.activeElement as HTMLElement | null)?.className, 'chips-text', 'focus fell to the page');
+  assert.ok(suggestionShown(), 'the field holding focus offers no suggestions');
+
+  focus(rtl.screen.getByRole('button', { name: 'Elsewhere' }));
+  await wait(200);
+  assert.equal(suggestionShown(), false, 'the suggestions stayed open over the form after focus left the field');
+});
+
+test('an X clicked without taking focus removes the contact and leaves focus where it was', async () => {
+  rtl.render(createElement(Harness, { chosen: ['6281111111111@c.us'] }));
+  focus(rtl.screen.getByRole('button', { name: 'Elsewhere' }));
+  // Safari focuses no button on a click, so focus stays outside the widget.
+  rtl.fireEvent.click(rtl.screen.getByRole('button', { name: 'Remove Alice' }));
+  assert.equal(
+    rtl.screen.queryByRole('button', { name: 'Remove Alice' }) === null,
+    true,
+    'the contact was not removed',
+  );
+  assert.equal(document.activeElement?.textContent, 'Elsewhere', 'the removal moved focus into the field');
+  assert.equal(suggestionShown(), false, 'the removal opened the suggestions');
 });

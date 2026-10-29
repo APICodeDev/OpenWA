@@ -125,7 +125,12 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
             <button
               type="button"
               className="chip-remove"
-              onClick={() => onChange(value.filter(v => v !== jid))}
+              onClick={e => {
+                // A focused X is about to leave the page, and focus with it, unseen by the widget's blur; keep it in
+                // the field. An X clicked without taking focus (Safari) leaves focus where it was.
+                if (document.activeElement === e.currentTarget) inputRef.current?.focus();
+                onChange(value.filter(v => v !== jid));
+              }}
               aria-label={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
               title={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
             >
