@@ -267,8 +267,8 @@ QR string and the pairing-code request straight through to those libraries. Ther
 fix, and nothing on the client side changes the outcome: switching engine, using a pairing code instead
 of a QR, or presenting a different client identity (`BAILEYS_BROWSER_NAME` or otherwise) all end at the
 same gate. Re-registering the number as a different account type has also been tried by the community
-and did not hold; the block returned on its own within days. Tracked in
-[#560](https://github.com/rmyndharis/OpenWA/issues/560) and upstream in
+and did not hold; the block returned on its own within days. Background in
+[#560](https://github.com/rmyndharis/OpenWA/issues/560), upstream work in
 [WhiskeySockets/Baileys#2672](https://github.com/WhiskeySockets/Baileys/issues/2672); the only durable
 change will come from the engine libraries implementing the step.
 
