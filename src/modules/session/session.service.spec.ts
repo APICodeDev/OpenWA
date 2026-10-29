@@ -6080,10 +6080,10 @@ describe('SessionService', () => {
 
     // A terminal unlink leaves credentials that can never reach READY again, so the row must leave
     // the boot auto-start query and the takeover sweep (both key on a non-null phone), exactly as
-    // logout() already ensures. The in-process reconnect still shows one QR: scheduleReconnect gets
-    // the row object captured before the write, so its previouslyLinked flag survives.
+    // logout() already ensures. The in-process reconnect still shows one QR, and starts from the row
+    // as the clear left it: the phone is the account binding, and the unlink ended it.
     it.each(['LOGOUT', 'UNPAIRED', 'UNPAIRED_IDLE', 'logged out'])(
-      'clears phone on a terminal unlink (%s) without touching the captured reconnect row',
+      'clears phone on a terminal unlink (%s), for the row and for the reconnect it schedules',
       async reason => {
         const callbacks = await startAndCapture();
         const reconnectSpy = jest
@@ -6096,7 +6096,7 @@ describe('SessionService', () => {
 
         expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
         const [, passedSession] = reconnectSpy.mock.calls[0] as [string, Session];
-        expect(passedSession.phone).toBe('628123');
+        expect(passedSession.phone).toBeNull();
       },
     );
 

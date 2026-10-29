@@ -1053,10 +1053,11 @@ export class SessionEngineLifecycle {
   /**
    * Shared disconnect handling for BOTH the engine's onDisconnected callback and the liveness
    * watchdog: notify consumers (webhook + WS + hook), persist DISCONNECTED, then schedule a
-   * reconnect. The session row is re-read here rather than trusting a caller-held snapshot — the
+   * reconnect. The session row is re-read here rather than trusting a caller-held snapshot (the
    * watchdog detects death long after the last state change, and even the callback's closure
-   * snapshot can be stale — so the reconnect always re-initializes from the current row. Never
-   * throws: a DB hiccup must not turn a disconnect into an unhandled rejection.
+   * snapshot can be stale), so the reconnect re-initializes from the row read here, with the phone
+   * a terminal unlink clears already cleared. Never throws: a DB hiccup must not turn a disconnect
+   * into an unhandled rejection.
    *
    * Concurrency fence: the caller has already gated entry on `isLiveEngine(id, engine)` against
    * the synchronous-callback window, but this handler awaits a DB read and (later) schedules work
@@ -1121,8 +1122,7 @@ export class SessionEngineLifecycle {
       // The unlink is terminal: reconnecting can only land on a QR, so the next boot must not
       // resurrect the session (auto-start and the takeover sweep both key on a non-null phone),
       // exactly what logout() already ensures for operator-driven unlinks. The reconnect scheduled
-      // below still runs and shows one QR now; `session` was captured above, so its previouslyLinked
-      // flag is unaffected by this row write. onReady rewrites phone on the next successful link.
+      // below still runs and shows one QR now. onReady rewrites phone on the next successful link.
       // Fenced on ownership, unlike the DISCONNECTED write below: a wrongly nulled phone does not
       // self-heal until the owner's next READY, the same reason the exhausted-reconnect FAILED write
       // is fenced. Fire-and-forget: no await may sit between the identity fences above and below.
@@ -1134,6 +1134,9 @@ export class SessionEngineLifecycle {
             action: 'unlink_phone_clear_failed',
           }),
         );
+        // The phone is the account binding the next engine's onReady checks, and the clear just ended
+        // it: the reconnect links whichever number scans its QR, as a start after a restart would.
+        session = { ...session, phone: null };
       }
     }
 

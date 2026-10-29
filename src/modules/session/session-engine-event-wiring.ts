@@ -128,7 +128,9 @@ export class SessionEngineEventWiring {
    * A QR from a previously-linked engine means the stored credentials are gone
    * or no longer accepted, and when that happened while the engine was down nothing else in the
    * log says so, hence the warning below. One-shot per engine start: a lifecycle reconnect builds a
-   * new table from the row, which still carries the phone, and warns again.
+   * new table from the row, which still carries the phone after a transient drop, and warns again.
+   * After a terminal unlink the reconnect starts with no phone (the unlink cleared the binding and
+   * logged its own warning), so it neither warns nor refuses the number that scans next.
    */
   buildCallbacks(
     id: string,
