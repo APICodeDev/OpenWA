@@ -541,12 +541,19 @@ export class BaileysSessionStore {
    * Refresh the chat preview when (and only when) the edited message is still the latest message in
    * that chat. Editing an older message must not replace the preview or reorder the conversation. The
    * preview may sit on any twin of the chat, the one the listing reads included, so each is checked.
+   * `accept`, when given, judges the key the preview holds: a change it refuses leaves the preview alone.
    */
-  recordMessageEdit(chatId: string, messageId: string, text: string, type?: MessageType): void {
+  recordMessageEdit(
+    chatId: string,
+    messageId: string,
+    text: string,
+    type?: MessageType,
+    accept?: (key: WAMessageKey) => boolean,
+  ): void {
     if (!messageId) return;
     for (const key of new Set([chatId, this.toEngineJid(chatId)])) {
       const existing = this.lastMessages.get(key);
-      if (existing?.key.id === messageId)
+      if (existing?.key.id === messageId && (!accept || accept(existing.key)))
         this.lastMessages.set(key, { ...existing, text, type: type ?? existing.type });
     }
   }
