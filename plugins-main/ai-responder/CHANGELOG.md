@@ -8,6 +8,13 @@ The version here always matches `manifest.json`'s `version`.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-29
+
+### Added
+
+- Add an `allowedContacts` filter. It accepts one or more international phone numbers and applies
+  before provider calls and rate limits; `*` permits every contact and an empty value permits none.
+
 ## [0.1.2] - 2026-10-28
 
 ### Changed

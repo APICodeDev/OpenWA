@@ -162,6 +162,39 @@ test('groups are skipped unless respondInGroups is on, and an authorless group m
   assert.equal(on.replies.length, 1);
 });
 
+test('allowedContacts admits one or several contacts, while * admits everyone', async () => {
+  const restricted = await enable({ ...BASE, allowedContacts: '+62 811-1000-111, 628222000222\n628333000333' });
+  assert.deepEqual(await restricted.fire(msg()), CLAIMED, 'formatted first number');
+  assert.deepEqual(await restricted.fire(msg({ chatId: '628222000222@s.whatsapp.net', from: '628222000222@s.whatsapp.net' })), CLAIMED);
+  assert.deepEqual(await restricted.fire(msg({ chatId: '628999000999@c.us', from: '628999000999@c.us' })), PASSED);
+  assert.equal(restricted.fetches.length, 2, 'a rejected contact is not sent to the provider');
+
+  const everyone = await enable({ ...BASE, allowedContacts: '*' });
+  assert.deepEqual(await everyone.fire(msg({ chatId: '628999000999@c.us', from: '628999000999@c.us' })), CLAIMED);
+});
+
+test('an empty allowedContacts list admits nobody and a missing setting remains backwards compatible', async () => {
+  const nobody = await enable({ ...BASE, allowedContacts: '  \n ' });
+  assert.deepEqual(await nobody.fire(msg()), PASSED);
+  assert.equal(nobody.fetches.length, 0);
+
+  const legacy = await enable(BASE);
+  assert.deepEqual(await legacy.fire(msg()), CLAIMED, 'an existing config without the new field still admits everyone');
+});
+
+test('allowedContacts filters a group by its author and fails closed for an unresolvable privacy id', async () => {
+  const h = await enable({ ...BASE, respondInGroups: true, allowedContacts: '628111000111' });
+  assert.deepEqual(await h.fire(msg({ chatId: '1203@g.us', from: '1203@g.us', isGroup: true, author: '628111000111:12@s.whatsapp.net' })), CLAIMED);
+  assert.deepEqual(await h.fire(msg({ chatId: '1203@g.us', from: '1203@g.us', isGroup: true, author: '628222000222@c.us' })), PASSED);
+  assert.deepEqual(await h.fire(msg({ chatId: '1203@g.us', from: '1203@g.us', isGroup: true, author: '987654321@lid' })), PASSED);
+  assert.equal(h.fetches.length, 1);
+});
+
+test('invalid allowedContacts values fail configuration instead of silently matching the wrong sender', async () => {
+  assert.throws(() => parseConfig({ ...BASE, allowedContacts: 'not-a-number' }), /allowed contact/);
+  assert.throws(() => parseConfig({ ...BASE, allowedContacts: ['628111000111'] }), /must be text/);
+});
+
 test('channel, broadcast-list and status chats are never answered', async () => {
   const h = await enable();
   for (const chatId of ['120363000000000000@newsletter', '628123-456@broadcast', 'status@broadcast']) {

@@ -1,6 +1,6 @@
 import type { IPlugin, PluginContext, HookContext, HookResult, IncomingMessage } from '../types/openwa';
 import { fetchChatCompletion, type ChatCompletionConfig } from './api-client.ts';
-import { isBroadcastJid } from './jid.ts';
+import { isBroadcastJid, phoneFromJid } from './jid.ts';
 import { mdToWhatsApp } from './md-to-wa.ts';
 
 declare const __PLUGIN_VERSION__: string;
@@ -13,6 +13,8 @@ export interface ResponderConfig extends ChatCompletionConfig {
   maxRepliesPerChatPerHour: number;
   maxRepliesPerSessionPerHour: number;
   respondInGroups: boolean;
+  allowAllContacts: boolean;
+  allowedContacts: ReadonlySet<string>;
 }
 
 // Plain http is accepted only for a model on the gateway's own machine. Anywhere else it would carry the
@@ -23,6 +25,28 @@ const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 function atLeastOne(raw: unknown, fallback: number): number {
   const n = Math.floor(Number(raw));
   return Number.isFinite(n) && n >= 1 ? n : fallback;
+}
+
+// The dashboard stores a textarea as one string. Numbers may be separated by a newline, comma or
+// semicolon, and may use common display punctuation; matching always uses the digits in the sender JID.
+// A missing value keeps upgrades backwards compatible, while an explicitly empty textarea allows none.
+function parseAllowedContacts(raw: unknown): { allowAllContacts: boolean; allowedContacts: ReadonlySet<string> } {
+  if (raw === undefined || raw === null) return { allowAllContacts: true, allowedContacts: new Set() };
+  if (typeof raw !== 'string') throw new Error('ai-responder: allowedContacts must be text');
+
+  const allowedContacts = new Set<string>();
+  for (const entry of raw.split(/[\r\n,;]+/).map(value => value.trim()).filter(Boolean)) {
+    if (entry === '*') return { allowAllContacts: true, allowedContacts: new Set() };
+    const fromJid = phoneFromJid(entry);
+    const phone = fromJid || entry.replace(/[\s()+.-]/g, '');
+    if (!/^\d{5,15}$/.test(phone)) {
+      throw new Error(
+        `ai-responder: invalid allowed contact ${JSON.stringify(entry)}; use an international number or *`,
+      );
+    }
+    allowedContacts.add(phone);
+  }
+  return { allowAllContacts: false, allowedContacts };
 }
 
 export function parseConfig(raw: Record<string, unknown>): ResponderConfig {
@@ -48,6 +72,7 @@ export function parseConfig(raw: Record<string, unknown>): ResponderConfig {
   if (!apiKey) throw new Error('ai-responder: apiKey is required');
   const model = String(raw.model ?? 'gpt-4o-mini').trim();
   if (!model) throw new Error('ai-responder: model is required');
+  const contacts = parseAllowedContacts(raw.allowedContacts);
 
   return {
     apiBaseUrl,
@@ -63,6 +88,7 @@ export function parseConfig(raw: Record<string, unknown>): ResponderConfig {
     maxRepliesPerChatPerHour: atLeastOne(raw.maxRepliesPerChatPerHour, 20),
     maxRepliesPerSessionPerHour: atLeastOne(raw.maxRepliesPerSessionPerHour, 200),
     respondInGroups: raw.respondInGroups === true,
+    ...contacts,
   };
 }
 
@@ -159,6 +185,13 @@ export default class AIResponder implements IPlugin {
     // `isGroup` cannot see a WhatsApp Channel: a `@newsletter` post arrives as a non-group chat, and a
     // reply would go to a chat this account can never post in. Broadcast lists are the same shape.
     if (isBroadcastJid(m.chatId)) return pass;
+    // In a group the participant is the contact being allowlisted, not the shared group JID. A phone
+    // cannot safely be derived from a privacy `@lid`, so a restricted list fails closed for that sender.
+    const senderJid = m.isGroup ? m.author! : m.author || m.from || m.chatId;
+    if (!cfg.allowAllContacts) {
+      const senderPhone = phoneFromJid(senderJid);
+      if (!senderPhone || !cfg.allowedContacts.has(senderPhone)) return pass;
+    }
     // `timestamp` is unix seconds; a missing, zero, negative or unrepresentable one counts as sent now.
     const sent = new Date((m.timestamp ?? 0) * 1000);
     if (sent.getTime() > 0 && Date.now() - sent.getTime() > LATE_AFTER_MS) return pass;

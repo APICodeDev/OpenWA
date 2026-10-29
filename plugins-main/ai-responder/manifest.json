@@ -1,7 +1,7 @@
 {
   "id": "ai-responder",
   "name": "AI Responder",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "extension",
   "main": "dist/index.js",
   "description": "Auto-replies to inbound WhatsApp messages with an OpenAI-compatible Chat Completions API. Single-turn, rate-limited per chat and per session, and last in the responder chain.",
@@ -53,6 +53,12 @@
         "type": "textarea",
         "title": "System prompt",
         "description": "Optional instructions for tone and scope. Not secret: any contact can try to make the model reveal or ignore it, so never put confidential data here."
+      },
+      "allowedContacts": {
+        "type": "textarea",
+        "default": "*",
+        "title": "Allowed contacts",
+        "description": "International phone numbers allowed to use the AI responder, one per line or separated by commas. Use * to allow every contact. An empty value allows nobody. Filtering happens before any provider call."
       },
       "respondInGroups": {
         "type": "boolean",
@@ -107,6 +113,7 @@
         "apiKey": { "title": "API key" },
         "model": { "title": "Model" },
         "systemPrompt": { "title": "System prompt" },
+        "allowedContacts": { "title": "Allowed contacts" },
         "respondInGroups": { "title": "Also respond in group chats" },
         "maxRepliesPerChatPerHour": { "title": "Max replies per chat per hour" },
         "maxRepliesPerSessionPerHour": { "title": "Max replies per session per hour" },
@@ -123,6 +130,7 @@
         "apiKey": { "title": "Clave de API" },
         "model": { "title": "Modelo" },
         "systemPrompt": { "title": "Instrucciones del sistema" },
+        "allowedContacts": { "title": "Contactos permitidos" },
         "respondInGroups": { "title": "Responder también en grupos" },
         "maxRepliesPerChatPerHour": { "title": "Máximo de respuestas por chat y hora" },
         "maxRepliesPerSessionPerHour": { "title": "Máximo de respuestas por sesión y hora" },
@@ -139,6 +147,7 @@
         "apiKey": { "title": "API 密钥" },
         "model": { "title": "模型" },
         "systemPrompt": { "title": "系统提示词" },
+        "allowedContacts": { "title": "允许的联系人" },
         "respondInGroups": { "title": "也在群组中回复" },
         "maxRepliesPerChatPerHour": { "title": "每个聊天每小时最多回复数" },
         "maxRepliesPerSessionPerHour": { "title": "每个会话每小时最多回复数" },
@@ -162,6 +171,9 @@
         },
         "systemPrompt": {
           "title": "Systemanweisung"
+        },
+        "allowedContacts": {
+          "title": "Erlaubte Kontakte"
         },
         "respondInGroups": {
           "title": "Auch in Gruppenchats antworten"
@@ -199,6 +211,9 @@
         "systemPrompt": {
           "title": "Sistem istemi"
         },
+        "allowedContacts": {
+          "title": "İzin verilen kişiler"
+        },
         "respondInGroups": {
           "title": "Grup sohbetlerinde de yanıtla"
         },
@@ -234,6 +249,9 @@
         },
         "systemPrompt": {
           "title": "Instrução do sistema"
+        },
+        "allowedContacts": {
+          "title": "Contatos permitidos"
         },
         "respondInGroups": {
           "title": "Responder também em grupos"
@@ -271,6 +289,9 @@
         "systemPrompt": {
           "title": "시스템 프롬프트"
         },
+        "allowedContacts": {
+          "title": "허용된 연락처"
+        },
         "respondInGroups": {
           "title": "그룹 채팅에도 응답"
         },
@@ -306,6 +327,9 @@
         },
         "systemPrompt": {
           "title": "Instruksi sistem"
+        },
+        "allowedContacts": {
+          "title": "Kontak yang diizinkan"
         },
         "respondInGroups": {
           "title": "Balas juga di chat grup"
@@ -343,6 +367,9 @@
         "systemPrompt": {
           "title": "הנחיית מערכת"
         },
+        "allowedContacts": {
+          "title": "אנשי קשר מורשים"
+        },
         "respondInGroups": {
           "title": "מענה גם בקבוצות"
         },
@@ -378,6 +405,9 @@
         },
         "systemPrompt": {
           "title": "系統提示"
+        },
+        "allowedContacts": {
+          "title": "允許的聯絡人"
         },
         "respondInGroups": {
           "title": "同時回覆群組對話"
@@ -415,6 +445,9 @@
         "systemPrompt": {
           "title": "تعليمات النظام"
         },
+        "allowedContacts": {
+          "title": "جهات الاتصال المسموح بها"
+        },
         "respondInGroups": {
           "title": "الرد في محادثات المجموعات أيضاً"
         },
@@ -450,6 +483,9 @@
         },
         "systemPrompt": {
           "title": "సిస్టమ్ సూచన"
+        },
+        "allowedContacts": {
+          "title": "అనుమతించిన పరిచయాలు"
         },
         "respondInGroups": {
           "title": "గ్రూప్ చాట్‌లలో కూడా బదులివ్వండి"
@@ -487,6 +523,9 @@
         "systemPrompt": {
           "title": "Instruction système"
         },
+        "allowedContacts": {
+          "title": "Contacts autorisés"
+        },
         "respondInGroups": {
           "title": "Répondre aussi dans les groupes"
         },
@@ -523,6 +562,9 @@
         "systemPrompt": {
           "title": "Istruzione di sistema"
         },
+        "allowedContacts": {
+          "title": "Contatti consentiti"
+        },
         "respondInGroups": {
           "title": "Rispondi anche nelle chat di gruppo"
         },
@@ -558,6 +600,9 @@
         },
         "systemPrompt": {
           "title": "सिस्टम निर्देश"
+        },
+        "allowedContacts": {
+          "title": "अनुमत संपर्क"
         },
         "respondInGroups": {
           "title": "समूह चैट में भी उत्तर दें"

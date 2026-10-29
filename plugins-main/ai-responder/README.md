@@ -14,8 +14,8 @@
 | Field | Value |
 | ----- | ----- |
 | **Identifier** | `ai-responder` |
-| **Version** | 0.1.2 |
-| **Released** | 2026-10-28 |
+| **Version** | 0.1.3 |
+| **Released** | 2026-10-29 |
 | **Status** | beta |
 | **Author** | Abhinav Raj |
 | **License** | MIT |
@@ -38,6 +38,8 @@
   converted before sending, and the answer goes out as a quoted reply.
 - **Bounded cost.** Hourly limits per chat and per session, input cut to `maxInputChars`, output capped
   by `maxOutputTokens`, and a request timeout.
+- **Contact allowlist.** Send messages to the provider only for the configured international phone
+  numbers, or use `*` to admit every contact.
 - **Off the delivery path.** The provider call runs after the hook has returned, so a slow provider
   never delays message delivery or the other plugins.
 
@@ -51,6 +53,7 @@ never sent to the provider:
 - shared contact cards, polls, catalog orders, product cards and locations, whose text nobody typed
   at the bot. Tapped business buttons, list replies and media captions are answered;
 - group messages, unless `respondInGroups` is on, and a group message with no identifiable sender;
+- messages from contacts not included in `allowedContacts`;
 - WhatsApp Channels (`@newsletter`), broadcast lists and status updates;
 - a message sent more than five minutes before it arrived;
 - a message over the per-chat or per-session hourly limit, or one that arrives while eight provider
@@ -85,7 +88,8 @@ declares `net:fetch` and `messages:send`, and no `storage:use`.
 2. Install the plugin (see [Install](#install)).
 3. Configure it (see [Configuration](#configuration)): set `apiKey`, and `apiBaseUrl` and `model` when
    not using OpenAI. Write an optional `systemPrompt` for tone and scope; it is not confidential (see
-   [Security](#security)). Adjust the limits to the expected traffic.
+   [Security](#security)). Set `allowedContacts` to `*` or the international numbers that may use it,
+   and adjust the limits to the expected traffic.
 4. Enable it for the sessions it should answer on.
 5. Check the other responders enabled on those sessions (see [Known interactions](#known-interactions)).
 
@@ -116,6 +120,7 @@ and upload it in the dashboard **Plugins → Install** (or the **Catalog** tab).
 | `apiKey` | yes | none | Bearer key for the provider. Stored as a secret. |
 | `model` | yes | `gpt-4o-mini` | Model id sent with every request. |
 | `systemPrompt` | no | none | Instructions for tone and scope, sent with every message. Not confidential. |
+| `allowedContacts` | no | `*` | International phone numbers allowed to use the responder, one per line or comma-separated. `*` allows everyone; an empty value allows nobody. |
 | `respondInGroups` | no | `false` | Also answer in group chats. Every message in every group then goes to the provider. |
 | `maxRepliesPerChatPerHour` | no | `20` | Messages answered per chat per clock hour. |
 | `maxRepliesPerSessionPerHour` | no | `200` | Messages answered per WhatsApp session per clock hour, across all chats. |
@@ -127,6 +132,11 @@ Both limits count every message claimed in the hour, answered or failed, and are
 gateway restart or a re-enable starts a fresh hour. A message over a limit is not claimed, so a later
 plugin in the chain may still answer it. The same holds for a message that arrives while eight provider
 calls are already open.
+
+`allowedContacts` is checked before rate limits and before a provider call. Enter numbers with their
+country code; formatting such as `+34 600-111-222` is accepted. In a group, the author is checked, not
+the group id. A restricted list cannot identify an `@lid` privacy sender at hook time and therefore
+leaves that message unanswered; `*` admits it.
 
 ## Compatibility
 
