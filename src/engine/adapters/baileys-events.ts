@@ -866,7 +866,7 @@ export class BaileysEvents {
         const receipt = opts.ticket ? emit?.(incoming, opts.ticket) : emit?.(incoming);
         this.watchOutcome(msg.key, receipt);
       }
-      this.host.recordMessage(msg, incoming.type, opts.order);
+      this.host.recordMessage(msg, deleted ? 'revoked' : incoming.type, opts.order);
       if (deleted) {
         this.host.recordMessageEdit(chatJid, storedId, '', 'revoked');
       } else if (editedBody !== undefined && storedId !== null) {

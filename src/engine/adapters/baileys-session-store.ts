@@ -4,7 +4,7 @@ import { chatKind, parseWaId, toNeutralJid as canonicalizeWaId, userPart } from 
 import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 import { mergeTwinStates, type ChatStateStore, type ChatStateValue } from './baileys-chat-state-store.service';
 import { resolveNonNegativeIntEnv } from '../../config/configuration';
-import { baileysChatJid } from './baileys-message-mapper';
+import { baileysChatJid, baileysMessageText } from './baileys-message-mapper';
 
 interface LastMessage {
   key: WAMessageKey;
@@ -522,7 +522,9 @@ export class BaileysSessionStore {
     ) {
       return; // keep the newest
     }
-    const text = msg.message?.conversation ?? msg.message?.extendedTextMessage?.text ?? '';
+    // The text the message was announced with: inside a disappearing chat's or a view-once envelope, and a
+    // photo's, video's or document's caption. A deleted message previews nothing, whatever it held.
+    const text = type === 'revoked' ? '' : baileysMessageText(msg.message);
     this.lastMessages.set(key, { key: msg.key, timestamp, text, type, order });
   }
 

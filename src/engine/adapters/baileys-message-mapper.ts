@@ -245,6 +245,37 @@ export function extractBaileysBody(content: BaileysBodyContent): string {
 }
 
 /**
+ * The envelopes Baileys' `normalizeMessageContent` opens (Utils/messages.js), in its order: a disappearing
+ * chat's, a view-once item's, a captioned document's, an edit's and a few more. Read here for code that has
+ * no handle on the library, the chat preview recorded synchronously by the session store.
+ */
+const CONTENT_WRAPPERS = [
+  'ephemeralMessage',
+  'viewOnceMessage',
+  'documentWithCaptionMessage',
+  'viewOnceMessageV2',
+  'viewOnceMessageV2Extension',
+  'editedMessage',
+  'associatedChildMessage',
+  'groupStatusMessage',
+  'groupStatusMessageV2',
+] as const;
+
+/**
+ * The text a message is announced with ({@link extractBaileysBody}), read inside its envelopes as
+ * `normalizeMessageContent` would open them, at most five deep like the library. `''` when it carries none.
+ */
+export function baileysMessageText(message: unknown): string {
+  let content = message as Record<string, { message?: unknown } | null | undefined> | null | undefined;
+  for (let depth = 0; depth < 5 && content; depth++) {
+    const wrapper = CONTENT_WRAPPERS.find(name => content?.[name]);
+    if (!wrapper) break;
+    content = content[wrapper]?.message as typeof content;
+  }
+  return content ? extractBaileysBody(content) : '';
+}
+
+/**
  * Write edited text into the slot a message carries its text in, which is where
  * {@link extractBaileysBody} reads it back: the text itself, or the caption of a photo, video or
  * document. Everything else the content holds (media keys, thumbnail, link preview) is kept, as
