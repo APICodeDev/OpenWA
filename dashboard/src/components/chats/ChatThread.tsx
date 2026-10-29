@@ -641,6 +641,8 @@ function ChatThread({
             switch (msg.type) {
               case 'image':
               case 'sticker':
+                // A control of its own, as an archived preview is (ArchivedMediaPreview): the bubble's keys only move
+                // between messages, so without this the viewer opens for a pointer alone.
                 return (
                   <div className="message-media-image">
                     <img
@@ -649,7 +651,16 @@ function ChatThread({
                       className="chat-image-media"
                       ref={measureMedia}
                       onLoad={onMediaLoad}
+                      role="button"
+                      aria-haspopup="dialog"
+                      tabIndex={0}
                       onClick={() => onOpenImage(msg.id)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          onOpenImage(msg.id);
+                        }
+                      }}
                     />
                   </div>
                 );
