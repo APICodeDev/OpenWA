@@ -651,13 +651,18 @@ tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/
 # and sslrootcert=system needs libpq 16+ and a system CA store, which the image lacks. One transaction:
 # a load that fails leaves nothing behind. An archive holding database.schema (a POSTGRES_SCHEMA other
 # than public) has that schema only: skip the rename and the empty database and load it into the
-# database the app uses, as a role that may create schemas and extensions there, as restore.sh prints;
-# it moves the current copy of the schema aside as <schema>_pre_restore_<time>, rows and all, and leaves
-# the other schemas alone. When pg_trgm and unaccent live in that schema, they and the copy's trigram
-# index (idx_messages_body_trgm) are dropped from the copy so the dump can create them again, and a load
-# that stops at "cannot drop extension" means another schema uses them and nothing was changed. Into an
-# empty database, an extension it uses (pg_trgm, unaccent) that lives in another application's schema
-# has to exist first, and on PostgreSQL 12 or older so does pgcrypto
+# database the app uses, as restore.sh prints, as a role that may create schemas and extensions there
+# and, when pg_trgm and unaccent live in that schema, owns them (the role that created them: the app's
+# own, or the one an earlier load ran as), or as a superuser. It moves the current copy of the schema
+# aside as <schema>_pre_restore_<time>, rows and all, and leaves the other schemas alone; pg_trgm and
+# unaccent, when they live in it, are dropped from the copy with its trigram index
+# (idx_messages_body_trgm) so the dump can create them again. A load that stops at "cannot drop
+# extension" means another schema uses them and nothing was changed; its DETAIL lines name what. When
+# that is another OpenWA deployment's idx_messages_body_trgm, drop that index and load again: that
+# deployment's contains search then reads its whole messages table until its next start builds the
+# index again, and answers 501 while it builds. Drop anything else named first and recreate it after
+# the load. Into an empty database, an extension it uses (pg_trgm, unaccent) that lives in another
+# application's schema has to exist first, and on PostgreSQL 12 or older so does pgcrypto
 tar -xzOf "$BACKUP_DIR/openwa-backup-<timestamp>.tar.gz" ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
   psql --single-transaction -v ON_ERROR_STOP=1 "$DATABASE_URL"
 
@@ -964,14 +969,20 @@ tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET
 #    CA file: libpq otherwise reads ~/.postgresql/root.crt, and sslrootcert=system needs libpq 16+
 #    and a system CA store, which the image lacks. One transaction: a load that fails leaves nothing
 #    behind. An archive holding database.schema (a POSTGRES_SCHEMA other than public) has that schema
-#    only: skip the rename and the empty database and load it into the database the app uses, as a
-#    role that may create schemas and extensions there, as restore.sh prints; it moves the current
-#    copy of the schema aside as <schema>_pre_restore_<time>, rows and all, and leaves the other
-#    schemas alone. When pg_trgm and unaccent live in that schema, they and the copy's trigram index
-#    (idx_messages_body_trgm) are dropped from the copy so the dump can create them again, and a load
-#    that stops at "cannot drop extension" means another schema uses them and nothing was changed.
-#    Into an empty database, an extension it uses (pg_trgm, unaccent) that lives in another
-#    application's schema has to exist first, and on PostgreSQL 12 or older so does pgcrypto
+#    only: skip the rename and the empty database and load it into the database the app uses, as
+#    restore.sh prints, as a role that may create schemas and extensions there and, when pg_trgm and
+#    unaccent live in that schema, owns them (the role that created them: the app's own, or the one
+#    an earlier load ran as), or as a superuser. It moves the current copy of the schema aside as
+#    <schema>_pre_restore_<time>, rows and all, and leaves the other schemas alone; pg_trgm and
+#    unaccent, when they live in it, are dropped from the copy with its trigram index
+#    (idx_messages_body_trgm) so the dump can create them again. A load that stops at "cannot drop
+#    extension" means another schema uses them and nothing was changed; its DETAIL lines name what.
+#    When that is another OpenWA deployment's idx_messages_body_trgm, drop that index and load again:
+#    that deployment's contains search then reads its whole messages table until its next start
+#    builds the index again, and answers 501 while it builds. Drop anything else named first and
+#    recreate it after the load. Into an empty database, an extension it uses (pg_trgm, unaccent)
+#    that lives in another application's schema has to exist first, and on PostgreSQL 12 or older so
+#    does pgcrypto
 tar -xzOf ./backups/openwa-backup-<timestamp>.tar.gz ./database.sql | sed '/^SET transaction_timeout = 0;$/d' |
   psql --single-transaction -v ON_ERROR_STOP=1 "$DATABASE_URL"
 

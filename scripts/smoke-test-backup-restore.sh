@@ -99,9 +99,10 @@
 #       sets that key; a default reached through the operator's link is still followed
 #   (av) a PostgreSQL POSTGRES_SCHEMA other than public, from the environment, ./.env or .env.generated, is
 #       dumped alone with its search extensions behind a prelude that drops none of them with CASCADE, for the
-#       DATABASE_URL branch too, and named in database.schema; public keeps the whole-database dump; a name the app refuses stops the backup before
-#       pg_dump; restore prints the schema load only for a marked archive, in one transaction either way, and
-#       refuses a marker naming an invalid schema
+#       DATABASE_URL branch too, and named in database.schema; public keeps the whole-database dump; a name the
+#       app refuses stops the backup before pg_dump; restore prints the schema load, with the extensions' owner
+#       and the way past another deployment's trigram index, only for a marked archive, in one transaction
+#       either way, and refuses a marker naming an invalid schema
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -2988,6 +2989,12 @@ restore_av "$ARCHIVE_AV"
 if ! grep -q 'dump of schema openwa_s (POSTGRES_SCHEMA) present' <<<"$OUT_AV" ||
   grep -q 'EMPTY database' <<<"$OUT_AV" || ! grep -q 'psql --single-transaction -v ON_ERROR_STOP=1' <<<"$OUT_AV"; then
   fail "(av) restore did not print the schema load for a marked archive: $OUT_AV"
+fi
+# Dropping extensions that live in the schema takes their owner, and another OpenWA deployment's trigram index on
+# them refuses the load until that index is dropped: the printed text names both.
+if ! grep -q 'when pg_trgm and unaccent live in that schema, owns them' <<<"$OUT_AV" ||
+  ! grep -q 'drop that index and load again' <<<"$OUT_AV"; then
+  fail "(av) restore did not name the extensions' owner or the way past another deployment's trigram index: $OUT_AV"
 fi
 restore_av "$ARCHIVE_AV_WHOLE"
 if ! grep -q 'load it into an EMPTY database' <<<"$OUT_AV" || grep -q 'dump of schema' <<<"$OUT_AV" ||
