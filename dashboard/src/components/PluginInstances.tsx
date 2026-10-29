@@ -304,7 +304,12 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
           <label>{t('plugins.instances.created.secret')}</label>
           <div className="pi-secret">
             <code>{minted.secret}</code>
-            <button className="btn-primary" onClick={() => void copy(minted.secret, 'secret')}>
+            <button
+              className="btn-primary"
+              onClick={() => void copy(minted.secret, 'secret')}
+              aria-label={t('plugins.instances.actions.copy')}
+              title={t('plugins.instances.actions.copy')}
+            >
               {copied === 'secret' ? <Check size={16} /> : <Copy size={16} />}
             </button>
           </div>
@@ -314,7 +319,12 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
               <label>{t('plugins.instances.created.verifyToken')}</label>
               <div className="pi-secret">
                 <code>{minted.verifyToken}</code>
-                <button className="btn-primary" onClick={() => void copy(minted.verifyToken!, 'verifyToken')}>
+                <button
+                  className="btn-primary"
+                  onClick={() => void copy(minted.verifyToken!, 'verifyToken')}
+                  aria-label={t('plugins.instances.actions.copy')}
+                  title={t('plugins.instances.actions.copy')}
+                >
                   {copied === 'verifyToken' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
               </div>
@@ -324,7 +334,12 @@ export function PluginInstances({ pluginId }: { pluginId: string }) {
           {minted.ingressUrls.map(u => (
             <div key={u.route} className="pi-secret">
               <code>{u.url}</code>
-              <button className="btn-primary" onClick={() => void copy(u.url, `mint-${u.route}`)}>
+              <button
+                className="btn-primary"
+                onClick={() => void copy(u.url, `mint-${u.route}`)}
+                aria-label={t('plugins.instances.actions.copy')}
+                title={t('plugins.instances.actions.copy')}
+              >
                 {copied === `mint-${u.route}` ? <Check size={16} /> : <Copy size={16} />}
               </button>
             </div>

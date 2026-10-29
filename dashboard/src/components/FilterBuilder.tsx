@@ -108,7 +108,13 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
         {value.map(jid => (
           <span key={jid} className="chip" title={jid}>
             {labelFor(jid)}
-            <button type="button" className="chip-remove" onClick={() => onChange(value.filter(v => v !== jid))}>
+            <button
+              type="button"
+              className="chip-remove"
+              onClick={() => onChange(value.filter(v => v !== jid))}
+              aria-label={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
+              title={t('webhooks.filters.removeValue', { value: labelFor(jid) })}
+            >
               <X size={12} />
             </button>
           </span>

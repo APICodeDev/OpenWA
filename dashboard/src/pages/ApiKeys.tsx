@@ -587,7 +587,12 @@ export function ApiKeys() {
                 >
                   {createdKey}
                 </code>
-                <button className="btn-primary" onClick={() => void handleCopy(createdKey, 'modal')}>
+                <button
+                  className="btn-primary"
+                  onClick={() => void handleCopy(createdKey, 'modal')}
+                  aria-label={t('apiKeys.copyKey')}
+                  title={t('apiKeys.copyKey')}
+                >
                   {copied === 'modal' ? <Check size={16} /> : <Copy size={16} />}
                 </button>
               </div>
