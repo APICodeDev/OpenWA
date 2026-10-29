@@ -1,4 +1,5 @@
 export const DASHBOARD_CSP_NONCE_PLACEHOLDER = '__OPENWA_CSP_NONCE__';
+export const LOCAL_DEV_AUTH_META = 'openwa-local-dev-auth';
 
 /**
  * Inject the response-specific CSP nonce into the bundled dashboard document.
@@ -10,4 +11,13 @@ export const DASHBOARD_CSP_NONCE_PLACEHOLDER = '__OPENWA_CSP_NONCE__';
  */
 export function injectDashboardCspNonce(html: string, nonce: string): string {
   return html.split(DASHBOARD_CSP_NONCE_PLACEHOLDER).join(nonce);
+}
+
+/**
+ * Advertise runtime-only dashboard features without baking deployment settings into the Vite build.
+ * A meta tag needs no inline script and therefore keeps the dashboard's strict CSP intact.
+ */
+export function injectLocalDevAuthFlag(html: string, enabled: boolean): string {
+  if (!enabled || html.includes(`name="${LOCAL_DEV_AUTH_META}"`)) return html;
+  return html.replace(/<\/head>/i, `<meta name="${LOCAL_DEV_AUTH_META}" content="true" /></head>`);
 }

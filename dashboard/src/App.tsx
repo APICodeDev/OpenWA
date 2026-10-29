@@ -9,8 +9,9 @@ import { NumberCheckProvider } from './components/NumberCheckProvider';
 import { useRole } from './hooks/useRole';
 import { RoleProvider } from './components/RoleProvider';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { API_BASE_URL } from './services/api';
+import { API_BASE_URL, API_ORIGIN } from './services/api';
 import { clearActorState, isUserRole, resolveStartupValidation } from './utils/authLifecycle';
+import { localDevApiKey } from './utils/localDevAuth';
 import './App.css';
 
 const Login = lazy(() => import('./pages/Login').then(m => ({ default: m.Login })));
@@ -41,7 +42,14 @@ function AppContent() {
   // handleLogin stores a fresh key would re-fire the startup re-validation effect below and
   // double the /auth/validate request on every sign-in — the effect is for genuine page
   // refreshes with a saved key only.
-  const [savedKey] = useState(() => sessionStorage.getItem('openwa_api_key'));
+  const [savedKey] = useState(() => {
+    const stored = sessionStorage.getItem('openwa_api_key');
+    if (stored) return stored;
+
+    const localKey = localDevApiKey(API_ORIGIN);
+    if (localKey) sessionStorage.setItem('openwa_api_key', localKey);
+    return localKey;
+  });
   const [isAuthenticated, setIsAuthenticated] = useState(!!savedKey);
   const [, setApiKey] = useState(savedKey || '');
   const { setRole, role, setEngineType, setScoped, scoped } = useRole();

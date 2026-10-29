@@ -159,7 +159,9 @@ services:
       # Security / boot knobs the app reads. Like the blocks above, this list is the only path into
       # the container; compose-parity.spec.ts derives the required set from .env.example.
       - API_MASTER_KEY=${API_MASTER_KEY:-}
-      - ALLOW_DEV_API_KEY=${ALLOW_DEV_API_KEY:-}
+      # Localhost dashboard auto-login. Safe with the default 127.0.0.1 port bind above; set this to
+      # false before exposing the dev compose through BIND_HOST=0.0.0.0 or any reverse proxy.
+      - ALLOW_DEV_API_KEY=${ALLOW_DEV_API_KEY:-true}
       - API_KEY_PEPPER=${API_KEY_PEPPER:-}
       - BOOTSTRAP_KEY_FILE=${BOOTSTRAP_KEY_FILE:-}
       - ENABLE_SWAGGER=${ENABLE_SWAGGER:-}

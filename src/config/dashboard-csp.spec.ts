@@ -1,4 +1,4 @@
-import { DASHBOARD_CSP_NONCE_PLACEHOLDER, injectDashboardCspNonce } from './dashboard-csp';
+import { DASHBOARD_CSP_NONCE_PLACEHOLDER, injectDashboardCspNonce, injectLocalDevAuthFlag } from './dashboard-csp';
 
 describe('injectDashboardCspNonce', () => {
   it('keeps each dashboard document nonce isolated (multi-tab safe)', () => {
@@ -16,5 +16,19 @@ describe('injectDashboardCspNonce: every occurrence', () => {
     // browser then refuses under the document's own CSP.
     expect(out).toBe('<meta content="abc123"><script nonce="abc123">');
     expect(out).not.toContain(DASHBOARD_CSP_NONCE_PLACEHOLDER);
+  });
+});
+
+describe('injectLocalDevAuthFlag', () => {
+  const template = '<html><head><title>OpenWA</title></head><body></body></html>';
+
+  it('adds the runtime flag only when local development auth is enabled', () => {
+    expect(injectLocalDevAuthFlag(template, true)).toContain('<meta name="openwa-local-dev-auth" content="true" />');
+    expect(injectLocalDevAuthFlag(template, false)).toBe(template);
+  });
+
+  it('does not duplicate an existing flag', () => {
+    const once = injectLocalDevAuthFlag(template, true);
+    expect(injectLocalDevAuthFlag(once, true)).toBe(once);
   });
 });

@@ -40,6 +40,9 @@ export class UnresolvedApiKeyException extends UnauthorizedException {
   }
 }
 
+/** Well-known credential used only when the operator explicitly enables local development auth. */
+export const DEV_ADMIN_API_KEY = 'dev-admin-key';
+
 /**
  * Resolves the API key to seed on first boot (when no keys exist yet).
  * Precedence: an explicit `API_MASTER_KEY` always wins; otherwise a
@@ -55,7 +58,7 @@ export function resolveSeedApiKey(): string {
     return masterKey;
   }
   if (process.env.ALLOW_DEV_API_KEY === 'true') {
-    return 'dev-admin-key';
+    return DEV_ADMIN_API_KEY;
   }
   return `owa_k1_${randomBytes(32).toString('hex')}`;
 }
@@ -105,6 +108,13 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
         this.logger.warn('Could not save API key file', { error: String(err) });
       }
     } else {
+      // ALLOW_DEV_API_KEY can be enabled after an instance has already created its random bootstrap
+      // key. Ensure the explicit development credential exists in that case too; otherwise the
+      // dashboard's localhost auto-login would work only on a brand-new data directory.
+      if (process.env.ALLOW_DEV_API_KEY === 'true') {
+        await this.ensureDevelopmentApiKey();
+      }
+
       // Read the saved bootstrap key from the file — but only while it still resolves to a LIVE
       // key; a revoked/rotated/deleted key must not be advertised in the banner.
       displayKey = (await this.readLiveBootstrapKey()) ?? '(check dashboard for keys)';
@@ -135,6 +145,52 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('');
     this.logger.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     this.logger.log('');
+  }
+
+  /**
+   * Make the opt-in development key usable even on an existing installation.
+   *
+   * Looking up by prefix also recovers from an API_KEY_PEPPER change. The prefix identifies this
+   * fixed development credential exactly, and the explicit opt-in means restoring it as an
+   * unrestricted ADMIN is intentional. Production refuses ALLOW_DEV_API_KEY at boot.
+   */
+  private async ensureDevelopmentApiKey(): Promise<void> {
+    const keyHash = this.hashKey(DEV_ADMIN_API_KEY);
+    const keyPrefix = DEV_ADMIN_API_KEY.substring(0, 12);
+    const existing =
+      (await this.apiKeyRepository.findOne({ where: { keyHash } })) ??
+      (await this.apiKeyRepository.findOne({ where: { keyPrefix } }));
+
+    if (!existing) {
+      await this.seedApiKey(DEV_ADMIN_API_KEY, 'Local Development Admin Key', ApiKeyRole.ADMIN);
+      this.logger.warn('Enabled the well-known local development API key', { action: 'dev_api_key_enabled' });
+      return;
+    }
+
+    const alreadyUsable =
+      existing.keyHash === keyHash &&
+      existing.role === ApiKeyRole.ADMIN &&
+      existing.isActive &&
+      !existing.expiresAt &&
+      !existing.allowedIps?.length &&
+      !existing.allowedSessions?.length &&
+      !existing.allowedChats?.length;
+    if (alreadyUsable) return;
+
+    Object.assign(existing, {
+      name: 'Local Development Admin Key',
+      keyHash,
+      keyPrefix,
+      role: ApiKeyRole.ADMIN,
+      isActive: true,
+      expiresAt: null,
+      allowedIps: null,
+      allowedSessions: null,
+      allowedChats: null,
+    });
+    await this.apiKeyRepository.save(existing);
+    this.keyIndex?.refreshSoon();
+    this.logger.warn('Restored the well-known local development API key', { action: 'dev_api_key_restored' });
   }
 
   /** Flush the coalesced usage counters before the DB connection closes. See ApiKeyUsageTracker. */

@@ -1208,6 +1208,30 @@ describe('AuthService', () => {
       expect(unlinkSpy).not.toHaveBeenCalled();
       expect(bannerText()).toMatch(/\(full key in \S*data\/\.api-key\)/);
     });
+
+    it('boot adds the opted-in development key to an existing installation', async () => {
+      const previous = process.env.ALLOW_DEV_API_KEY;
+      process.env.ALLOW_DEV_API_KEY = 'true';
+      (repository.count as jest.Mock).mockResolvedValue(1);
+      (repository.create as jest.Mock).mockImplementation((dto: Partial<ApiKey>) =>
+        createMockApiKey({ id: 'dev-key', ...dto }),
+      );
+
+      try {
+        await service.onModuleInit();
+
+        expect(repository.create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            name: 'Local Development Admin Key',
+            keyHash: hashKey('dev-admin-key'),
+            role: ApiKeyRole.ADMIN,
+          }),
+        );
+      } finally {
+        if (previous === undefined) delete process.env.ALLOW_DEV_API_KEY;
+        else process.env.ALLOW_DEV_API_KEY = previous;
+      }
+    });
   });
 
   // ── hasPermission ─────────────────────────────────────────────────

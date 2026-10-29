@@ -15,7 +15,7 @@ import { ActiveKeyIndex } from './modules/auth/active-key-index';
 import { requestContextMiddleware } from './common/middleware/request-context.middleware';
 import { createLogger } from './common/services/logger.service';
 import { ShutdownService } from './common/services/shutdown.service';
-import { injectDashboardCspNonce } from './config/dashboard-csp';
+import { injectDashboardCspNonce, injectLocalDevAuthFlag } from './config/dashboard-csp';
 import { resolveCorsPolicy, isUpgradeInsecureRequestsEnabled, resolveBodyLimit } from './config/bootstrap-security';
 import { resolveRequestTimeoutMs } from './config/http-timeouts';
 import { parseTrustedProxies } from './common/utils/ip';
@@ -146,7 +146,8 @@ export function configureApp(app: INestApplication, options: ConfigureAppOptions
       if (!documentRequest) return next();
 
       res.setHeader('Cache-Control', 'no-store');
-      res.type('html').send(injectDashboardCspNonce(dashboardIndex, res.locals.cspNonce as string));
+      const document = injectDashboardCspNonce(dashboardIndex, res.locals.cspNonce as string);
+      res.type('html').send(injectLocalDevAuthFlag(document, process.env.ALLOW_DEV_API_KEY === 'true'));
     });
   }
 
