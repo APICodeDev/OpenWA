@@ -30,7 +30,7 @@ import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
 import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
-import { EnginePageError } from '../../common/errors/engine-page.error';
+import { RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { toCapturedPageError } from './wwebjs-lifecycle';
 
@@ -449,7 +449,8 @@ export class WwebjsMessaging {
    * The answer to a `No LID for user` send whose re-resolution did not answer. The gateway learned nothing
    * about the recipient, so it is not reported unreachable: a reload that cut the lookup short is the
    * retryable 409 the lookup raised, and anything else is what it was, WhatsApp Web refusing the send in the
-   * page. That is an engine error with an unproven outcome (500), so a keyed send keeps its key taken.
+   * page. That is an engine error with an unproven outcome (500), so a keyed send keeps its key taken, but one
+   * the send breaker does not count: it says nothing about the account.
    */
   private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
     if (failure instanceof EngineNotReadyError) return failure;
@@ -457,7 +458,10 @@ export class WwebjsMessaging {
       chatId,
       error: failure instanceof Error ? failure.message : String(failure),
     });
-    return new EnginePageError({ name: sendError.name || 'Error', message: sendError.message }, sendError);
+    return new RecipientLookupUnansweredError(
+      { name: sendError.name || 'Error', message: sendError.message },
+      sendError,
+    );
   }
 
   /**

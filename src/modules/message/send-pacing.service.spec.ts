@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { SendPacingService, SEND_PACING_LIMITED, countsTowardSendBreaker } from './send-pacing.service';
-import { EnginePageError } from '../../common/errors/engine-page.error';
+import { EnginePageError, RecipientLookupUnansweredError } from '../../common/errors/engine-page.error';
 import { EngineRefusedError } from '../../common/errors/engine-refused.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { EngineThrottledError } from '../../common/errors/engine-throttled.error';
@@ -624,6 +624,10 @@ describe('countsTowardSendBreaker', () => {
     ['a disconnected engine (503)', new ServiceUnavailableException('engine not connected')],
     ['a malformed request (400)', new BadRequestException('recipients is required')],
     ['an unknown message id (404)', new NotFoundException('message not found')],
+    [
+      'a send whose recipient lookup did not answer (500 RecipientLookupUnansweredError)',
+      new RecipientLookupUnansweredError({ name: 'Error', message: 'No LID for user' }, new Error('No LID for user')),
+    ],
   ])('does not count %s', (_label, error) => {
     expect(countsTowardSendBreaker(error)).toBe(false);
   });

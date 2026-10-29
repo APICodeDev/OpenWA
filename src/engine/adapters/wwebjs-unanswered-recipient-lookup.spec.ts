@@ -5,7 +5,7 @@ import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error'
 import { EnginePageError } from '../../common/errors/engine-page.error';
 import { markEngineSendFailure } from '../../common/errors/engine-send-failure';
 import { sendFailureProvesNothingSent } from '../../modules/message/idempotency/send-idempotency.interceptor';
-import { sentNothing } from '../../modules/message/send-pacing.service';
+import { countsTowardSendBreaker, sentNothing } from '../../modules/message/send-pacing.service';
 
 /**
  * A send to a contact WhatsApp has moved to privacy-id addressing fails with `No LID for user` on its
@@ -70,6 +70,26 @@ describe('a send whose recipient lookup did not answer', () => {
     expect(outcome).not.toBeInstanceOf(RecipientUnreachableError);
     expect(sendFailureProvesNothingSent(markEngineSendFailure(outcome))).toBe(false);
     expect(sentNothing(outcome)).toBe(false);
+  });
+
+  // One recipient WhatsApp Web refused and could not look up says nothing about the account's standing, so a run
+  // of them must not pause every send of the session. A page refusal of any other send still counts.
+  it('does not count toward the send breaker, while another page refusal still does', async () => {
+    const adapter = ready({
+      getNumberId: jest.fn().mockRejectedValue(new Error('t: t')),
+      sendMessage: jest
+        .fn()
+        .mockRejectedValueOnce(noLid())
+        .mockRejectedValueOnce(new Error('page threw {"name":"TypeError","message":"x"}')),
+    });
+
+    const unanswered = await outcomeOf(adapter.sendTextMessage('628123456789@c.us', 'hi'));
+    const refused = await outcomeOf(adapter.sendTextMessage('120363012345678901@g.us', 'hi'));
+
+    expect(unanswered).toBeInstanceOf(EnginePageError);
+    expect(countsTowardSendBreaker(unanswered)).toBe(false);
+    expect(refused).toBeInstanceOf(EnginePageError);
+    expect(countsTowardSendBreaker(refused)).toBe(true);
   });
 
   it('does not retry a cached id that went stale when the lookup that would replace it fails', async () => {
