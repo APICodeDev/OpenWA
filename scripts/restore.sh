@@ -666,8 +666,10 @@ if [ -f "$STAGE/database.sql" ]; then
     log "Postgres dump of schema $PG_DUMP_SCHEMA (POSTGRES_SCHEMA) present. It holds that schema only: load it into"
     log "the database the app uses, without renaming or recreating it, as a role that may create schemas and"
     log "extensions there. Other schemas in that database are left alone, and a schema $PG_DUMP_SCHEMA already in it"
-    log "is first moved aside as ${PG_DUMP_SCHEMA}_pre_restore_<time>. One transaction: a load that fails changes"
-    log "nothing. With DATABASE_URL set to your own URL for that database:"
+    log "is first moved aside as ${PG_DUMP_SCHEMA}_pre_restore_<time>, rows and all. When pg_trgm and unaccent live in"
+    log "that schema, they and the copy's trigram index (idx_messages_body_trgm) are dropped from it so the dump can"
+    log "create them again, and a load that stops at 'cannot drop extension' means another schema uses them. One"
+    log "transaction: a load that fails changes nothing. With DATABASE_URL set to your own URL for that database:"
   else
     log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
     log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"

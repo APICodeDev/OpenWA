@@ -219,8 +219,10 @@ backup_sqlite() {
 
 # The SQL a schema-scoped dump starts with. Loaded into a database that already holds the schema (the one
 # the dump came from), it moves that schema aside as <schema>_pre_restore_<time>, and drops pg_trgm and
-# unaccent when they moved with it, so the dump can create them in the schema again; in an empty database
-# it does nothing. The name was checked with openwa_pg_schema_valid, so it needs no quoting here.
+# unaccent when they moved with it, with the copy's trigram index on pg_trgm, so the dump can create them
+# in the schema again. Not CASCADE: extensions are per database, so an object in another schema may use
+# these, and it then fails the load, which changes nothing, rather than going with them. In an empty
+# database it does nothing. The name was checked with openwa_pg_schema_valid, so it needs no quoting here.
 pg_schema_prelude() {
   cat <<EOF
 -- Added by backup.sh: this dump holds schema $1 only. An existing $1 is moved aside before it loads.
@@ -233,7 +235,10 @@ BEGIN
     EXECUTE format('ALTER SCHEMA %I RENAME TO %I', '$1', aside);
     FOR ext IN SELECT extname FROM pg_extension
       WHERE extname IN ('pg_trgm', 'unaccent') AND extnamespace = to_regnamespace(aside) LOOP
-      EXECUTE format('DROP EXTENSION %I CASCADE', ext);
+      IF ext = 'pg_trgm' THEN
+        EXECUTE format('DROP INDEX IF EXISTS %I.%I', aside, 'idx_messages_body_trgm');
+      END IF;
+      EXECUTE format('DROP EXTENSION %I', ext);
     END LOOP;
   END IF;
 END

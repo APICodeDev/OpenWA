@@ -275,8 +275,8 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
  * scripts/backup.sh on a database shared with another application through POSTGRES_SCHEMA, run as a role that
  * cannot read the neighbour's schema, then the load restore.sh prints for that archive, into an empty database
  * and, as that role, into the database it came from, and the boot chain over the result. Contains search is on,
- * with its extensions in public and, installed by the app itself, in the app's own schema. Needs pg_dump and psql
- * on PATH.
+ * with its extensions in public and, installed by the app itself, in the app's own schema; the neighbour indexes
+ * with the same pg_trgm. Needs pg_dump and psql on PATH.
  */
 const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${tool}`]).status === 0;
 (POSTGRES_ENABLED && hasTool('pg_dump') && hasTool('psql') ? describe : describe.skip)(
@@ -348,7 +348,7 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
           const setup = await scoped(source);
           await setup.query(`CREATE SCHEMA "${schema}" AUTHORIZATION "${role}"`);
           await setup.query(`CREATE SCHEMA other_app`);
-          await setup.query(`CREATE TABLE other_app.ledger (id int PRIMARY KEY)`);
+          await setup.query(`CREATE TABLE other_app.ledger (id int PRIMARY KEY, note text)`);
           await setup.query(`INSERT INTO other_app.ledger VALUES (1)`);
           if (placement === 'public') {
             // Installed, and so owned, by another role before the app starts.
@@ -378,6 +378,12 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
           const expected = await fingerprint(app);
           expect(expected).toMatchObject({ trigram: true, hits: 1, contains: 1 });
           await app.destroy();
+          // Extensions are per database, so the neighbour can index with the pg_trgm wherever the app found it.
+          const otherApp = await scoped(source);
+          await otherApp.query(
+            `CREATE INDEX ledger_note_trgm ON other_app.ledger USING gin (note "${home}".gin_trgm_ops)`,
+          );
+          await otherApp.destroy();
 
           mkdirSync(path.join(work, 'src', 'data'), { recursive: true });
           mkdirSync(path.join(work, 'dst'));
@@ -426,13 +432,33 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
               },
             });
 
+          if (placement === 'app') {
+            // The neighbour's index stands on the pg_trgm that would move aside with the app's schema: the load
+            // refuses to drop it and changes nothing. Without that index it goes through below.
+            const refused = loadAs(role, role, source);
+            const check = await scoped(source);
+            const [state] = await check.query<unknown[]>(
+              `SELECT to_regnamespace($1::text) IS NOT NULL AS schema,
+                      (SELECT count(*)::int FROM pg_namespace WHERE nspname LIKE $1::text || '_pre_restore_%') AS aside,
+                      (SELECT count(*)::int FROM pg_extension WHERE extnamespace::regnamespace::text = $1) AS extensions,
+                      to_regclass('other_app.ledger_note_trgm') IS NOT NULL AS neighbour`,
+              [schema],
+            );
+            await check.query(`DROP INDEX IF EXISTS other_app.ledger_note_trgm`);
+            await check.destroy();
+            expect({
+              status: refused.status,
+              refused: /cannot drop extension pg_trgm because other objects depend on it/.test(refused.stderr),
+              state,
+            }).toEqual({ status: 3, refused: true, state: { schema: true, aside: 0, extensions: 2, neighbour: true } });
+          }
+
           // Into an empty database as the superuser, and into its own database as the app's role.
           for (const [user, password, database] of [
             [superuser.username, superuser.password, target],
             [role, role, source],
           ]) {
             const run = loadAs(user, password, database);
-            // A NOTICE names what the prelude dropped with an extension it moved aside; nothing may fail.
             const errors = run.stderr.split('\n').filter(line => line.includes('ERROR'));
             expect({ database, status: run.status, errors }).toEqual({ database, status: 0, errors: [] });
             const restored = await boot(role, database);
@@ -443,15 +469,27 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
             }
           }
           const after = await scoped(source);
-          const [{ rows }] = await after.query<Array<{ rows: number }>>(
-            `SELECT count(*)::int AS rows FROM other_app.ledger`,
-          );
-          const aside = await after.query<unknown[]>(
-            `SELECT nspname FROM pg_namespace WHERE nspname LIKE '${schema}_pre_restore_%'`,
-          );
-          await after.destroy();
-          expect(rows).toBe(1);
-          expect(aside).toHaveLength(1);
+          try {
+            const [{ rows }] = await after.query<Array<{ rows: number }>>(
+              `SELECT count(*)::int AS rows FROM other_app.ledger`,
+            );
+            const aside = await after.query<Array<{ nspname: string }>>(
+              `SELECT nspname FROM pg_namespace WHERE nspname LIKE '${schema}_pre_restore_%'`,
+            );
+            expect(rows).toBe(1);
+            expect(aside).toHaveLength(1);
+            // The copy keeps its rows. Its trigram index goes only with a pg_trgm that moved aside with it, and the
+            // neighbour's index on the pg_trgm in public stays.
+            const [copy] = await after.query<unknown[]>(
+              `SELECT (SELECT count(*)::int FROM "${aside[0].nspname}".messages) AS messages,
+                      to_regclass('"${aside[0].nspname}".idx_messages_body_trgm') IS NOT NULL AS trigram,
+                      to_regclass('other_app.ledger_note_trgm') IS NOT NULL AS neighbour`,
+            );
+            const kept = placement === 'public';
+            expect(copy).toEqual({ messages: 1, trigram: kept, neighbour: kept });
+          } finally {
+            await after.destroy();
+          }
           const empty = await scoped(target);
           const [{ neighbour }] = await empty.query<Array<{ neighbour: string | null }>>(
             `SELECT to_regnamespace('other_app')::text AS neighbour`,

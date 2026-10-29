@@ -98,8 +98,8 @@
 #       from the archive) before it copies anything, and restores there when the environment or ./.env
 #       sets that key; a default reached through the operator's link is still followed
 #   (av) a PostgreSQL POSTGRES_SCHEMA other than public, from the environment, ./.env or .env.generated, is
-#       dumped alone with its search extensions behind a prelude, for the DATABASE_URL branch too, and named in
-#       database.schema; public keeps the whole-database dump; a name the app refuses stops the backup before
+#       dumped alone with its search extensions behind a prelude that drops none of them with CASCADE, for the
+#       DATABASE_URL branch too, and named in database.schema; public keeps the whole-database dump; a name the app refuses stops the backup before
 #       pg_dump; restore prints the schema load only for a marked archive, in one transaction either way, and
 #       refuses a marker naming an invalid schema
 #
@@ -2946,6 +2946,12 @@ fi
 AV_SQL="$(tar -xzOf "$ARCHIVE_AV" ./database.sql)"
 if ! grep -q "ALTER SCHEMA %I RENAME TO %I', 'openwa_s'" <<<"$AV_SQL" || [ "$(tail -n 1 <<<"$AV_SQL")" != '-- dump' ]; then
   fail "(av) the schema dump does not start with the prelude that moves the schema aside: $AV_SQL"
+fi
+# Another schema may use the extensions that move aside: the prelude drops them without CASCADE, so that use fails
+# the load instead of going with them, and drops the copy's own trigram index first.
+if grep -q CASCADE <<<"$AV_SQL" ||
+  ! grep -q "DROP INDEX IF EXISTS %I.%I', aside, 'idx_messages_body_trgm'" <<<"$AV_SQL"; then
+  fail "(av) the prelude drops the extensions with CASCADE, or not the copy's trigram index first: $AV_SQL"
 fi
 # The DATABASE_URL branch is scoped the same way.
 rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s DATABASE_URL=postgres://app@db/shared)"
