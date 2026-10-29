@@ -10,7 +10,9 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { OnModuleDestroy } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { createLogger } from '../../common/services/logger.service';
+import { getRequestActor, runWithRequestId } from '../../common/services/request-context';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from '../auth/auth.service';
 import { ChatScopeService } from '../auth/chat-scope.service';
@@ -427,12 +429,22 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       return;
     }
 
+    // The stored key validateApiKey resolved before refusing it, so the refusal's audit row names it as the REST
+    // guard's does. Engine.IO serves /socket.io/ ahead of the Express middleware that opens a request context,
+    // so the validation runs in one of its own and the key is read back from it.
+    let refusedKey: Pick<ApiKey, 'id' | 'name'> | undefined;
     try {
       // validateApiKey THROWS on any failure (it never resolves to a falsy value), so the rejection
       // path is the catch below — a separate `if (!validKey)` branch here was dead code. The clientIp
       // is passed so an IP-restricted key (allowedIps set) is ENFORCED rather than blanket-rejected
       // for "Client IP could not be determined".
-      const validKey = await this.authService.validateApiKey(apiKey, clientIp);
+      const validKey = await runWithRequestId(randomUUID(), () =>
+        this.authService.validateApiKey(apiKey, clientIp).catch((error: unknown) => {
+          const actor = getRequestActor();
+          if (actor?.apiKeyId) refusedKey = { id: actor.apiKeyId, name: actor.apiKeyName ?? '' };
+          throw error;
+        }),
+      );
 
       // Cap simultaneous sockets per key: each socket holds rooms, engine fan-out, and memory,
       // so one key must not open connections without bound. Enough for multi-tab dashboards;
@@ -484,6 +496,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       // Audit the rejected credential like the REST guard does, so probing over the WS surface leaves
       // a forensic trail too. Fire-and-forget: audit logging must never affect the rejection path.
       void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+        apiKey: refusedKey as ApiKey | undefined,
         ipAddress: clientIp,
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),
@@ -611,8 +624,10 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     } catch (error) {
       subscriberKey = null;
       // A key refused here was valid at connect (revoked, expired, deleted or IP-refused since), so it
-      // is audited like the handshake refusal; the socket is disconnected below, bounding the volume.
+      // is audited like the handshake refusal, naming the key the socket connected with; the socket is
+      // disconnected below, bounding the volume.
       void this.auditService.logWarn(AuditAction.API_KEY_AUTH_FAILED, {
+        apiKey: (client.data as { apiKey?: ApiKey }).apiKey,
         ipAddress: clientIp,
         metadata: { surface: 'websocket' },
         errorMessage: error instanceof Error ? error.message : String(error),

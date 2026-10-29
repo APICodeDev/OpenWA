@@ -181,6 +181,8 @@ describe('EventsGateway connection auth + subscribe re-validation', () => {
     expect(res.code).toBe('UNAUTHORIZED');
     expect(unauthorizedEmits(sock)).toHaveLength(1);
     expect(auditService.logWarn).toHaveBeenCalledWith(AuditAction.API_KEY_AUTH_FAILED, {
+      // The key the socket connected with, so the row says which key to revoke or re-scope.
+      apiKey: expect.objectContaining({ name: 'k' }) as unknown,
       ipAddress: '203.0.113.5',
       metadata: { surface: 'websocket' },
       errorMessage: 'API key revoked',
