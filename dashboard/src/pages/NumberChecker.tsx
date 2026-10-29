@@ -34,6 +34,10 @@ import './NumberChecker.css';
 // (100 a minute by default) and against the linked account's standing, so one run is capped.
 export const NUMBER_CHECK_BATCH_MAX = 100;
 
+// The most digits a phone number has (E.164). Spaces are formatting inside one number, so two whole numbers on one line
+// fold into a longer run of digits: such an entry is refused, never looked up as a number nobody typed.
+const PHONE_MAX_DIGITS = 15;
+
 const timeOfDay = (iso: string) => new Date(iso).toLocaleTimeString();
 
 export function NumberChecker() {
@@ -122,6 +126,7 @@ export function NumberChecker() {
     return formatNumberForCheck(phoneNumber);
   }, [phoneNumber, formatNumberForCheck]);
   const singleTypedDigits = normalizePhoneText(phoneNumber).replace(/[^0-9]/g, '');
+  const singleTooLong = singleFormattedNumber.length > PHONE_MAX_DIGITS;
 
   // Batch parsing statistics
   const batchParsedStats = useMemo(() => {
@@ -133,10 +138,17 @@ export function NumberChecker() {
     let tenDigitsCount = 0;
     let twelveDigitsCount = 0;
     let otherCount = 0;
+    let tooLongCount = 0;
 
     const uniqueFormatted = new Set<string>();
 
     for (const raw of lines) {
+      // Measured after the 00 strip and the +91 rewrite, so a 00-prefixed full-length number is still one number.
+      const formatted = formatNumberForCheck(raw, autoPrefix91);
+      if (formatted.length > PHONE_MAX_DIGITS) {
+        tooLongCount++;
+        continue;
+      }
       let d = raw.replace(/[^0-9]/g, '');
       const isInternational = raw.startsWith('+') || d.startsWith('00');
       if (d.startsWith('00') && d.length >= 12) d = d.substring(2);
@@ -150,7 +162,6 @@ export function NumberChecker() {
       } else if (d.length >= 7) {
         otherCount++;
       }
-      const formatted = formatNumberForCheck(raw, autoPrefix91);
       if (formatted.length >= 7) {
         uniqueFormatted.add(formatted);
       }
@@ -162,6 +173,7 @@ export function NumberChecker() {
       tenDigitsCount,
       twelveDigitsCount,
       otherCount,
+      tooLongCount,
       list: Array.from(uniqueFormatted),
     };
   }, [batchInput, autoPrefix91, formatNumberForCheck]);
@@ -173,6 +185,10 @@ export function NumberChecker() {
     const formatted = formatNumberForCheck(phoneNumber);
     if (!formatted) {
       toast.error(t('numberChecker.toast.enterNumber'));
+      return;
+    }
+    if (formatted.length > PHONE_MAX_DIGITS) {
+      toast.error(t('numberChecker.single.tooLong', { max: PHONE_MAX_DIGITS }));
       return;
     }
     if (!shownSession) {
@@ -382,7 +398,13 @@ export function NumberChecker() {
                   <button
                     className="nc-btn nc-btn-primary"
                     onClick={handleSingleCheck}
-                    disabled={!canWrite || isCheckingSingle || !phoneNumber.trim() || readySessions.length === 0}
+                    disabled={
+                      !canWrite ||
+                      isCheckingSingle ||
+                      !phoneNumber.trim() ||
+                      singleTooLong ||
+                      readySessions.length === 0
+                    }
                   >
                     {isCheckingSingle ? <Loader2 size={18} className="animate-spin" /> : <Search size={18} />}
                     {isCheckingSingle ? t('numberChecker.single.checking') : t('numberChecker.single.check')}
@@ -402,7 +424,12 @@ export function NumberChecker() {
                   </span>
                 </label>
 
-                {phoneNumber.trim() && (
+                {phoneNumber.trim() && singleTooLong && (
+                  <span className="nc-batch-limit" role="status">
+                    {t('numberChecker.single.tooLong', { max: PHONE_MAX_DIGITS })}
+                  </span>
+                )}
+                {phoneNumber.trim() && !singleTooLong && (
                   <div className="nc-format-preview">
                     {singleTypedDigits.length === 10 && singleFormattedNumber === '91' + singleTypedDigits ? (
                       <span className="nc-format-pill highlight">
@@ -709,6 +736,11 @@ export function NumberChecker() {
                 ) : (
                   <span className="nc-hint">
                     {t('numberChecker.bulk.numbersHint', { max: NUMBER_CHECK_BATCH_MAX })}
+                  </span>
+                )}
+                {batchParsedStats.tooLongCount > 0 && (
+                  <span className="nc-batch-limit" role="status">
+                    {t('numberChecker.bulk.tooLong', { max: PHONE_MAX_DIGITS, count: batchParsedStats.tooLongCount })}
                   </span>
                 )}
                 {batchOverLimit && (

@@ -56,13 +56,16 @@ function defaultValueFor(kind: FieldKind): WebhookFilterCondition['value'] {
   return [];
 }
 
-/** Accepts a full JID or a phone number; normalizes bare numbers to `<digits>@c.us`. */
+/**
+ * Accepts a full JID or a phone number; normalizes bare numbers to `<digits>@c.us`. More than 15 digits (E.164) is no
+ * phone number, such as two numbers typed with a space between them, so it is not added.
+ */
 function normalizeToJid(raw: string): string | null {
   const value = raw.trim();
   if (!value) return null;
   if (value.includes('@')) return value.toLowerCase();
   const digits = normalizePhoneText(value).replace(/[^0-9]/g, '');
-  return digits ? `${digits}@c.us` : null;
+  return digits && digits.length <= 15 ? `${digits}@c.us` : null;
 }
 
 interface ContactChipsInputProps {

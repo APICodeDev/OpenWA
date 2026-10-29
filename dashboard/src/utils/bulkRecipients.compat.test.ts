@@ -1,7 +1,7 @@
-// The recipients parser differs from the one before quote handling was added only in reading a chat id wrapped in
-// CSV quotes: every recipient that parser found, this one finds too, and each line is read on its own, so an
-// unmatched quote cannot take other lines with it. The reference below is the pre-quote-handling parser, kept
-// verbatim.
+// The recipients parser differs from the one before quote handling was added in reading a chat id wrapped in CSV
+// quotes, and in dropping a field of more than 15 digits, which the generator below never builds: every recipient
+// that parser found, this one finds too, and each line is read on its own, so an unmatched quote cannot take other
+// lines with it. The reference below is the pre-quote-handling parser, kept verbatim.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseBulkRecipients } from './bulkRecipients.ts';
