@@ -11815,6 +11815,30 @@ describe('SessionService', () => {
         reconnectBaseDelay: 1000,
       });
     });
+
+    // A row created before the create body validated config, or carried in by a data import, can hold a
+    // fractional delay. The response field is an integer to every client that decodes it.
+    it('reports a fractional legacy reconnectBaseDelay as an integer on GET', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ config: { reconnectBaseDelay: 2500.5 } }),
+      );
+
+      const result = await service.getConfig('sess-uuid-1');
+
+      expect(result.reconnectBaseDelay).toBe(2500);
+    });
+
+    it('reports a fractional legacy reconnectBaseDelay as an integer after a PATCH of another key', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(
+        createMockSession({ config: { reconnectBaseDelay: 2500.5 } }),
+      );
+
+      const result = await service.updateConfig('sess-uuid-1', { autoRejectCalls: true });
+
+      // The stored value is the operator's and stays as it is; only the reported one is resolved.
+      expect(writtenConfig()).toEqual({ reconnectBaseDelay: 2500.5, autoRejectCalls: true });
+      expect(result.reconnectBaseDelay).toBe(2500);
+    });
   });
 
   describe('session proxy', () => {

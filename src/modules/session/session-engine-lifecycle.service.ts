@@ -101,10 +101,10 @@ export function resolveReconnectConfig(
   // the 0 that Number() makes of them; a numeric string a create body stored still coerces.
   const toNumber = (v: unknown): number => (v == null || (typeof v === 'string' && v.trim() === '') ? NaN : Number(v));
   const baseRaw = toNumber(config?.reconnectBaseDelay);
-  const baseDelay = clampNumber(
-    Number.isFinite(baseRaw) ? baseRaw : 5000,
-    RECONNECT_BASE_DELAY_MIN_MS,
-    RECONNECT_BASE_DELAY_MAX_MS,
+  // Floored like maxAttempts: a row stored before the create body was validated can hold a fraction, and
+  // GET /config reports this value to clients that decode it as an integer.
+  const baseDelay = Math.floor(
+    clampNumber(Number.isFinite(baseRaw) ? baseRaw : 5000, RECONNECT_BASE_DELAY_MIN_MS, RECONNECT_BASE_DELAY_MAX_MS),
   );
   const attemptsRaw = toNumber(config?.maxReconnectAttempts);
   const maxAttempts = Number.isFinite(attemptsRaw)
