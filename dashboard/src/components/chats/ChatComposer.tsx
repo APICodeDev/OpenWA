@@ -317,7 +317,11 @@ function ChatComposer({
             <span className="preview-filename">{attachment.filename}</span>
             <span className="preview-filesize">({(attachment.file.size / 1024).toFixed(1)} KB)</span>
           </div>
-          <button className="btn-banner-close btn-remove-attachment" onClick={handleRemoveAttachment}>
+          <button
+            className="btn-banner-close btn-remove-attachment"
+            onClick={handleRemoveAttachment}
+            aria-label={t('messageTester.removeFile')}
+          >
             <X size={18} />
           </button>
         </div>
@@ -351,7 +355,11 @@ function ChatComposer({
               {replyingTo.type !== 'text' ? typeLabel(replyingTo.type) : replyingTo.body}
             </div>
           </div>
-          <button className="btn-banner-close btn-close-reply" onClick={() => setReplyingTo(null)}>
+          <button
+            className="btn-banner-close btn-close-reply"
+            onClick={() => setReplyingTo(null)}
+            aria-label={t('common.close')}
+          >
             <X size={18} />
           </button>
         </div>
