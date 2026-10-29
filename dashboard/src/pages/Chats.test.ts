@@ -624,6 +624,71 @@ test('a typed draft survives closing and reopening the room', async () => {
   assert.equal(input.value, 'draft survives');
 });
 
+// A draft is the chat's, like a staged file or reply: carried into another chat, the next Enter would deliver it to
+// the wrong recipient. It is kept for the chat it was typed in, so looking at another one loses nothing.
+test('a typed draft stays with its chat: another chat opens with its own, and the first gets it back', async () => {
+  const { screen, fireEvent, within } = rtl;
+  const { container } = renderChats();
+  const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+  const open = async (name: string) => {
+    fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText(name));
+    await within(container.querySelector('.room-header') as HTMLElement).findByText(name);
+  };
+
+  await screen.findByText(SESSION.name);
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+  fireEvent.change(composer(), { target: { value: 'for alice' } });
+
+  await open('Carol');
+  assert.equal(composer().value, '', "Alice's draft followed the user into Carol's room");
+  fireEvent.change(composer(), { target: { value: 'for carol' } });
+
+  await open('Alice');
+  assert.equal(composer().value, 'for alice');
+  // Closing the room in between keeps the draft of the chat that was open, as closing and reopening it does.
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+  await open('Carol');
+  assert.equal(composer().value, 'for carol');
+});
+
+test('a typed draft stays with its session: the same chat on another account opens without it', async () => {
+  const { screen, fireEvent, within, waitFor } = rtl;
+  twoSessions = true;
+  try {
+    resetFetchCalls();
+    const { container } = renderChats();
+    const composer = () => screen.getByPlaceholderText('Type a message...') as HTMLInputElement;
+    const openAlice = async () => {
+      fireEvent.click(await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice'));
+      await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+    };
+
+    await screen.findByText(SESSION.name);
+    await openAlice();
+    fireEvent.change(composer(), { target: { value: 'from session one' } });
+
+    // Session 2 lists a chat with Alice's id (a contact both accounts share).
+    selectSession(container, SESSION_2.id);
+    await waitFor(() => assert.equal(container.querySelector('.room-header') === null, true));
+    await openAlice();
+    assert.equal(composer().value, '', 'the draft followed the user into the other session');
+    fireEvent.submit(container.querySelector('.input-form') as HTMLFormElement);
+    assert.equal(
+      countFetchCalls('POST', `/api/sessions/${SESSION.id}/messages/send-text`),
+      0,
+      'the draft was sent from the other session',
+    );
+
+    selectSession(container, SESSION.id);
+    await waitFor(() => assert.equal(container.querySelector('.room-header') === null, true));
+    await openAlice();
+    assert.equal(composer().value, 'from session one');
+  } finally {
+    twoSessions = false;
+  }
+});
+
 test('Escape dismisses the emoji picker instead of the conversation behind it', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
   resetFetchCalls();

@@ -316,12 +316,12 @@ export function Chats() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
 
   const [replyingTo, setReplyingTo] = useState<ChatMessageView | null>(null);
-  // Draft text lives here (not in ChatComposer) so it survives closing/switching the room.
+  // The open room's draft text lives here (not in ChatComposer) so it survives closing and reopening the room. Each
+  // thread keeps its own (see the drafts effect below): text carried into another chat would be sent to it.
   const [messageInput, setMessageInput] = useState<string>('');
-  // The staged attachment lives here for the same reason the draft text does — ChatComposer
-  // unmounts when the room closes, which would silently discard a picked file. Unlike the text
-  // draft it is dropped when a DIFFERENT chat is opened (see the effect below): a file that
-  // follows the user into another conversation can be sent to the wrong recipient.
+  // The staged attachment lives here for the same reason the draft text does: ChatComposer unmounts when the room
+  // closes, which would silently discard a picked file. It is dropped when a DIFFERENT chat is opened (see the effect
+  // below): a file that follows the user into another conversation can be sent to the wrong recipient.
   const [attachment, setAttachment] = useState<StagedAttachment | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
@@ -351,6 +351,23 @@ export function Chats() {
     setPreviewUrl(null);
     setReplyingTo(null);
   }, [activeChat]);
+
+  // Each thread, by session and chat, keeps the text typed into it. Opening another one, in this session or another,
+  // puts the composer's text away under the thread it was typed in and brings back the one of the thread opened;
+  // closing the room and reopening it changes nothing.
+  const draftsRef = useRef(new Map<string, string>());
+  const draftKeyRef = useRef<string | null>(null);
+  const openChatId = activeChat?.id;
+  useEffect(() => {
+    if (openChatId === undefined) return;
+    const key = readKey(selectedSessionId, openChatId);
+    const previous = draftKeyRef.current;
+    if (previous === key) return;
+    draftKeyRef.current = key;
+    if (previous !== null && messageInput !== '') draftsRef.current.set(previous, messageInput);
+    setMessageInput(draftsRef.current.get(key) ?? '');
+    draftsRef.current.delete(key);
+  }, [selectedSessionId, openChatId, messageInput]);
 
   // Per-chat scroll-position memory + auto-scroll heuristic.
   // Pass `messages.length > 0` as the loaded signal: it stays stable once the
