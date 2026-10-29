@@ -11,7 +11,7 @@
 // JSX), loader hooks registered before any app-module import (see test-helpers/register-hooks),
 // and JSDOM installed before importing modules that read `window` at import time.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach, type TestContext } from 'node:test';
+import { test, before, afterEach, mock, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -430,6 +430,8 @@ before(async () => {
 });
 
 afterEach(async () => {
+  // A test that failed while it held the retry pauses on a fake clock must not leave it to the next one.
+  mock.timers.reset();
   rtl.cleanup();
   resetSocketDouble();
   // Cancel before clearing. clear() silently cancels a fetch still in flight, and that fetch's finally
@@ -3999,6 +4001,99 @@ test("the page joins the open session's message events once connected, and moves
   } finally {
     twoSessions = false;
   }
+});
+
+type SubscribeFrame = { type?: string; sessionId?: string; events?: string[]; requestId?: string };
+
+/** The subscribe frames the page sent, with the requestId the gateway's answer to each echoes. */
+const subscribeFrames = (): SubscribeFrame[] =>
+  (lastSocket()?.emitted ?? [])
+    .map(frame => frame.args[0] as SubscribeFrame)
+    .filter(frame => frame.type === 'subscribe');
+const isSessionFeed = (frame: SubscribeFrame) => !!frame.events?.includes('session.status');
+const isMessageFeed = (frame: SubscribeFrame) => !!frame.events?.includes('message.received');
+const answerSubscribe = (frame: SubscribeFrame, reply: Record<string, unknown>) =>
+  lastSocket()?.receive('message', { ...reply, requestId: frame.requestId });
+const KEY_UNREADABLE = { type: 'error', code: 'INTERNAL_ERROR', message: 'API key could not be checked' };
+const joined = (frame: SubscribeFrame) => ({ type: 'subscribed', sessionId: frame.sessionId, events: frame.events });
+
+// A session-scoped key holds two subscriptions of the open session: its session feed (the '*' room is refused) and
+// its message feed. The gateway answers INTERNAL_ERROR to a subscribe whose key it could not read, and the page
+// sends it again after a pause; joining the feed of that session meanwhile must not drop the message feed's retry.
+test("a scoped key's open session message feed is sent again after its session feed falls back", async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    const messages = subscribeFrames().find(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id);
+    assert.ok(wildcard && messages);
+    mock.timers.enable({ apis: ['setTimeout'] });
+    act(() => answerSubscribe(messages, KEY_UNREADABLE));
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    const perSession = subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*');
+    assert.deepEqual(perSession.map(frame => frame.sessionId).sort(), [SESSION.id, SESSION_2.id].sort());
+    act(() => {
+      for (const frame of perSession) answerSubscribe(frame, joined(frame));
+    });
+    act(() => mock.timers.tick(1_000));
+    const sent = subscribeFrames().filter(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id).length;
+    assert.equal(sent, 2, `the open session's message feed was sent ${sent} time(s)`);
+  } finally {
+    mock.timers.reset();
+    twoSessions = false;
+  }
+});
+
+test("after a reconnect whose subscribes all fail, every feed of a scoped key is sent again, both of the open session's", async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    assert.ok(wildcard);
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    await waitFor(() =>
+      assert.equal(subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*').length, 2),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().filter(frame => frame.sessionId !== '*')) {
+        answerSubscribe(frame, joined(frame));
+      }
+    });
+
+    const before = subscribeFrames().length;
+    act(() => lastSocket()?.receive('disconnect', 'transport close'));
+    act(() => lastSocket()?.receive('connect'));
+    await waitFor(() => assert.equal(subscribeFrames().length - before, 3));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, KEY_UNREADABLE);
+    });
+    act(() => mock.timers.tick(1_000));
+    const label = (frame: SubscribeFrame) => `${frame.sessionId}:${isSessionFeed(frame) ? 'session' : 'messages'}`;
+    assert.deepEqual(
+      subscribeFrames()
+        .slice(before + 3)
+        .map(label)
+        .sort(),
+      [`${SESSION.id}:session`, `${SESSION.id}:messages`, `${SESSION_2.id}:session`].sort(),
+    );
+  } finally {
+    mock.timers.reset();
+    twoSessions = false;
+  }
+  // The reconnect's own re-reads land before the test ends.
+  await flush();
+  await flush();
 });
 
 // A failed read of the sessions is not "no connected sessions", which tells the operator to go connect one.

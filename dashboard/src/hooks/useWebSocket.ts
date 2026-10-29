@@ -148,6 +148,15 @@ if (import.meta.env.VITE_WS_URL) warnIfInsecureHttpUrl(SOCKET_URL, 'VITE_WS_URL'
 // Pauses before a subscribe answered INTERNAL_ERROR is sent again, about 48 s in all before the feed counts as failed.
 const SUBSCRIBE_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 
+interface Subscription {
+  sessionId: string;
+  events: string[];
+}
+
+// A page can hold more than one subscription of a session (Chats joins its session feed and, for the open one, its
+// message feed), so a waiting retry is known by both.
+const subscriptionKey = ({ sessionId, events }: Subscription) => `${sessionId}\n${events.join(',')}`;
+
 export function useWebSocket(events: WebSocketEvents = {}) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
@@ -167,9 +176,10 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   // nothing and the socket stays open, so nothing else would send it again. Such subscribes are sent again together
   // after each pause in SUBSCRIBE_RETRY_DELAYS_MS, and an answered subscribe starts the pauses over. Once they have run
   // out the connection counts as failed, so the page shows its banner and retry. Every other refusal is final.
-  // Answers are matched to subscribes by the requestId the gateway echoes.
-  const pendingSubscribes = useRef(new Map<string, { sessionId: string; events: string[] }>());
-  const retryQueue = useRef(new Map<string, string[]>());
+  // Answers are matched to subscribes by the requestId the gateway echoes, and a waiting retry is kept per session
+  // and events.
+  const pendingSubscribes = useRef(new Map<string, Subscription>());
+  const retryQueue = useRef(new Map<string, Subscription>());
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const retryRound = useRef(0);
   const lastRequestId = useRef(0);
@@ -186,7 +196,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     if (!socketRef.current?.connected) return;
     const requestId = `sub-${++lastRequestId.current}`;
     pendingSubscribes.current.set(requestId, { sessionId, events: eventsList });
-    retryQueue.current.delete(sessionId);
+    retryQueue.current.delete(subscriptionKey({ sessionId, events: eventsList }));
     socketRef.current.emit('message', {
       type: 'subscribe',
       sessionId,
@@ -196,7 +206,9 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   }, []);
 
   const unsubscribe = useCallback((sessionId: string) => {
-    retryQueue.current.delete(sessionId);
+    for (const [key, queued] of retryQueue.current) {
+      if (queued.sessionId === sessionId) retryQueue.current.delete(key);
+    }
     for (const [requestId, pending] of pendingSubscribes.current) {
       if (pending.sessionId === sessionId) pendingSubscribes.current.delete(requestId);
     }
@@ -216,7 +228,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       pendingSubscribes.current.delete(requestId);
       if (frame.type === 'subscribed') retryRound.current = 0;
       if (frame.type !== 'error' || frame.code !== 'INTERNAL_ERROR') return;
-      retryQueue.current.set(pending.sessionId, pending.events);
+      retryQueue.current.set(subscriptionKey(pending), pending);
       if (retryTimer.current !== undefined) return;
       const delay = SUBSCRIBE_RETRY_DELAYS_MS[retryRound.current];
       if (delay === undefined) {
@@ -228,9 +240,9 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       retryTimer.current = setTimeout(() => {
         retryTimer.current = undefined;
         retryRound.current += 1;
-        const queued = [...retryQueue.current];
+        const queued = [...retryQueue.current.values()];
         retryQueue.current.clear();
-        for (const [sessionId, events] of queued) subscribe(sessionId, events);
+        for (const { sessionId, events } of queued) subscribe(sessionId, events);
       }, delay);
     },
     [subscribe],

@@ -204,3 +204,68 @@ test('a waiting retry is dropped when its session is left or the connection drop
   rtl.act(() => mock.timers.tick(600_000));
   assert.equal(subscribeFrames(socket).length, 3, 'a retry went out after the connection dropped');
 });
+
+const SESSION_FEED = ['session.status', 'session.qr', 'session.restriction'];
+const MESSAGE_FEED = ['message.received', 'message.sent'];
+
+// Chats holds two subscriptions of the open session for a session-scoped key: its session feed and its message feed.
+test('both subscriptions of one session the gateway could not check are sent again', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', SESSION_FEED);
+  result.current.subscribe('s1', MESSAGE_FEED);
+  rtl.act(() => {
+    for (const frame of subscribeFrames(socket)) {
+      socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: frame.requestId });
+    }
+  });
+  rtl.act(() => mock.timers.tick(1_000));
+  assert.deepEqual(
+    subscribeFrames(socket)
+      .slice(2)
+      .map(frame => frame.events?.join(','))
+      .sort(),
+    [SESSION_FEED.join(','), MESSAGE_FEED.join(',')].sort(),
+  );
+});
+
+test('a waiting retry of one subscription outlasts a new subscribe of other events for its session', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', MESSAGE_FEED);
+  const [messages] = subscribeFrames(socket);
+  rtl.act(() => socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: messages.requestId }));
+  // The scope fallback joins the session feed of the same session while the message feed waits for its retry.
+  result.current.subscribe('s1', SESSION_FEED);
+  const [, feed] = subscribeFrames(socket);
+  rtl.act(() =>
+    socket.receive('message', { type: 'subscribed', sessionId: 's1', events: SESSION_FEED, requestId: feed.requestId }),
+  );
+  rtl.act(() => mock.timers.tick(60_000));
+  assert.deepEqual(
+    subscribeFrames(socket)
+      .slice(2)
+      .map(frame => frame.events?.join(',')),
+    [MESSAGE_FEED.join(',')],
+  );
+
+  // Leaving the session drops every waiting retry of it.
+  const [, , retried] = subscribeFrames(socket);
+  rtl.act(() => socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: retried.requestId }));
+  result.current.subscribe('s1', SESSION_FEED);
+  const [, , , feedAgain] = subscribeFrames(socket);
+  rtl.act(() => socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: feedAgain.requestId }));
+  result.current.unsubscribe('s1');
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, 4, 'a retry of a session left went out');
+});
