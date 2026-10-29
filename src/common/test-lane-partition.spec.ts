@@ -155,6 +155,10 @@ describe('Test lane partition', () => {
     'src/modules/session/session-delete-claim.spec.ts',
     'src/engine/identity/lid-mapping-store.spec.ts',
     'src/modules/chat-media/chat-media-retention-marker.spec.ts',
+    'src/modules/session/message-edit-persisted.spec.ts',
+    'src/modules/session/ack-foreign-chat.spec.ts',
+    'src/modules/message/outgoing-row-sender.spec.ts',
+    'src/modules/search/search-own-sender.spec.ts',
   ];
 
   it.each(['ci.yml', 'release.yml'])('runs the dialect-switched specs in the %s test-postgres job', file => {
