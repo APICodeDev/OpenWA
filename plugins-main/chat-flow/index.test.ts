@@ -1,0 +1,296 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseConfig, toFlowNodes } from './index.ts';
+
+// Minimal ctx builder for the priority test below — the file's other tests build their own inline ctx
+// per-case (different storage/message needs), so this one only needs registerHook + a config that
+// passes onEnable's fail-fast parseConfig.
+function makeCtx(overrides: {
+  config?: Record<string, unknown>;
+  registerHook?: (event: string, handler: unknown, priority?: number) => void;
+} = {}) {
+  return {
+    config: overrides.config ?? { greeting: 'menu', options: [{ key: '1', text: 'A' }] },
+    logger: { log() {}, debug() {}, warn() {}, error() {} },
+    registerHook: overrides.registerHook ?? (() => {}),
+    storage: { get: async () => null, set: async () => {}, delete: async () => {}, list: async () => [] },
+    messages: { reply: async () => ({ messageId: 'x', timestamp: 0 }), sendText: async () => ({ messageId: 'x', timestamp: 0 }) },
+  };
+}
+
+// Responder band (PLUGIN-STANDARD.md "Co-installation"): an in-flow state machine is more specific than
+// keyword rules but less specific than a command prefix. Already claims correctly via `continue: !handled`.
+test('registers at the chat-flow responder priority', async () => {
+  let priority: number | undefined;
+  const ctx = makeCtx({ registerHook: (_e, _h, p) => { priority = p; } });
+  const { default: ChatFlow } = await import('./index.ts');
+  await new ChatFlow().onEnable(ctx as never);
+  assert.equal(priority, 75);
+});
+
+test('parseConfig requires greeting and at least one option', () => {
+  assert.throws(() => parseConfig({ options: [{ key: '1', text: 'a' }] }), /greeting is required/);
+  assert.throws(() => parseConfig({ greeting: 'hi' }), /at least one menu option/);
+  assert.throws(() => parseConfig({ greeting: 'hi', options: [] }), /at least one menu option/);
+});
+
+test('parseConfig builds the flow and defaults', () => {
+  const c = parseConfig({ greeting: 'menu', options: [{ key: '1', text: 'A' }] });
+  assert.equal(c.flow.trigger, '');
+  assert.equal(c.flow.greeting, 'menu');
+  assert.deepEqual(c.flow.options, { '1': { text: 'A', options: undefined } });
+  assert.equal(c.respondInGroups, false);
+
+  const c2 = parseConfig({ greeting: 'menu', trigger: 'hi', respondInGroups: true, options: [{ key: '1', text: 'A' }] });
+  assert.equal(c2.flow.trigger, 'hi');
+  assert.equal(c2.respondInGroups, true);
+});
+
+test('toFlowNodes nests recursively and rejects bad nodes', () => {
+  const nodes = toFlowNodes([{ key: '1', text: 'A', options: [{ key: '1', text: 'A1' }] }]);
+  assert.deepEqual(nodes, { '1': { text: 'A', options: { '1': { text: 'A1', options: undefined } } } });
+  assert.equal(toFlowNodes([]), undefined);
+  assert.equal(toFlowNodes('x'), undefined);
+  assert.throws(() => toFlowNodes([{ key: '', text: 'A' }]), /non-empty "key"/);
+  assert.throws(() => toFlowNodes([{ key: '1', text: '' }]), /needs "text"/);
+  assert.throws(() => toFlowNodes([{ key: '1', text: 'A' }, { key: '1', text: 'B' }]), /duplicate option key/);
+});
+
+test('toFlowNodes accepts keys that collide with Object.prototype names, but rejects __proto__', () => {
+  const nodes = toFlowNodes([{ key: 'toString', text: 'A' }, { key: 'constructor', text: 'B' }]);
+  assert.equal(nodes!['toString'].text, 'A'); // no spurious "duplicate" on the first use
+  assert.equal(nodes!['constructor'].text, 'B');
+  // a genuine duplicate of such a key still throws
+  assert.throws(() => toFlowNodes([{ key: 'toString', text: 'A' }, { key: 'toString', text: 'B' }]), /duplicate option key/);
+  // __proto__ would set the prototype rather than an own key — reject it outright
+  assert.throws(() => toFlowNodes([{ key: '__proto__', text: 'A' }]), /not allowed/);
+});
+
+// Regression: the message hook must re-read ctx.config per event (not a snapshot cached at enable) so a
+// per-session override resolved by the host for the firing session is honored. We prove it by corrupting
+// the config post-enable and asserting the hook warns + skips (a cached snapshot would drive the flow with
+// the stale enable-time menu).
+test('onMessage re-reads ctx.config per event (per-session config is not cached at enable)', async () => {
+  let liveConfig: Record<string, unknown> = { greeting: 'menu', options: [{ key: '1', text: 'A' }] };
+  const warnings: string[] = [];
+  let registered = false;
+  let handler: (hook: any) => Promise<unknown> = async () => {}; // default no-op; overwritten on registerHook
+  const ctx: any = {
+    get config() { return liveConfig; }, // simulate the host's per-session getter
+    logger: { log() {}, debug() {}, warn: (m: string) => warnings.push(m), error() {} },
+    registerHook: (_e: string, h: any) => { handler = h; registered = true; },
+    storage: { get: async () => null, set: async () => {}, delete: async () => {}, list: async () => [] },
+    messages: { reply: async () => ({ messageId: '', timestamp: 0 }), sendText: async () => ({ messageId: '', timestamp: 0 }) },
+  };
+  const { default: ChatFlow } = await import('./index.ts');
+  const plugin = new ChatFlow();
+  await plugin.onEnable(ctx);
+  assert.ok(registered, 'hook registered');
+
+  // Corrupt the config AFTER enable. A snapshot cached at enable would not see this; a per-event read does.
+  liveConfig = { greeting: '', options: [] };
+  await handler({ source: 'Engine', sessionId: 's1', timestamp: new Date(),
+    data: { id: 'm1', chatId: 'c@x', body: 'hi', fromMe: false, isGroup: false } });
+  assert.ok(warnings.some(w => /config invalid/.test(w)), 'corrupted post-enable config was re-read and warned');
+});
+
+// Drives the PLUGIN. Every non-text message carries body: '', so guarding only on the TYPE let a
+// sticker or voice note start the flow (with the documented empty trigger) or draw an "Invalid option".
+test('a body-less message never reaches the flow engine', async () => {
+  const ChatFlow = (await import('./index.ts')).default;
+  const sent: string[] = [];
+  let handler: ((h: unknown) => Promise<{ continue: boolean }>) | undefined;
+  const store = new Map<string, unknown>();
+  const ctx = {
+    config: { greeting: 'halo', trigger: '', options: [{ key: '1', text: 'satu' }] },
+    logger: { log() {}, debug() {}, warn() {}, error() {} },
+    messages: { sendText: async (_s: string, _c: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; },
+                reply: async (_s: string, _c: string, _q: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; } },
+    storage: {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: unknown) => void store.set(k, v),
+      delete: async (k: string) => void store.delete(k),
+      list: async () => [...store.keys()],
+    },
+    registerHook: (_e: string, h: (x: unknown) => Promise<{ continue: boolean }>) => { handler = h; },
+  } as never;
+
+  const plugin = new ChatFlow();
+  await plugin.onEnable(ctx);
+  const fire = (body: string, id: string, type = 'text') =>
+    handler!({ source: 'Engine', sessionId: 's1', data: { id, chatId: 'c@wa', body, type, fromMe: false, isGroup: false } });
+
+  await fire('', 'm1');      // sticker / voice note / caption-less image
+  await fire('   ', 'm2');
+  assert.deepEqual(sent, [], 'a body-less message must not start the flow');
+  await fire('apa saja', 'm3'); // real text: the empty trigger means anything starts it
+  assert.ok(sent.length > 0, 'a real message still starts the flow');
+  await plugin.onDisable();
+});
+
+// From host 0.23.2 a contact card and a poll DO carry text, so the body guard above no longer covers
+// them. With the documented empty trigger either would start the flow; mid-flow either would draw an
+// "Invalid option" and claim the message from a sibling auto-replier.
+test('a contact card or a poll never reaches the flow engine, but a tapped button does', async () => {
+  const ChatFlow = (await import('./index.ts')).default;
+  const sent: string[] = [];
+  let handler: ((h: unknown) => Promise<{ continue: boolean }>) | undefined;
+  const store = new Map<string, unknown>();
+  const ctx = {
+    config: { greeting: 'halo', trigger: '', options: [{ key: '1', text: 'satu' }] },
+    logger: { log() {}, debug() {}, warn() {}, error() {} },
+    messages: { sendText: async (_s: string, _c: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; },
+                reply: async (_s: string, _c: string, _q: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; } },
+    storage: {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: unknown) => void store.set(k, v),
+      delete: async (k: string) => void store.delete(k),
+      list: async () => [...store.keys()],
+    },
+    registerHook: (_e: string, h: (x: unknown) => Promise<{ continue: boolean }>) => { handler = h; },
+  } as never;
+
+  const plugin = new ChatFlow();
+  await plugin.onEnable(ctx);
+  const fire = (body: string, id: string, type = 'text') =>
+    handler!({ source: 'Engine', sessionId: 's1', data: { id, chatId: 'c@wa', body, type, fromMe: false, isGroup: false } });
+
+  const vcard = 'BEGIN:VCARD\nVERSION:3.0\nFN:Budi Santoso\nTEL;TYPE=CELL:+628123456789\nEND:VCARD';
+  const card = await fire(vcard, 'm1', 'contact');
+  assert.equal(card.continue, true, 'a contact card must pass down the chain');
+  const poll = await fire('Makan di mana hari Jumat?', 'm2', 'poll');
+  assert.equal(poll.continue, true, 'a poll must pass down the chain');
+  assert.deepEqual(sent, [], 'neither may start the flow');
+
+  // 'unknown' carries whatsapp-web.js business button and list replies (Baileys sends them as 'text'
+  // from host 0.23.6). A tapped menu button is the single most desirable input a menu bot can get, so
+  // it must NOT be denied along with the two above.
+  await fire('1', 'm3', 'unknown');
+  assert.ok(sent.length > 0, 'a tapped button still drives the flow');
+  await plugin.onDisable();
+});
+
+// From host 0.23.5 a Baileys catalog order arrives as 'order' with its note (or title) as the body, and
+// a product card as 'product' with its text (or title). Neither was typed at the menu: with the
+// documented empty trigger either started the flow, and mid-flow either drew "Invalid option", spent a
+// miss and claimed the event.
+for (const [label, type, body] of [
+  ['an order', 'order', 'Tolong kirim sore ini'],
+  ['a product card', 'product', 'Kopi Gayo 250g'],
+] as const) {
+  test(`${label} never reaches the flow engine`, async () => {
+    const ChatFlow = (await import('./index.ts')).default;
+    const sent: string[] = [];
+    let handler: ((h: unknown) => Promise<{ continue: boolean }>) | undefined;
+    const store = new Map<string, unknown>();
+    const ctx = {
+      config: { greeting: 'halo', trigger: '', options: [{ key: '1', text: 'satu' }] },
+      logger: { log() {}, debug() {}, warn() {}, error() {} },
+      messages: { sendText: async (_s: string, _c: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; },
+                  reply: async (_s: string, _c: string, _q: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; } },
+      storage: {
+        get: async (k: string) => store.get(k) ?? null,
+        set: async (k: string, v: unknown) => void store.set(k, structuredClone(v)),
+        delete: async (k: string) => void store.delete(k),
+        list: async () => [...store.keys()],
+      },
+      registerHook: (_e: string, h: (x: unknown) => Promise<{ continue: boolean }>) => { handler = h; },
+    } as never;
+
+    const plugin = new ChatFlow();
+    await plugin.onEnable(ctx);
+    const fire = (b: string, id: string, t = 'text') =>
+      handler!({ source: 'Engine', sessionId: 's1', data: { id, chatId: 'c@wa', body: b, type: t, fromMe: false, isGroup: false } });
+
+    const first = await fire(body, 'm1', type);
+    assert.equal(first.continue, true, `${label} must pass down the chain`);
+    assert.deepEqual(sent, [], `${label} must not start the flow`);
+    assert.equal(store.size, 0, `${label} must not open flow state`);
+
+    await fire('halo', 'm2');
+    const before = structuredClone([...store]);
+    const mid = await fire(body, 'm3', type);
+    assert.equal(mid.continue, true, `${label} mid-flow must pass down the chain`);
+    assert.deepEqual(sent, ['halo'], `${label} mid-flow must not draw "Invalid option"`);
+    assert.deepEqual([...store], before, `${label} mid-flow must not spend a miss or move the path`);
+    await plugin.onDisable();
+  });
+}
+
+test('a channel or broadcast post never starts a flow', async () => {
+  // A `@newsletter` post arrives flagged as a non-group chat, so the only chat-scope gate let it
+  // through. With the documented empty trigger every post started a flow, replying into a chat the
+  // account can never post to and taking a durable state row per followed channel.
+  const replies: string[] = [];
+  const stored = new Map<string, unknown>();
+  let handler: ((hook: unknown) => Promise<{ continue: boolean }>) | undefined;
+  const ctx = {
+    ...makeCtx({
+      config: { trigger: '', greeting: 'menu', options: [{ key: '1', text: 'A' }] },
+      registerHook: (_e, h) => { handler = h as (hook: unknown) => Promise<{ continue: boolean }>; },
+    }),
+    storage: {
+      get: async (k: string) => (stored.has(k) ? stored.get(k) : null),
+      set: async (k: string, v: unknown) => void stored.set(k, v),
+      delete: async (k: string) => void stored.delete(k),
+      list: async () => [...stored.keys()],
+    },
+    messages: {
+      reply: async (_s: string, _c: string, _q: string, text: string) => { replies.push(text); return { messageId: 'x', timestamp: 0 }; },
+      sendText: async () => ({ messageId: 'x', timestamp: 0 }),
+    },
+  };
+  const { default: ChatFlow } = await import('./index.ts');
+  await new ChatFlow().onEnable(ctx as never);
+
+  const fire = (chatId: string) =>
+    handler!({
+      source: 'Engine', sessionId: 's1', timestamp: new Date(),
+      data: { id: `m-${chatId}`, chatId, from: chatId, body: 'anything', type: 'text', fromMe: false, isGroup: false },
+    });
+
+  for (const chatId of ['120363000000000000@newsletter', '628123-456@broadcast', 'status@broadcast']) {
+    assert.deepEqual(await fire(chatId), { continue: true }, `${chatId} must not be claimed`);
+  }
+  assert.equal(replies.length, 0, 'nothing may be sent into a channel or broadcast chat');
+  assert.equal(stored.size, 0, 'and no flow state may be stored for one');
+
+  // Guard rail: a real chat under the same config still starts the flow.
+  await fire('628123456789@c.us');
+  assert.deepEqual(replies, ['menu']);
+});
+
+// From host 0.23.6 a Baileys session delivers, after it reconnects, what the contact sent while it was
+// disconnected. Inside an open flow such a message is claimed without a reply, so neither the menu nor
+// a sibling auto-replier answers something written before the menu it would be matched against.
+test('a late backlog inside an open flow is claimed without a reply', async () => {
+  const ChatFlow = (await import('./index.ts')).default;
+  const sent: string[] = [];
+  let handler: ((h: unknown) => Promise<{ continue: boolean }>) | undefined;
+  const store = new Map<string, unknown>();
+  const ctx = {
+    config: { greeting: 'halo', trigger: '', options: [{ key: '1', text: 'satu' }] },
+    logger: { log() {}, debug() {}, warn() {}, error() {} },
+    messages: { sendText: async (_s: string, _c: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; },
+                reply: async (_s: string, _c: string, _q: string, t: string) => { sent.push(t); return { messageId: 'x', timestamp: 0 }; } },
+    storage: {
+      get: async (k: string) => store.get(k) ?? null,
+      set: async (k: string, v: unknown) => void store.set(k, v),
+      delete: async (k: string) => void store.delete(k),
+      list: async () => [...store.keys()],
+    },
+    registerHook: (_e: string, h: (x: unknown) => Promise<{ continue: boolean }>) => { handler = h; },
+  } as never;
+
+  const plugin = new ChatFlow();
+  await plugin.onEnable(ctx);
+  const hourAgo = Math.floor(Date.now() / 1000) - 3600;
+  const fire = (body: string, id: string) =>
+    handler!({ source: 'Engine', sessionId: 's1',
+      data: { id, chatId: 'c@wa', body, type: 'text', timestamp: hourAgo, fromMe: false, isGroup: false } });
+
+  await fire('halo', 'm1');
+  assert.deepEqual(await fire('ada orang?', 'm2'), { continue: false }, 'claimed inside the open flow');
+  assert.deepEqual(sent, ['halo'], 'only the greeting goes out');
+  await plugin.onDisable();
+});

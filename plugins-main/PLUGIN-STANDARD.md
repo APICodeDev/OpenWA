@@ -1,0 +1,497 @@
+# OpenWA Plugin Standard
+
+The conventions every plugin in this repository follows, so the catalog stays consistent and
+management/automation stays easy. Verified against OpenWA's plugin runtime (sandboxed worker model) at
+the same baseline as [`types/openwa.d.ts`](./types/openwa.d.ts) — re-check both together, since this
+document describes host behaviour that has moved repeatedly (per-session config in 0.7, boot re-enable
+in 0.10.5, the storage quota and `message:deleted` in 0.11.0, the `storage:use` gate in 0.17.0, hook
+result checks and sandboxed hook ordering in 0.23.6). The current baseline is OpenWA v0.26.0, including host-version floor enforcement and HTTPS origin grants for configured outbound endpoints (both 0.24.0), and the secret rule for host overrides, `null` secret removal and the capped boot restore (0.26.0).
+
+## Principles
+
+| Concern | Lives in | Notes |
+| ------- | -------- | ----- |
+| Machine-readable metadata | `manifest.json` | Single source of truth. OpenWA reads required fields and ignores unknown ones. |
+| Human-readable docs | `README.md` | Standard section order (below). |
+| Dated version history | `CHANGELOG.md` | Keep a Changelog + SemVer. The release date lives here. |
+| Computed artifacts (size, sha256) | release time | GitHub Release notes + assets, plus the `#sha256=` pin on each catalog `download` URL; never hand-written. |
+| Cross-plugin index | `plugins.json` (repo root) | **Generated** from manifests + changelogs. Don't edit by hand. |
+
+## Repository layout
+
+```
+OpenWA-plugins/
+├─ plugins.json            # generated catalog (one entry per plugin)
+├─ PLUGIN-STANDARD.md      # this file
+├─ scripts/catalog.mjs     # catalog generator + drift check
+├─ package.mjs             # per-plugin build + validate + package (zip)
+└─ <plugin-id>/
+   ├─ manifest.json
+   ├─ README.md            # Details (generated block) + Features + …
+   ├─ CHANGELOG.md
+   ├─ index.ts             # default-exports an IPlugin class
+   ├─ *.ts, *.test.ts
+   └─ dist/index.js        # built artifact (gitignored)
+```
+
+## `manifest.json`
+
+```jsonc
+{
+  // ── Required by OpenWA (install fails without these) ──
+  "id": "my-plugin",            // /^[a-z0-9][a-z0-9._-]*$/i, unique, not reserved
+  "name": "My Plugin",          // shown in the dashboard
+  "version": "1.0.0",           // SemVer; MUST equal the top released CHANGELOG heading
+  "type": "extension",          // only "extension" is user-installable
+  "main": "dist/index.js",      // require()-able entry, present in the package
+
+  // ── Surfaced by OpenWA ──
+  "description": "…",            // rendered in the dashboard card + returned by the API
+  "provides": ["feature-tag"],  // rendered as tags in the dashboard card
+  "permissions": [],            // see the seven values below — enforced at the capability boundary
+  "sessions": ["*"],            // capability session scope (static; editing config can't widen it)
+  "hooks": ["message:received"],// declared interest
+  "configSchema": { … },        // declarative config form (see vocabulary below); mark secrets "secret": true
+
+  // ── v0.7 contract ──
+  "sessionScoped": true,        // default true: only runs for sessions an operator activates it for
+                                //   (ctx.config is the resolved per-session slice). false = global, always on.
+  "net": { "allow": ["api.example.com:443"] }, // outbound-HTTP allowlist for ctx.net.fetch (needs "net:fetch")
+  "configUi": { "entry": "config/index.html", "height": 600 }, // sandboxed-iframe config editor (see below)
+
+  // ── Returned by the API; `author` shows on the catalog row and is searchable there ──
+  "author": "Name <email>",     // string form (npm-style)
+  "license": "MIT",            // stored and returned, not rendered
+
+  // ── Standard catalog metadata (OpenWA stores but ignores; used by our tooling) ──
+  "homepage": "https://github.com/rmyndharis/OpenWA-plugins/tree/main/my-plugin",
+  "repository": "https://github.com/rmyndharis/OpenWA-plugins",
+  "keywords": ["…"],
+  "status": "stable",           // "stable" | "beta" | "development"
+  "minOpenWAVersion": "0.7.0",  // enforced at install and boot load since OpenWA v0.24.0
+  "testedOpenWAVersion": "0.26.0" // newest host checked; describe the verification scope in the README
+}
+```
+
+Repo gates — all hard failures in CI. `scripts/catalog.mjs` refuses to build the catalog unless every
+plugin:
+
+- declares `sessionScoped` explicitly (`true` or `false`);
+- declares `testedOpenWAVersion` when `status` is `"stable"`;
+- ships a `CHANGELOG.md` carrying a released `## [x.y.z] - YYYY-MM-DD` heading;
+- has a `manifest.json` `version` equal to that heading's version.
+
+`catalog.mjs` only *warns* about i18n — a missing block, or a missing locale — but the test suite does
+not: `npm test` fails when a `stable` plugin is missing any supported locale, and when any plugin ships
+a locale that translates its name and description without translating every `configSchema` field. Treat
+i18n as gated; the warning is where you notice a gap, not where it is stopped. The shared locale list in `scripts/locales.mjs` matches OpenWA v0.26.0, including `id`; stable plugins must cover every non-English locale.
+
+### `configSchema` field vocabulary (v0.7)
+
+A JSON-Schema-ish object the host renders into an authenticated form (writes go through
+`PUT /plugins/:id/config`). `{ "type": "object", "properties": { <key>: <field> } }`, where each
+field is:
+
+| Key | Applies to | Effect |
+| --- | ---------- | ------ |
+| `type` | all | `string` · `number` · `boolean` · `textarea` (multi-line string) · `object` · `array` |
+| `title` / `description` | all | label + helper text |
+| `default` | all | seeded into the form; also the blank value for a new array row |
+| `required` | all | marks the label (advisory — not hard-enforced by the host) |
+| `secret` | scalar | masked on read (shown as `***`); an unchanged `***` write, or an empty string, keeps the stored value, and from 0.26.0 an explicit `null` removes it. Works at **any depth** (nested object / array row). |
+| `enum` | scalar | renders as a `<select>` of the listed values |
+| `min` / `max` | number / string·textarea / array | value bound · min/maxLength · row count (HTML attribute, advisory) |
+| `pattern` | string / textarea | HTML validation regex |
+| `properties` | `object` | nested fields, rendered as a sub-group |
+| `items` | `array` | the element schema; **array-of-rows** when `items.type === 'object'` (add/remove rows in the form) |
+
+`items` and `properties` nest arbitrarily (e.g. a menu tree of options → sub-options). The plugin
+still reads `ctx.config` as `Record<string, unknown>` and must validate defensively — the schema only
+drives the host's form, it is not enforced server-side.
+
+### `configUi` — sandboxed-iframe config editor (v0.7)
+
+For a richer editor than the declarative form, ship `configUi: { entry, height? }`. The host serves
+`entry` (a plugin-relative path) over an authenticated route and injects it as the `srcdoc` of a
+`sandbox="allow-scripts"` iframe (opaque origin — no access to the dashboard, its API key, or storage).
+When both `configUi` and `configSchema` are present, the dashboard prefers the iframe.
+
+- **Self-contained.** Inline your JS/CSS — a sandboxed opaque-origin srcdoc can't load subresources,
+  and the iframe has no network of its own. The editor talks ONLY to the host over `postMessage`:
+  - `→ host { type: 'config:get' }` then `← host { type: 'config:value', config, schema }`
+  - `→ host { type: 'config:save', config }` then `← host { type: 'config:saved' }` or `{ type: 'config:error', message }`
+- **Declare your fields in `configSchema` too.** The host only hands the iframe the schema-declared,
+  secret-redacted config (so an undeclared key can't leak a secret to untrusted UI); fields you don't
+  declare won't pre-fill, and secrets you mark `secret: true` arrive masked and are restored on save.
+
+### Per-session config (v0.7)
+
+A session-scoped plugin (`sessionScoped` ≠ false) may carry per-session config **overrides** on top of
+the base (`'*'`) config. The host resolves them automatically: `ctx.config` is the override
+shallow-merged over the base for the session whose event is firing (the base when there's no override,
+or for a non-session-attributed event). **Read `ctx.config` inside your hook handler** to get the
+right slice; reading it at load/lifecycle time yields the base. No plugin code is needed — the operator
+sets overrides via the dashboard/API.
+
+#### Author requirement: re-resolve config inside the hook
+
+Because `ctx.config` is a **getter** that returns a different value per firing session, **caching it at
+`onEnable` and reading the cache in the hook silently ignores per-session overrides** — the cache holds
+the base `*` config. Two patterns honor overrides correctly:
+
+- **Per-event re-parse (simplest).** Call your `parseConfig(ctx.config)` inside the hook handler, not at
+  `onEnable`. This is the recommended pattern for plugins whose config is plain values (strings, numbers,
+  booleans, rule lists). Keep a `parseConfig(ctx.config)` at `onEnable` too as fail-fast validation so a
+  bad base config surfaces in the dashboard immediately, but don't keep the *result* as hook state.
+- **Config-signature caching (for stateful coordinators).** If your hook reads a *stateful object* built
+  from config — a client with a circuit breaker, a connection pool, a coordinator — a naive per-event
+  rebuild resets that state on every message (e.g. the circuit breaker never trips). Instead, compute a
+  stable signature of the coordinator-affecting config fields per event and rebuild **only when the
+  signature changes**. Two messages from sessions with the same resolved config reuse the same
+  coordinator (its breaker/state survives); a per-session override that changes a field triggers one
+  rebuild on the next hook fire.
+
+> ⚠️ **Anti-pattern.** Do NOT store `this.config = parseConfig(ctx.config)` at `onEnable` and read
+> `this.config` in the hook. This breaks per-session overrides and has been the source of multiple bugs
+> (PRs #38, #39). Re-parse per event, or use signature-caching for a stateful coordinator.
+
+If your plugin **cannot** support per-session config — typically because it holds a single shared sink
+(e.g. one buffer, one queue) that can't attribute work to a session at flush time — that is an
+acceptable design choice, but it **must be documented** in the plugin's README **Compatibility** section
+under a `### Per-session config` heading, with the reason and any workaround (e.g. "run one instance per
+session"). See the per-plugin README convention below.
+
+**Reserved ids** (cannot be used): `whatsapp-web.js`, `baileys`, `auto-reply`, `translation`.
+**Package limits** (enforced by OpenWA at install): ≤ 5 MB compressed, ≤ 200 files, ≤ 20 MB uncompressed.
+**Ship compiled JS** — the loader `require()`s `main`; build with `node package.mjs <id>`.
+
+## Co-installation: ordering and claiming
+
+Several plugins can subscribe to the same event. Two rules keep a multi-plugin install predictable.
+
+### Ordering
+
+`ctx.registerHook(event, handler, priority?)` sorts **ascending** — a lower number runs earlier. The
+default is `100`. Without an explicit priority, the chain order is registration order: the loader's
+directory scan at boot, and click order after an operator enables a plugin by hand. That means a
+different plugin can win after a restart than after a manual enable.
+
+From OpenWA 0.23.6 a non-finite priority counts as `100`, and all of one plugin's handlers for an event
+run as a single chain placed at the **lowest** priority any of them asked for. Up to 0.23.5 that chain
+stayed at the first-registered handler's priority, so register the lowest one first.
+
+Pick a priority from the band that matches what your plugin does:
+
+| Band | Range | What belongs here |
+|---|---|---|
+| Observer | 10-29 | Logs, mirrors, or exports the message. Must never claim. |
+| Transformer | 40-59 | Acts on the message before any responder sees it. |
+| Responder | 70-99 | Answers the contact as "the bot". |
+
+The official plugins occupy: `gsheets-logger` 10, `chatwoot-adapter` 20, `voice-transcription` 40,
+`group-translate` 50, `http-action` 70, `chat-flow` 75, `faq-bot` 80, `typebot-connector` 85,
+`after-hours` 95, `ai-responder` 97.
+
+Responders are ordered from the most specific trigger to the most sweeping: a command prefix, then an
+in-flow state machine, then keyword rules, then a bot that auto-starts every chat, then a time window,
+then a model that answers whatever is left.
+
+### Claiming
+
+Returning `{continue: false}` from a `message:received` handler stops the remaining handler chain. On a
+notification event that is a claim against sibling plugins only — the host still persists the message,
+still dispatches it to webhooks, and still pushes it over the websocket. Never use it to hide an event.
+
+**An observer must never return `{continue: false}`.** This is a correctness requirement, not style.
+Observers run first precisely so a responder's claim cannot cost them the message; a claiming observer
+would take the message away from everything after it.
+
+**A claim means "this message is mine", decided synchronously.** Evaluate a pure predicate — does the
+command prefix match, is this chat in scope, did a rule match — and claim on that. A plugin that does its
+work off-dispatch (returning immediately and floating the request, to stay inside the ~5 s hook budget)
+may still claim: it knows whether the message is addressed to it even before it knows whether the reply
+will succeed. A claim followed by a failure should produce your own fallback message or silence, never a
+different bot answering something unrelated.
+
+### Known interactions
+
+All of these follow from the priority table above; none is a bug in the plugins involved.
+
+**`faq-bot` (80) partially starves `after-hours` (95).** With `fallbackReply` set, `faq-bot` answers and
+claims any message no rule matched — but only the first one in each `fallbackCooldownSec` window
+(default `600`). Later messages in that window are not claimed and reach `after-hours`, which sends the
+away message subject to its own `cooldownSec`. A contact messaging out of hours therefore gets the
+faq-bot fallback first and the after-hours notice afterwards: two different answers to one conversation.
+Leave `fallbackReply` empty when both are enabled, so `after-hours` is the only voice outside business
+hours. (At `fallbackCooldownSec: 0` the fallback claims every message and `after-hours` never sends.)
+
+**`typebot-connector` (85) fully starves `after-hours` (95).** It claims every message in its scope, and
+its scope is every engine-sourced, non-`fromMe` message with a chat id: one-to-one chats always, group
+chats too when `respondInGroups` is on. There is no cooldown and no setting that narrows the one-to-one
+case, so while `typebot-connector` is enabled `after-hours` never fires for a direct chat. This is
+intended: a Typebot bot owns every chat it is in scope for, and handing one of its chats to a second
+responder mid-flow is worse than the starvation. Put out-of-hours messaging inside the Typebot flow
+itself — a business-hours condition at the top of the flow — rather than in `after-hours`.
+
+**`ai-responder` (97) is starved by every responder before it, by design.** It answers anything with
+text, so it runs last and sees only what nothing else claimed. `typebot-connector` starves it fully for
+every chat in the connector's scope; enable one or the other per session. `after-hours` and a `faq-bot`
+with `fallbackReply` set starve it partially: each claims the first message per chat in its cooldown
+window and lets the rest through, so a contact gets the away notice or the fallback and then a model
+answer. Leave `fallbackReply` empty when both are enabled, and do not enable `after-hours` on a session
+where the model should answer around the clock. A message over one of its limits is not claimed, so a
+plugin at the default priority 100 may still answer it.
+
+## Runtime contract (observed)
+
+These behaviors are **observed from the host, not a written host contract** — they are load-bearing for
+correct plugins and were each learned the hard way. Re-verify against OpenWA core when upgrading.
+
+1. **`ctx.net.fetch` responses have no `.json()` / `.text()` / `.arrayBuffer()`** — functions cannot
+   cross the worker structuredClone boundary, so the response is a plain
+   `{ ok, status, statusText, headers, body }`. Read `res.body` (a UTF-8 string, capped at 10 MiB
+   host-side) and `JSON.parse(res.body)`. Those three method stubs used to be carried on the vendored
+   type as runtime-throwing placeholders; they have been removed, so a plugin that still calls one now
+   fails the typecheck instead of at runtime.
+2. **Hook handlers are bounded to ~5 s.** Never await slow work (HTTP calls, media processing) inside a
+   hook: return `{ continue: true }` synchronously and float the promise
+   (`void handle().catch(log)`). An ingress handler is bounded the same way, but floating the whole send
+   there hides a failure nobody else sees: the provider was acked before the handler ran, so a send that
+   rejects instantly is a lost message with no retry anywhere. Race it against a short deadline and throw
+   when the send loses (see supabase-otp-hook), which retries and dead-letters that delivery while a
+   merely slow send still finishes in the background.
+3. **Hosts declared via config (`net.allowConfigHosts`) must be required, non-empty config** — the net
+   gate reads the RAW `ctx.config`, so a **code-side** default host is invisible to the gate and every
+   fetch silently no-ops. Fail fast in `readConfig` when the host field is empty. A **manifest**
+   `configSchema` `default` does reach the gate: the host seeds top-level declared defaults into the
+   stored and runtime config at load, so a manifest default and a code default that disagree now
+   resolve to the manifest's, silently. (Top-level only — defaults nested under `properties`/`items`
+   are not seeded. A required field with no declared default deliberately stays absent, because that
+   needs real operator input; the host never enforces `required` itself.)
+   From v0.24.0 each configured URL grants only its HTTPS origin, including its port. Plain HTTP and embedded credentials do not grant access; a static `net.allow` entry and the host SSRF settings are still needed for a permitted local HTTP service.
+   From v0.26.0 a per-session override or an instance row that points one of these host keys at another origin than the layer beneath does not inherit that layer's `secret` fields (a list that holds one is dropped whole) and must bring its own, so a credential saved for one host never reaches another. Every secret is dropped, not only the one the moved key belongs to. Treat a secret as possibly absent after an override: fail closed when the credential is required and report why (ai-responder, chatwoot-adapter and http-action do), and send an unauthenticated request only to a backend that accepts one. A host reached through a key outside `net.allowConfigHosts` is not covered; keep that secret on the instance that uses it. In a config write an explicit `null` removes a stored secret, where the mask and an empty string keep it.
+4. **Host boot re-enables every plugin the operator had enabled** (OpenWA ≥ 0.10.5; earlier hosts
+   really did require a manual re-enable). The runtime `status` is still reset on load, but the operator's
+   standing decision is persisted separately and replayed at boot. `ctx.config` and `ctx.storage`
+   survive, so dedup/state markers in storage are safe. What this demands of a plugin:
+   - **`onEnable` must be idempotent** — it now runs unattended on every restart, not just on an
+     operator click.
+   - **`onEnable` must not touch `ctx.engine.*` / `ctx.messages.*` or await network I/O.** Boot restore
+     runs before sessions connect and before the HTTP listener opens; a slow or engine-dependent
+     `onEnable` blocks startup and burns the 30 s lifecycle budget for nothing. From 0.26.0 the listener
+     opens after at most 60 s of restore and the plugins not yet restored come up in the background.
+     Until a plugin is up its hooks do not run; enabling, disabling, updating or uninstalling it answers
+     `409`; and an ingress route that declares `response` is refused with `503` and `Retry-After: 5`
+     (any other route is accepted and held until the plugin runs).
+   - **In-memory state does NOT survive** (each enable spawns a fresh worker). A cooldown or throttle
+     kept only in a `Map` silently re-arms on every restart — persist it or document the reset.
+   - **An ERROR status does NOT exclude a plugin from restore** — the boot filter keys on the operator's
+     standing enable decision, not on status, and status is reset on every load anyway. What is *not*
+     automatic is recovery mid-run: nothing respawns a worker that crashed after boot, so that plugin
+     stays down until the next restart or an explicit re-enable.
+   - `onDisable` now runs on graceful shutdown (SIGTERM), and `onUnload` on uninstall/in-place update.
+5. **Cross-host redirects cannot be blocked plugin-side** (`PluginNetRequestInit` exposes no redirect
+   option) — redirect-based SSRF defense is the host's job; do not treat it as a plugin release gate.
+6. **`ctx.storage` charges per KEY, not just per byte.** Each key is one JSON file. Up to 0.25.x the
+   host re-measured the plugin's 50 MiB quota on **every** `set` with a synchronous readdir + stat of
+   every existing key, on the host's event loop; from 0.26.0 it keeps a running total (one scan to seed
+   it per host start, one `stat` per write), though `list()` is still a directory scan. The floors here
+   still include the older hosts, where one key per message is a gateway-wide stall waiting to happen:
+   bucket instead (one key per session per hour holding a map, pruned by deleting
+   whole buckets). Always handle a rejected `set` — a swallowed quota error is silent data loss, and a
+   `healthCheck` that ignores it reports green while dropping messages.
+7. **`{ continue: false }` is a veto on exactly two events.** On `message:sending` it blocks the send
+   (the API caller gets HTTP 400) and on `webhook:before` it cancels that delivery. On every
+   notification event (`message:received`, `message:sent`, `session:*`, …) it only stops the remaining
+   handler chain — the host still persists the message, still fires webhooks, and still pushes to the
+   websocket. Use it to claim an event against sibling plugins, never to hide one.
+8. **`webhook:before` is the widest surface a plugin can subscribe to, and nothing gates it.** A
+   handler can cancel any of the operator's webhook deliveries and rewrite the outbound body
+   (`{ payload }` replaces it when it is a plain object, see 12; the host re-asserts only
+   `event`/`sessionId`/`timestamp` and the dedupe ids, and caps the result at 1 MiB). Treat a
+   `webhook:before` subscription in a submitted plugin with the same scrutiny as an ingress route.
+9. **Host bounds, none of them visible from the types:** 30 s per lifecycle phase; 30 s per capability
+   call, except the send verbs (`ctx.messages.sendText`, `ctx.messages.reply`, `ctx.conversations.send`)
+   at 120 s; 5 s per ingress webhook dispatch and 5 s for `healthCheck`;
+   5 s per hook dispatch, after which the host fails **open** with `{ continue: true }` and discards
+   your result; 32 concurrent capability calls per plugin (the 33rd throws); 16 concurrent `net.fetch` calls
+   **globally** — that one is shared across all plugins and workers, not per plugin; 50 MiB storage; 10 MiB
+   fetch response body; 200 log lines / 10 s at 8 KiB per line.
+10. **The worker is crash containment, not a security boundary** (core says so itself). Plugin code can
+   `require('fs')`/`('net')`/`('child_process')`; what the worker actually buys you is a 256 MB heap
+   ceiling and a crash that doesn't take the gateway down. Review submitted plugins accordingly.
+11. **A non-empty `body` does not mean a human typed it.** A poll carries its question, a shared event
+   its name, a tapped business button its label, and a shared contact card its vCard. whatsapp-web.js
+   has always populated these; Baileys matched it in host 0.23.2, so it is now true on both engines.
+   Since 0.23.5 Baileys also fills it for an `order` (its note, else its title) and a shared `product`
+   card (its text, else the product title), which earlier hosts delivered as `unknown` with no body.
+   A plugin that treats `body` as a command, a menu key, or prose to forward **must also gate on
+   `type`**, denying `contact`, `poll`, `order` and `product` (hosts below 0.23.5 never emit the last
+   two, so denying them there is a no-op). Two rules on that gate, both easy to get backwards:
+   - **Never deny `type === 'unknown'`.** Business button and list replies land there on
+     whatsapp-web.js, and on Baileys up to 0.23.5; from 0.23.6 Baileys delivers them as `text` with the
+     tapped label in `body`. A tapped menu button is the most desirable input a menu bot can receive.
+     Known residual: a Baileys whole-catalog share is `unknown` with the catalog title in `body`, and by
+     type it cannot be told apart from a whatsapp-web.js button reply.
+   - **Never allowlist `type === 'text'`.** Media captions arrive in `body` under their own media
+     type (`image`, `video`, `document`), and reaching a matcher is intended behavior.
+
+   `!body.trim()` is still the right guard for what carries no text at all: a sticker, a voice note, an
+   image sent without a caption. A message delivered already deleted arrives as `type: 'revoked'` with an
+   empty `body` (from 0.26.0 whatever text the engine handed over is dropped), which the same guard
+   covers; a handler that acts on every inbound message without reading `body` or `type` acts on it too
+   (after-hours replies, typebot-connector starts or advances a flow, chatwoot-adapter relays a
+   placeholder message).
+12. **A hook's `data` must keep the event's shape.** From 0.23.6 the host adopts a `message:received`
+   or `message:sent` result only when it is a plain object with string `id` and `chatId`, and a
+   `webhook:before` result only when its `payload` is a plain object. Anything else, `null` included,
+   is skipped and the chain keeps the last usable value. Hosts up to 0.23.5 adopted any value but
+   `undefined`, and a `null` on a message event lost that message from history, webhooks and the
+   websocket. Omit `data` to leave the payload alone; never return `data: null` to mean "consumed".
+13. **A message can arrive long after it was sent.** From 0.23.6 a Baileys session delivers, after a
+   reconnect, what WhatsApp queued while it was disconnected, each message carrying its original
+   `timestamp` (unix seconds). Business hours, cooldowns and staleness checks must read `timestamp`,
+   not the time the hook runs.
+
+**Permissions** — the seven values the host enforces, and what each unlocks. `scripts/catalog.mjs`
+rejects a manifest declaring anything outside this set, so adopting a new one is a deliberate edit
+there rather than a silent publish into `plugins.json`:
+
+| Permission | Unlocks |
+|---|---|
+| `messages:send` | `ctx.messages.sendText` / `.reply` |
+| `engine:read` | `ctx.engine.*` (group info, contacts, chats, number check, chat history, `canonicalChatId`) |
+| `net:fetch` | `ctx.net.fetch`, further scoped by manifest `net.allow` / `net.allowConfigHosts` |
+| `conversation:send` | `ctx.conversations.send` **and** `ctx.handover.set` **and** `ctx.mappings.*` |
+| `webhook:ingress` | `ctx.registerWebhook`; **required** whenever the manifest declares `ingress`, or the whole plugin fails to load |
+| `storage:use` | `ctx.storage.get` / `.set` / `.delete` / `.list`. Ungated until OpenWA gated it, so declare it as soon as a plugin persists anything: an older host ignores the unrecognized name, a newer one denies the call — and the denial lands mid-run, because permissions are checked at the call and not at load |
+| `search:provide` | `ctx.registerSearchProvider`. Not vendored in `types/openwa.d.ts` and used by no plugin here; under the default `SEARCH_PROVIDER=auto` a plugin that registers becomes the gateway's active search backend |
+
+An ingress route with `signature.scheme: "none"` is a hard load failure for the entire plugin unless the
+operator sets `ALLOW_UNSIGNED_INGRESS=true`. `mode: "sync-reply"` is inert dead code — declare
+synchronous behavior via `ingress[].response` instead. A `WebhookResponse` returned from your handler is
+ignored; the provider's reply comes from `ingress[].response.ack` (default 202), and from 0.23.6 a
+re-delivery gets that same ack rather than `200 duplicate`. From 0.23.6 a declared ack `Content-Type`
+is honored only for `application/json` or `text/plain`; any other type goes out as `text/plain`, and
+0.20.0 through 0.23.5 always send `text/plain`. A plugin that needs a JSON ack must set
+`minOpenWAVersion` to `0.23.6`; otherwise ack with a bodiless `204` (as `supabase-otp-hook` does;
+express drops the body and the content type there anyway).
+
+OpenWA 0.23.6 also refuses at load, taking the whole plugin down, a route that is not one URL path
+segment, a `toleranceSec` that is not a finite number above 0, a `dedupOn` other than `header` or
+`body`, a 1xx ack status, a non-string ack body, and an ack header value Node cannot write. See
+`PluginManifest.ingress` in [`types/openwa.d.ts`](./types/openwa.d.ts) for the full list.
+
+`minOpenWAVersion` is enforced from OpenWA 0.24.0 (an older host ignores it, so there it only documents
+the floor). Bump it when a plugin *requires* a
+newer capability: `canonicalChatId` → 0.8.7, Integration SDK v1 (`sdkVersion: "1"` — a STRING; the
+host's ingress validation runs `sdkVersion.split('.')`, so a JSON number throws at load) → 0.8.x,
+`getChatHistory` → 0.8.6 (0.8.5 exposed it in-process, but the sandbox bridge every marketplace
+plugin needs landed in 0.8.6). Keep `testedOpenWAVersion` honest: it is the newest host the plugin was
+actually smoke-tested against.
+
+## `README.md` — required sections (in order)
+
+1. **Title + one-line tagline**, then a small badge row in this exact order:
+   1. `type` — `https://img.shields.io/badge/type-<type>-blue.svg`
+   2. `license` — `https://img.shields.io/badge/license-MIT-green.svg`
+   3. `OpenWA` — `https://img.shields.io/badge/OpenWA-%E2%89%A5%20<minOpenWAVersion>-25D366.svg`
+   4. `downloads` — cumulative .zip downloads across all releases of this plugin, fed by
+      `scripts/download-badges.mjs` (see the `download-badges` workflow) via the `badges` branch.
+      Copy this line verbatim, substituting `<id>`:
+      ```md
+      [![downloads](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Frmyndharis%2FOpenWA-plugins%2Fbadges%2Fdownloads%2F<id>.json)](https://github.com/rmyndharis/OpenWA-plugins/releases?q=<id>)
+      ```
+2. **Details** — a generated table between `<!-- BEGIN DETAILS … -->` and `<!-- END DETAILS -->`
+   (identifier, version, released, status, author, license, type, requires-OpenWA, keywords, repository).
+   Regenerated by `scripts/catalog.mjs`; do not edit by hand.
+3. **Features** — concrete capabilities as a bullet list.
+4. **What it logs / does** — behavior detail.
+5. **Setup** — prerequisites in numbered steps.
+6. **Install** — `curl` examples (upload zip, set config, enable) and/or the Releases download.
+7. **Configuration** — a table: key · required · default · description.
+8. **Compatibility** — version-specific behavior and known caveats. Include a `### Per-session config`
+   subsection stating whether per-session config overrides are supported (and any caveat — see
+   [Per-session config](#per-session-config-v07) above).
+9. **Security** — the threat model relevant to this plugin.
+10. **Changelog** — link to `CHANGELOG.md`.
+11. **License**.
+
+## `CHANGELOG.md`
+
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/) + [SemVer](https://semver.org/):
+
+- An `## [Unreleased]` section at the top, then `## [MAJOR.MINOR.PATCH] - YYYY-MM-DD` headings in
+  descending order, with `### Added / Changed / Fixed / Removed / Security` subsections. Older entries
+  use a longer dash; `scripts/catalog.mjs` accepts either, so leave those as they are.
+- **The top released heading's version MUST equal `manifest.json`'s `version`** — enforced by
+  `scripts/catalog.mjs --check` in CI.
+- SemVer: **MAJOR** = breaking change for operators, **MINOR** = new capability, **PATCH** = fixes.
+
+## `plugins.json` (generated catalog)
+
+One entry per plugin, written by `scripts/catalog.mjs` from each manifest + changelog:
+
+```jsonc
+{
+  "id", "name", "version", "type", "status", "description", "author", "license",
+  "keywords", "minOpenWAVersion", "testedOpenWAVersion",
+  "releasedAt",           // from the top CHANGELOG heading
+  "repoPath", "repoUrl", "homepage",
+  "download",             // predictable GitHub Release asset URL: <repo>/releases/download/<id>-v<version>/<id>.zip#sha256=<digest of the deterministic build; OpenWA ≥ 0.20.0 requires the pin for URL installs in production>
+
+  // What the plugin DECLARES it binds — see the caveat below before treating any of it as a guarantee.
+  "permissions",          // the capability permissions from the manifest
+  "net",                  // the manifest `net` block, or null
+  "ingress",              // [{ route, signature }] per declared ingress route, or null
+  "sessionScoped",        // whether activation is per-session
+  "i18n"                  // the manifest `i18n` block — emitted only when the manifest has one
+}
+```
+
+### What the declared fields are, and are not
+
+They let a reader compare a plugin's stated purpose against the host capabilities it asks for, before
+installing it. A translation plugin that declares `webhook:ingress`, or a logger whose `net.allow`
+names a host its README never mentions, is worth a second look. The `ingress` entries matter most:
+a provisioned ingress route is a `@Public()` endpoint, so knowing which routes a plugin opens — and
+whether they are signed — is information you want *before* the install, not after.
+
+> ⚠️ **They are not a security boundary, and must never be presented as one.**
+> [`docs/30-plugin-sandboxing.md`](https://github.com/rmyndharis/OpenWA/blob/main/docs/30-plugin-sandboxing.md)
+> is explicit: a `worker_thread` is a separate V8 context **in the same OS process, under the same
+> user** — not an OS-level sandbox. A plugin keeps `require('fs')`, `process` and raw sockets
+> whatever it declares here, and `net.allow` gates the host-mediated `ctx.net.fetch`, not the
+> plugin's own outbound traffic.
+>
+> So an empty `permissions` array means the plugin binds no *mediated* capability. It does not mean
+> the plugin can do nothing. Reading this list as an enforcement guarantee is worse than not
+> publishing it at all — which is why it ships with this paragraph attached.
+
+Size and sha256 are **not** in the catalog — they are release artifacts (GitHub Release notes/assets),
+so the catalog stays deterministic and CI's drift check stays stable. This file is also the data source
+for the OpenWA in-dashboard marketplace, which the Plugins page reads to offer catalog installs
+alongside uploads.
+
+## Tooling (npm scripts)
+
+| Script | What it does |
+| ------ | ------------ |
+| `node package.mjs <id>` | Validate manifest (required fields + `version` == top CHANGELOG heading), bundle to `dist/index.js`, zip to `<id>.zip` with the built-in STORE writer (`scripts/zip-store.mjs` — no external `zip` CLI needed), print size + sha256. |
+| `npm run build` | Run `node package.mjs` over every top-level directory that has a `manifest.json`, in one pass. |
+| `npm run loader:check` | `require()` every built `dist/index.js` from outside the repo tree and assert it default-exports a constructible plugin. Run it after a build: nothing else here proves a bundle actually loads on the operator's gateway. |
+| `npm run catalog` | Regenerate `plugins.json`, the root README catalog table, and every plugin README **Details** block. |
+| `npm run catalog:check` | Same, in-memory; fail if the committed files are out of date, a version↔changelog drift exists, or a manifest gate fails (CI). |
+| `npm run catalog:live` | Fetch every `download` URL in `plugins.json` and verify the bytes against its `#sha256=` pin, catching unpushed tags and stale digests that `catalog:check` cannot see. |
+| `npm test` | Run the full suite (`scripts/run-tests.mjs` walks the whole repository for `*.test.ts` / `*.test.mjs`, so a test file outside a plugin directory is picked up too) with `node --test` + `tsx`. |
+| `npm run test:coverage` | Same, with Node's built-in coverage report. |
+| `npm run typecheck` | `tsc --noEmit` over every `*/**/*.ts` (plugin dirs are not hardcoded). |
+| `node scripts/download-badges.mjs [out-dir]` | Sum per-plugin .zip downloads across all GitHub Releases and write shields.io endpoint JSON files (run by the `download-badges` workflow; also runnable locally to preview the numbers). |
+
+## Release process
+
+Tag a release as **`<plugin-id>-vX.Y.Z`** (the version must match the manifest + changelog). The
+`release` GitHub Action builds the plugin, attaches `<id>.zip` + `<id>.zip.sha256` to a GitHub Release,
+and uses the matching CHANGELOG section as the release notes. Users install by downloading that asset
+and uploading it in the dashboard. The dashboard can also install straight from this catalog — the
+Plugins page offers Upload and Catalog as two modes of the same install flow.

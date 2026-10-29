@@ -1,0 +1,102 @@
+import type { IncomingMessage } from '../types/openwa';
+import { shouldRelayOwn } from './filters.ts';
+import { relayMessage, ensureConversation, resolvePhone, type InboundDeps } from './relay.ts';
+
+// WhatsApp → Chatwoot for the account's OWN outbound sends — messages composed on a linked phone / the
+// WhatsApp mobile app / the OpenWA REST API — so the Chatwoot thread mirrors the full WhatsApp
+// conversation (#615). Posts 'outgoing' into a conversation the INBOUND path already mapped.
+//
+// Relay-into-existing-only, never create: an own send whose chat isn't mapped yet is dropped. Creating a
+// conversation on a miss would split a contact who has migrated to @lid — its @c.us mapping is invisible
+// to a raw @lid lookup, and @lid->@c.us resolution is only best-effort (the lid->phone table is cold on
+// a phone-only-contacted wwjs contact), so a "new" chat can't be told apart from a migrated one. Dropping
+// is strictly safe (no duplicate conversation); the chat still appears once the customer replies inbound.
+//
+// Echo guard: the adapter's own Chatwoot-agent replies are ALSO fromMe and arrive here as message:sent.
+// outbound.relay marks the WA id of every reply it sends (markSeen('wa', …)) on the same canonical
+// per-chat lock, so the hasSeen check below recognizes and skips them. At-most-once (a failed post is
+// not retried), like inbound.
+//
+// The OTHER leg of the loop is guarded inside relayMessage: the Chatwoot message this mirror creates is
+// marked 'cw'-seen (under the same lock, before it is released), so the `message_created` Chatwoot fires
+// for it is not relayed back out to WhatsApp as a duplicate.
+export async function handleSent(
+  deps: InboundDeps,
+  sessionId: string,
+  source: string,
+  msg: IncomingMessage,
+): Promise<void> {
+  if (!shouldRelayOwn(msg, source, deps.relayGroups)) return;
+  // Canonicalize @lid -> <phone>@c.us for the lock key. A send to a contact WhatsApp has migrated to @lid
+  // resolves to the @lid address, so this message:sent carries chatId=@lid while outbound.relay locked
+  // (and marked the echo on) the mapping's @c.us key. Locking on the canonical form makes both paths
+  // serialize on the SAME key (when resolvable), so the echo marker is observed before this handler checks.
+  const key = await deps.engine.canonicalChatId(sessionId, msg.chatId);
+  await deps.lock.run(`${sessionId}:${key}`, async () => {
+    try {
+      // An engine that cannot read an id back reports the empty sentinel (Baileys' `?? ''`; outbound.ts
+      // logs the same case for its own echo guard). Such a message cannot be de-duplicated — and worse,
+      // keying on it collapses EVERY id-less own send onto one marker: the first would be relayed, and
+      // every later one skipped as "already seen" for the marker's full retention, silently and only in
+      // the operator's Chatwoot thread. Relay it and skip both marker operations instead. A duplicate in
+      // the helpdesk is visible and harmless; a missing customer message is neither.
+      const identifiable = Boolean(msg.id);
+      if (identifiable && (await deps.store.hasSeen('wa', msg.id, sessionId))) return;
+      let conversationId = await findMappedConversation(deps, sessionId, msg, key);
+      if (conversationId === null) return; // unmapped chat — drop, never create outside a 404 recovery (no split)
+      if (identifiable) await deps.store.markSeen('wa', msg.id, sessionId);
+      else deps.log('own send has no engine message id; relaying it without de-duplication');
+      try {
+        await relayMessage(deps, sessionId, conversationId, msg, 'outgoing');
+      } catch (err) {
+        // Mirror of inbound.ts's 404 recovery: an operator-deleted Chatwoot conversation leaves the
+        // conv->WA mapping dangling. The mirror path uses findMappedConversation (never creates on a
+        // miss, see "relay-into-existing-only" above), so on a 404 we DROP the stale forward + reverse
+        // keys and call ensureConversation directly — find-or-create the contact, find-or-mint the
+        // conversation, link, then re-post. A failure inside the recovery is logged with its own
+        // context (so the log shows WHICH step failed) and the ORIGINAL 404 surfaces through the outer
+        // catch. sent.ts is at-most-once — unlike inbound, this path does NOT enqueue for retry
+        // (mirrors the existing posture).
+        if ((err as { status?: number } | null)?.status !== 404) throw err;
+        const originalErr = err;
+        try {
+          // Unlink by the RAW chatId (msg.chatId), not the canonical key. findMappedConversation checks
+          // msg.chatId first, so a stale row under the raw key would shadow the fresh one we're about
+          // to create. ensureConversation also links under msg.chatId, matching the original key.
+          await deps.store.unlinkByChatId(sessionId, msg.chatId);
+          await deps.store.unlinkByConversationId(sessionId, conversationId);
+          conversationId = await ensureConversation(deps, sessionId, msg.chatId, {
+            name: msg.contact?.pushName || msg.contact?.name || (msg.isGroup ? `Group ${msg.chatId}` : msg.chatId),
+            // `key` is the canonical id resolved at the top of this handler. resolvePhone is called
+            // WITHOUT the message on purpose: on an own send `senderPhone` would be OUR number, not the
+            // recipient's, and a plugin's hook payload never carries it anyway. Dropped from the name
+            // chain for the same two reasons.
+            phone: resolvePhone({ isGroup: msg.isGroup }, key),
+          });
+          await relayMessage(deps, sessionId, conversationId, msg, 'outgoing');
+        } catch (rebuildErr) {
+          deps.log('own-send 404-recovery failed', rebuildErr);
+          throw originalErr;
+        }
+      }
+    } catch (err) {
+      deps.log('own-send relay failed', err);
+    }
+  });
+}
+
+// Find the Chatwoot conversation this chat is already mapped to, or null. Dual lookup: the raw chatId
+// finds a mapping keyed by @lid (created post-migration), the canonical chatId finds one keyed by @c.us
+// (a contact that has since migrated to @lid, when the lid resolves) — so a migrated contact's own send
+// lands in its EXISTING conversation instead of a duplicate. Never creates.
+async function findMappedConversation(
+  deps: InboundDeps,
+  sessionId: string,
+  msg: IncomingMessage,
+  canonicalChatId: string,
+): Promise<number | null> {
+  const existing =
+    (await deps.store.getByChat(sessionId, msg.chatId)) ??
+    (canonicalChatId !== msg.chatId ? await deps.store.getByChat(sessionId, canonicalChatId) : null);
+  return existing ? existing.conversationId : null;
+}

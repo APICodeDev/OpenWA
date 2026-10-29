@@ -1,0 +1,345 @@
+# Changelog
+
+All notable changes to the **FAQ / Auto-Reply Bot** plugin are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this plugin adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The version here always matches `manifest.json`'s `version`.
+
+## [Unreleased]
+
+## [0.2.15] - 2026-10-28
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.26.0.
+
+## [0.2.14] - 2026-10-15
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.25.0 and complete dashboard translations for all supported locales.
+
+### Fixed
+
+- Preserve the latest matched and fallback cooldowns when an older send fails later.
+- Claim rule and fallback replies before sending so slow delivery does not trigger another responder.
+
+## [0.2.13] - 2026-09-24
+
+### Added
+
+- Hindi (`hi`) dashboard text: the plugin name, description and config field titles.
+
+## [0.2.12] - 2026-09-24
+
+### Fixed
+
+- **A message older than five minutes is no longer answered.** From OpenWA 0.23.6 a Baileys session
+  delivers what WhatsApp queued during a disconnect, so a long outage ended in a burst of rule answers
+  and fallback replies quoting old messages.
+
+## [0.2.11] - 2026-09-23
+
+### Fixed
+
+- **Catalog orders and shared product cards no longer match a rule or draw the fallback reply.** From
+  OpenWA 0.23.5 a Baileys session carries the order note or product title in the body; they are now
+  refused like contact cards and polls, so the event passes down the chain.
+
+### Changed
+
+- **Verified against OpenWA v0.23.6** (testedOpenWAVersion 0.23.4 -> 0.23.6).
+
+## [0.2.10] - 2026-09-06
+
+### Changed
+
+- **A `regex` rule is now tested against the first 150 characters of a message, down from 1000.**
+  Backtracking cost grows with the input, so capping it bounds the worst case whatever the pattern
+  looks like. The parse-time screen accepts some polynomial shapes it cannot recognise in the pattern
+  text (`(a|b)*(a|b)*(a|b)*$`, `[ab]*[bc]*[cd]*$`, `\w*\d*\w*x`); measured against alternating input,
+  the worst of them runs past 8 s at 1000 characters, 2.8 s at 250, and 362 ms at 150. The host aborts
+  a hook at 5 s and cannot interrupt a running regex, so the cap is set to hold on a host several times
+  slower than the machine that measured it.
+  A regex rule therefore no longer matches text past the first 150 characters. `contains` and `exact`
+  cannot backtrack and are not capped, so they still see the whole message; `contains` is the right
+  mode for "mentions X anywhere in a long message".
+
+## [0.2.9] - 2026-09-05
+
+### Fixed
+
+- **Restore the 0.2.7 regex screen.** The adjacency rework in 0.2.8 refused rules that are provably
+  fast, including the two commonest shapes an operator writes: a capture between two unbounded
+  quantifiers (`^\s*(.*)\s*$`, `.*(\d+).*`), each measured at 0.0 ms against a full 1000-character
+  input. A refused rule is only logged, so those installs stopped answering with no other symptom. The
+  same rework also let `a*(b)*a*a*$` through, at 1.3 s against 301 characters, because a group that can
+  match empty was treated as breaking the adjacency run when it actually joins the quantifiers on
+  either side of it.
+  The screen is back to the 0.2.7 behaviour, which refuses `(a+)+`, `.*.*.*` and `(a?){40}` and the
+  ambiguous repeated alternations 0.2.7 added. The shapes 0.2.8 aimed at, a run of adjacent unbounded
+  quantifiers spelled with groups or with overlapping character classes, are accepted again; they need
+  a screen that models a group's width and nullability, which this one does not.
+
+## [0.2.8] - 2026-09-05
+
+### Fixed
+
+- **Parentheses no longer hide a run of adjacent unbounded quantifiers from the regex screen.** The
+  screen refused `.*.*.*done` but accepted every grouped spelling of the same shape, because the
+  adjacency run was parked at `(` and restored at `)`, so both the group itself and whatever its body
+  ended with were discarded. Two forms escaped: a group carrying the quantifier
+  (`(a|b)*(a|b)*(a|b)*$`), and a transparent group around one (`(a*)(a*)(a*)$`,
+  `((a|b)*(a|b)*)(a|b)*$`, and the `{1}` spelling). A group with a quantifier now counts as one
+  element, and a transparent group splices its body into the enclosing run. Each accepted form was
+  O(n^3): measured against 140 characters, 87 ms to 407 ms, so tens of seconds at the 1000-character
+  body cap, which a running regex cannot be interrupted to honour.
+- **Adjacency is judged on the characters an atom matches, not on how it is spelled.** The run compared
+  atoms by atom key, so `[ab]` and `[bc]` looked unrelated although both match `b`, and
+  `[ab]*[bc]*[cd]*$` was accepted while the alternation spelling of the same regex was refused. Against
+  600 characters it costs 8.9 s, and `\w*\d*\w*x` 22 s, so roughly 41 s and 103 s at the input cap.
+  A group form is now refused exactly where the same shape written with bare atoms already was, so the
+  screen's paths agree instead of the verdict turning on notation. Two adjacent quantifiers remain
+  allowed, a mandatory atom or a `|` still breaks the chain, and elements sharing no character never
+  form a run, so `a*b*c*`, `order\s+\d+`, `(x)*(y)*(z)*` and `(a*)(b*)(c*)` are unaffected. A rule of
+  the widened shape, such as `.*(word)*.*`, is dropped with a warning at enable, so re-check the log
+  after upgrading.
+- **The screen no longer depends on the alphabet, or on how an escape is written.** Its character scan
+  covers printable ASCII only, so a class of CJK, Arabic or accented Latin characters was seen as
+  matching nothing and a chain of three read as non-competing: `[\u4e00-\u9fff]*` repeated three times
+  cost ~85 s at the input cap. Identical spellings are now always treated as competing, which is what
+  the screen did before this release and what covers those. Separately, a fixed-length escape
+  (`\x61`, `\u0061`, `\u{1F600}`, `\cJ`, `\p{L}`) is now one atom rather than a backslash pair
+  followed by stray characters, and a named group `(?<name>...)` has its name skipped instead of walked
+  as atoms; both mis-readings inserted fake mandatory atoms that broke the run, letting the same shapes
+  through at ~35 s to ~46 s.
+
+## [0.2.7] - 2026-09-05
+
+### Fixed
+
+- **A wrapping group no longer hides an ambiguous alternation from the regex safety screen.** The
+  screen refused `(a|a)+$` but accepted `((a|a))+$`, because ambiguity was only ever checked against
+  the group being closed and was never propagated out of a nested one, unlike the other two hazards
+  it tracks. An accepted pattern of that shape spends seconds to minutes on a short message: measured
+  at ~8.9s for a 27-character message against a 5s hook budget, and a regex cannot be interrupted to
+  honour it, so the worker stalls and later messages queue behind it. Ambiguity now propagates the
+  same way, and patterns that are merely nested and unambiguous are unaffected.
+
+- **A WhatsApp Channel or broadcast-list post no longer draws a reply.** A `@newsletter` post arrives
+  flagged as a non-group chat, so the only chat-scope gate let it through and a channel this account
+  merely follows was answered into a chat it can never post to: a send that always fails, once per
+  post, after taking that chat's cooldown slot.
+
+### Changed
+
+- **Verified against OpenWA v0.23.4** (testedOpenWAVersion 0.23.3 -> 0.23.4).
+
+## [0.2.6] - 2026-08-25
+
+### Fixed
+
+- **Ambiguous repeated alternations are rejected at parse time.** `(a|a)*`, `(a|ab)+`,
+  `^([a-z]|[a-z0-9])+$` and `^(\w|\d)+$` all let the regex engine consume the same text more than one
+  way, which is exponential: the third takes 259 ms against 23 characters and over a minute against 31,
+  well inside the body cap. One short message from any stranger pinned the plugin worker, and because a
+  running regex cannot be interrupted, every later message queued behind it and the plugin stopped
+  answering. Unambiguous alternations such as `(one|two|three)+` are unaffected, including where two
+  branches share a first letter.
+- The same inbound text is now answered at most once every 10 seconds per chat. A rule whose reply also
+  matches its own pattern is a fixed point, and an autoresponder on the other end traded messages with
+  it at full rate, repeating one canned line. The throttle keys on that repeated text rather than on the
+  rule, so two different questions are both answered even when they match the same rule.
+- A shared contact card or a poll no longer matches a rule or draws `fallbackReply`. OpenWA 0.23.2 fills
+  the message body for both, and a vCard is free text (name, organization, notes, numbers) that readily
+  matches a `contains` or `regex` rule. Business button and list replies are still answered.
+
+### Changed
+
+- **Verified against OpenWA v0.23.3** (testedOpenWAVersion 0.23.0 → 0.23.3).
+
+## [0.2.5] - 2026-08-20
+
+### Changed
+
+- **Verified against OpenWA v0.23.0** (testedOpenWAVersion 0.22.0 → 0.23.0).
+
+## [0.2.4] - 2026-08-19
+
+### Changed
+
+- **Verified against OpenWA v0.22.0** (testedOpenWAVersion 0.20.0 → 0.22.0).
+
+## [0.2.3] - 2026-08-16
+
+### Changed
+
+- **Verified against OpenWA v0.20.0** (testedOpenWAVersion 0.19.0 → 0.20.0); the catalog download URL now pins #sha256= for production installs.
+
+## [0.2.2] — 2026-08-15
+
+### Fixed
+
+- **A message with no text no longer draws a fallback reply.** A sticker, image or voice note arrives
+  with an empty body, so no rule could match it and the fallback answered a picture with "I did not
+  understand" — and claimed the event, so a plugin that could handle media never saw it.
+- **A failed fallback send no longer silences the chat for a whole cooldown window.** The cooldown slot
+  is claimed before the send, so a send that threw spent the window on a reply that never arrived. The
+  slot is released on failure; a matched rule is retried on the next message the same way.
+- **Two rule patterns that could freeze the plugin are now rejected.** The safety analyser reasoned that
+  a small bounded repeat is bounded by its constant, which holds for a variable-width body but not for an
+  unbounded one: `(a+){3}` expands to `a+a+a+` and backtracks exponentially. It also treated any group as
+  breaking a run of adjacent unbounded quantifiers, but a group that can match empty does not — so
+  `.*(x?).*(x?).*` was `.*.*.*` in disguise. Both are refused now. Patterns of the shape `(ab?){2}` and
+  `.*(x).*(y).*`, which really are bounded, are still accepted.
+
+
+### Changed
+
+- **Compatibility re-verified against OpenWA v0.19.0** (testedOpenWAVersion 0.14.0 → 0.19.0). The
+  manifest passes the v0.19.0 host's load-time validation (manifest, ingress and main-entry
+  checks) and the built bundle loads under the loader contract. No capability surface this plugin
+  uses changed between 0.14 and 0.19; the v0.19 breaking changes are host-side (API key length,
+  removed REST endpoints, the plain-http install pin) and do not touch this plugin.
+
+## [0.2.1] — 2026-08-01
+
+No behaviour change. 0.2.0 has now been smoke-tested against a newer host, so the tested-version field
+is updated to match.
+
+### Verified
+
+- **Confirmed against a live OpenWA 0.12.1 host**, with a connected WhatsApp session, this plugin
+  enabled alongside four other responder plugins (including chat-flow and after-hours) and driven by
+  real messages from a second connected WhatsApp number. A message matching a configured keyword rule
+  was answered by this plugin and by nothing else, confirming the 0.2.0 message-claiming and
+  responder-priority fixes hold with a full set of co-installed responders.
+- **Not covered:** group chats, media messages, and behaviour under load.
+
+## [0.2.0] — 2026-07-31
+
+### Fixed
+
+- **A matched rule or fallback reply could draw a second answer from another auto-reply plugin.** This
+  plugin knew whether it had replied but never acted on it, so a co-installed bot behind it in the hook
+  chain could answer the same message a second time. It now claims a message whenever it actually sends a
+  reply — for a matched rule or the fallback — and never claims when nothing was delivered, so a failed
+  send or an unmatched message still leaves the next plugin free to answer.
+- **This plugin now registers at an explicit responder priority**, after a command prefix and an in-flow
+  state machine, before a catch-all bot — instead of the registration-order default, which could put it
+  ahead of or behind another responder depending on enable order.
+
+## [0.1.8] — 2026-07-30
+
+### Fixed
+
+- **One pathological rule could hide every other skipped rule.** The startup warning joined all skipped
+  regex patterns into a single line, and the host caps a log line at 8 KiB and drops the overflow — so a
+  single very long pattern took the rest of the diagnostic with it. Each pattern is now truncated to 80
+  characters before joining, so no single rule can crowd out the rest. With enough skipped rules the line
+  can still reach the cap — the count at the front stays accurate either way, and is the signal to look
+  at the config.
+
+## [0.1.7] — 2026-07-18
+
+### Fixed
+
+- **Per-session config overrides are now honored at message time.** The hook previously read a config
+  snapshot cached at enable, so a per-session override (e.g. a different rule set or fallback reply for one
+  WhatsApp number) set via the dashboard after enable was ignored. The hook now re-parses `ctx.config` on
+  each event, which the host resolves to the firing session's slice. An invalid config for a session is
+  logged and skipped instead of replying with a stale snapshot. The enable-time fail-fast validation and the
+  invalid-regex skip warning are retained.
+
+## [0.1.6] — 2026-07-02
+
+### Fixed
+
+- **An empty character class (`[]` / `[^]`) no longer bypasses the regex safety screen.** The class
+  parser treated a leading `]` as a literal member (POSIX), but in JavaScript `[]` is an empty class and
+  `[^]` matches any char — so `[^](a+)+!` was mis-parsed as one atom and its catastrophic `(a+)+` tail
+  slipped through and could pin the worker. The parser now follows JS class semantics. (Differential
+  fuzzing confirms the screen rejects everything the pre-0.1.5 screen did, with no reintroduced hole.)
+
+### Changed
+
+- **Fewer false rejections of safe patterns.** Adjacent overlapping quantifiers are now rejected only at
+  **3 or more** in a row (`.*.*.*`) — two adjacent (`.*.*`, `.*\d+`) is `O(n²)`, safe under the 1000-char
+  cap, and is now allowed. A repeated variable-width group is rejected only when the repeat is unbounded
+  or large (≥10, e.g. `(a?){40}`); a small bounded repeat like `(ab?){2}` or `(\d{2,4}){3}` is allowed.
+
+## [0.1.5] — 2026-07-02
+
+### Fixed
+
+- The regex safety check now rejects two further catastrophic-backtracking classes it previously
+  missed: **adjacent overlapping quantifiers** in one concatenation (e.g. `.*.*.*`, `\w*\w*` —
+  polynomial) and a **group repeated `{n}`/`*`/`+` times whose body has a variable-width quantifier**
+  (e.g. `(a?){40}` — exponential). A pattern that lands in either class is skipped with a warning like
+  any other unusable pattern, so a crafted 1000-character message can no longer pin the plugin worker.
+  Ordinary patterns — adjacent *disjoint* classes (`a*b*c*`, `order\s+\d+`), a wildcard separated by a
+  literal (`.*urgent.*`), and fixed-width nesting (`(\d{2}){3}`) — are unaffected.
+
+### Changed
+
+- The README **Security** section now states accurately that the parse-time screen (not the sandbox
+  hook timeout) is what bounds a runaway pattern, and notes the still-uncovered overlapping-alternation
+  class (e.g. `(a|a)*`).
+
+## [0.1.4] — 2026-06-24
+
+### Changed
+
+- The **Rules (JSON)** field now renders as a multi-line editor (manifest `textarea`) and its
+  description carries a copy-pasteable example, so the expected JSON shape is obvious.
+
+### Fixed
+
+- A single rule object is now accepted and wrapped in an array automatically, instead of failing
+  with "rules must be a JSON array" — pasting one `{ "mode", "pattern", "reply" }` just works.
+- Invalid-rules errors now include a concrete example and a "use double quotes, not single" hint,
+  so the common single-quote / unquoted-key mistakes are easy to correct.
+
+## [0.1.3] — 2026-06-23
+
+### Fixed
+
+- The regex safety check now also rejects a nested unbounded quantifier hidden behind one or more
+  wrapping groups (e.g. `((a+))+`, `(((a+)))*`). The previous check only inspected a group that was
+  directly quantified, so an extra layer of parentheses could slip a catastrophic pattern through.
+  Patterns that carry only a single quantifier (e.g. `((ab)+)`) are still accepted.
+
+## [0.1.2] — 2026-06-23
+
+### Changed
+
+- `regex` rules are now validated for catastrophic-backtracking risk at parse time. A pattern that
+  nests an unbounded quantifier inside another (e.g. `(a+)+`, `(\w+\s?)*`) is skipped with a warning
+  like any other unusable pattern, so a single rule can no longer stall message handling on a crafted
+  input. Ordinary patterns — including lookahead and backreferences — are unaffected.
+- The per-chat fallback cooldown now tracks usage as least-recently-used: re-inserting a chat on each
+  reply so a busy chat's cooldown is preserved when the map reaches its cap, instead of being evicted
+  by first-seen order.
+
+## [0.1.1] — 2026-06-23
+
+### Added
+
+- Localized dashboard text (`name`, `description`, config field titles) for es, fr, it, ar, he, te, zh-CN,
+  zh-HK via `manifest.i18n`. English remains the default + fallback. Translations are machine-generated;
+  human review recommended for ar/he/te.
+
+## [0.1.0] — 2026-06-23
+
+First release. Built against OpenWA v0.6.1.
+
+### Added
+
+- Auto-reply to inbound messages from operator-defined rules with per-rule matching:
+  `contains` / `exact` (case-insensitive) and `regex` (compiled with the `i` flag). First matching
+  rule wins; replies are sent as a quoted reply to the triggering message.
+- Optional configurable fallback reply when no rule matches (empty = stay silent), throttled per chat
+  by `fallbackCooldownSec`.
+- `respondInGroups` toggle (default off — direct chats only).
+- Invalid `regex` rules are skipped with a warning; a structurally invalid `rules` config fails fast.

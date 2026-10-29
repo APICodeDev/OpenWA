@@ -1,0 +1,139 @@
+import { randomBytes } from 'node:crypto';
+import type { PluginNetCapability } from '../types/openwa';
+import { buildMultipartBody, MultipartField } from './multipart.ts';
+
+/** Derive the multipart part Content-Type from an untrusted media mimetype: strip the codec suffix, then
+ *  accept only a well-formed `type/subtype` token. Anything else (empty, spaces, an injected CRLF) falls
+ *  back to audio/ogg — the part filename is fixed to voice.ogg, so the decoder keys off that regardless. */
+export function sanitizeContentType(mimetype: string): string {
+  const token = mimetype.split(';')[0].trim();
+  return /^[\w.+-]+\/[\w.+-]+$/.test(token) ? token : 'audio/ogg';
+}
+
+export interface SttResult {
+  text: string;
+  language?: string;
+}
+
+export interface SttProvider {
+  transcribe(audio: Uint8Array, mimetype: string): Promise<SttResult>;
+}
+
+export interface OpenAiSttOptions {
+  /** Base URL of an OpenAI-compatible STT server (e.g. http://localhost:8000 — Speaches/faster-whisper). */
+  baseUrl: string;
+  apiKey?: string;
+  model: string;
+  /** Optional language hint (BCP-47); empty/undefined = auto-detect. */
+  language?: string;
+  timeoutMs: number;
+  net: PluginNetCapability;
+  /** Consecutive failures before the circuit opens (default 5). */
+  failureThreshold?: number;
+  /** How long the circuit stays open after tripping (default 30000ms). */
+  cooldownMs?: number;
+  /** Injectable clock (defaults to Date.now). */
+  now?: () => number;
+}
+
+/**
+ * Calls an OpenAI-compatible `/v1/audio/transcriptions` endpoint over the host-proxied, SSRF-guarded
+ * `ctx.net.fetch`. The audio is uploaded as a binary multipart body (a Buffer) — it crosses the
+ * sandbox→host boundary via structuredClone intact, which a string body could not.
+ */
+/**
+ * True when the host refused the call because IT is saturated, not because the backend failed. Both
+ * limits are shared with every other plugin on the gateway, so this says nothing about the STT service
+ * and must not count toward the circuit breaker. The host throws a plain Error carrying no code, so the
+ * message is the only discriminator available; the match is deliberately on the phrase both messages
+ * share rather than on either exact string.
+ */
+export function isHostBackpressure(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  return /too many concurrent/i.test(message);
+}
+
+export class OpenAiSttClient implements SttProvider {
+  private readonly base: string;
+  private readonly failureThreshold: number;
+  private readonly cooldownMs: number;
+  private readonly now: () => number;
+  private consecutiveFailures = 0;
+  private openUntil = 0;
+
+  constructor(private readonly opts: OpenAiSttOptions) {
+    this.base = opts.baseUrl.replace(/\/+$/, '');
+    this.failureThreshold = opts.failureThreshold ?? 5;
+    this.cooldownMs = opts.cooldownMs ?? 30000;
+    this.now = opts.now ?? (() => Date.now());
+  }
+
+  isHealthy(): boolean {
+    return this.consecutiveFailures < this.failureThreshold;
+  }
+
+  async transcribe(audio: Uint8Array, mimetype: string): Promise<SttResult> {
+    // Circuit breaker: while open, fail fast without touching a known-bad backend.
+    if (this.now() < this.openUntil) {
+      throw new Error('STT circuit open');
+    }
+    try {
+      const result = await this.doTranscribe(audio, mimetype);
+      this.consecutiveFailures = 0;
+      return result;
+    } catch (err) {
+      // Host backpressure is not a backend failure. The host rejects a fetch past its GLOBAL 16-slot
+      // limit ("too many concurrent plugin net.fetch calls") and a capability call past the per-plugin
+      // in-flight limit ("too many concurrent capability calls"), both instantly and both shared with
+      // every other plugin on the gateway. Counting them opened the breaker on a perfectly healthy
+      // backend: a busy line saturates the pool, the rejections are immediate and therefore
+      // consecutive, and five in a row stopped transcription for the whole cooldown. Matched on the
+      // message because the host throws a plain Error with no code; matched loosely so a reworded
+      // limit still lands here rather than being counted as a backend fault.
+      if (!isHostBackpressure(err)) {
+        this.consecutiveFailures++;
+        if (this.consecutiveFailures >= this.failureThreshold) {
+          this.openUntil = this.now() + this.cooldownMs;
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async doTranscribe(audio: Uint8Array, mimetype: string): Promise<SttResult> {
+    // Random from the CSPRNG, not Math.random: the audio bytes come from a sender, and a boundary that
+    // can be predicted is one that can be embedded to forge extra parts. Matches the other two producers.
+    const boundary = `----openwaFormBoundary${randomBytes(16).toString('hex')}`;
+    const fields: MultipartField[] = [
+      { name: 'model', value: this.opts.model },
+      { name: 'response_format', value: 'json' },
+    ];
+    if (this.opts.language) fields.push({ name: 'language', value: this.opts.language });
+
+    // Strip the codec suffix ("audio/ogg; codecs=opus" → "audio/ogg") and always name the part
+    // `voice.ogg`: OpenAI-compatible servers key the decoder off the filename extension and reject a
+    // bare ".opus", but accept ogg/oga.
+    const contentType = sanitizeContentType(mimetype);
+    const formBody = buildMultipartBody(boundary, fields, [
+      { name: 'file', filename: 'voice.ogg', contentType, data: audio },
+    ]);
+
+    const headers: Record<string, string> = { 'content-type': `multipart/form-data; boundary=${boundary}` };
+    if (this.opts.apiKey) headers['authorization'] = `Bearer ${this.opts.apiKey}`;
+
+    const response = await this.opts.net.fetch(`${this.base}/v1/audio/transcriptions`, {
+      method: 'POST',
+      headers,
+      body: formBody,
+      timeoutMs: this.opts.timeoutMs,
+    });
+    if (!response.ok) {
+      throw new Error(`STT request failed: HTTP ${response.status}`);
+    }
+    const data = JSON.parse(response.body) as { text?: unknown; language?: unknown };
+    if (typeof data?.text !== 'string') {
+      throw new Error('STT response contained no text');
+    }
+    return { text: data.text, language: typeof data.language === 'string' ? data.language : undefined };
+  }
+}

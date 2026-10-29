@@ -1,0 +1,318 @@
+{
+  "id": "faq-bot",
+  "name": "FAQ / Auto-Reply Bot",
+  "version": "0.2.15",
+  "type": "extension",
+  "main": "dist/index.js",
+  "description": "Auto-replies to inbound WhatsApp messages from configurable FAQ keyword/regex rules.",
+  "author": "Yudhi Armyndharis <yudhi@rmyndharis.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/rmyndharis/OpenWA-plugins/tree/main/faq-bot",
+  "repository": "https://github.com/rmyndharis/OpenWA-plugins",
+  "keywords": [
+    "faq",
+    "auto-reply",
+    "chatbot",
+    "support",
+    "whatsapp",
+    "openwa"
+  ],
+  "status": "stable",
+  "minOpenWAVersion": "0.6.1",
+  "testedOpenWAVersion": "0.26.0",
+  "provides": [
+    "auto-reply"
+  ],
+  "permissions": [
+    "messages:send"
+  ],
+  "sessionScoped": true,
+  "sessions": [
+    "*"
+  ],
+  "hooks": [
+    "message:received"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "rules": {
+        "type": "textarea",
+        "required": true,
+        "title": "Rules (JSON)",
+        "description": "JSON array of { mode: 'contains'|'exact'|'regex', pattern, reply }. Use double quotes. A single object is also accepted. Example: [{\"mode\":\"contains\",\"pattern\":\"openwa\",\"reply\":\"yes?\"}]"
+      },
+      "fallbackReply": {
+        "type": "string",
+        "default": "",
+        "title": "Fallback reply",
+        "description": "Sent when no rule matches. Leave empty to stay silent."
+      },
+      "fallbackCooldownSec": {
+        "type": "number",
+        "default": 600,
+        "title": "Fallback cooldown (seconds per chat)",
+        "description": "Minimum seconds between fallback replies to the same chat. 0 = reply every time."
+      },
+      "respondInGroups": {
+        "type": "boolean",
+        "default": false,
+        "title": "Also respond in group chats"
+      }
+    }
+  },
+  "i18n": {
+    "es": {
+      "name": "Bot de Preguntas Frecuentes / Respuesta Automática",
+      "description": "Responde automáticamente a los mensajes entrantes de WhatsApp mediante reglas configurables de palabras clave y expresiones regulares.",
+      "config": {
+        "rules": {
+          "title": "Reglas (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Respuesta alternativa"
+        },
+        "fallbackCooldownSec": {
+          "title": "Tiempo de espera alternativo (segundos por chat)"
+        },
+        "respondInGroups": {
+          "title": "Responder también en grupos"
+        }
+      }
+    },
+    "fr": {
+      "name": "Bot FAQ / Réponse Automatique",
+      "description": "Répond automatiquement aux messages WhatsApp entrants via des règles configurables de mots-clés et expressions régulières.",
+      "config": {
+        "rules": {
+          "title": "Règles (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Réponse de secours"
+        },
+        "fallbackCooldownSec": {
+          "title": "Délai de secours (secondes par chat)"
+        },
+        "respondInGroups": {
+          "title": "Répondre aussi dans les groupes"
+        }
+      }
+    },
+    "it": {
+      "name": "Bot FAQ / Risposta Automatica",
+      "description": "Risponde automaticamente ai messaggi WhatsApp in entrata tramite regole configurabili di parole chiave ed espressioni regolari.",
+      "config": {
+        "rules": {
+          "title": "Regole (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Risposta di riserva"
+        },
+        "fallbackCooldownSec": {
+          "title": "Intervallo di riserva (secondi per chat)"
+        },
+        "respondInGroups": {
+          "title": "Rispondi anche nei gruppi"
+        }
+      }
+    },
+    "ar": {
+      "name": "بوت الأسئلة الشائعة / الرد التلقائي",
+      "description": "يرد تلقائيًا على رسائل WhatsApp الواردة وفق قواعد قابلة للتهيئة من كلمات مفتاحية وتعابير نمطية.",
+      "config": {
+        "rules": {
+          "title": "القواعد (JSON)"
+        },
+        "fallbackReply": {
+          "title": "الرد الاحتياطي"
+        },
+        "fallbackCooldownSec": {
+          "title": "فترة انتظار الرد الاحتياطي (ثوانٍ لكل محادثة)"
+        },
+        "respondInGroups": {
+          "title": "الرد في المجموعات أيضًا"
+        }
+      }
+    },
+    "he": {
+      "name": "בוט שאלות נפוצות / מענה אוטומטי",
+      "description": "מגיב אוטומטית להודעות WhatsApp נכנסות לפי כללי מילות מפתח וביטויים רגולריים ניתנים להגדרה.",
+      "config": {
+        "rules": {
+          "title": "כללים (JSON)"
+        },
+        "fallbackReply": {
+          "title": "מענה חלופי"
+        },
+        "fallbackCooldownSec": {
+          "title": "זמן המתנה חלופי (שניות לצ'אט)"
+        },
+        "respondInGroups": {
+          "title": "מענה גם בקבוצות"
+        }
+      }
+    },
+    "te": {
+      "name": "FAQ / ఆటో-రిప్లై బాట్",
+      "description": "కాన్ఫిగర్ చేయదగిన FAQ కీవర్డ్/రెగ్యులర్ ఎక్స్‌ప్రెషన్ నియమాల ద్వారా వచ్చే WhatsApp సందేశాలకు స్వయంచాలకంగా జవాబిస్తుంది.",
+      "config": {
+        "rules": {
+          "title": "నియమాలు (JSON)"
+        },
+        "fallbackReply": {
+          "title": "ఫాల్‌బ్యాక్ జవాబు"
+        },
+        "fallbackCooldownSec": {
+          "title": "ఫాల్‌బ్యాక్ కూల్‌డౌన్ (ప్రతి చాట్‌కు సెకన్లు)"
+        },
+        "respondInGroups": {
+          "title": "గ్రూపుల్లోనూ స్పందించు"
+        }
+      }
+    },
+    "zh-CN": {
+      "name": "FAQ / 自动回复机器人",
+      "description": "通过可配置的 FAQ 关键词/正则表达式规则，自动回复入站的 WhatsApp 消息。",
+      "config": {
+        "rules": {
+          "title": "规则 (JSON)"
+        },
+        "fallbackReply": {
+          "title": "兜底回复"
+        },
+        "fallbackCooldownSec": {
+          "title": "兜底冷却时间（每个聊天秒数）"
+        },
+        "respondInGroups": {
+          "title": "也在群组中回复"
+        }
+      }
+    },
+    "zh-HK": {
+      "name": "FAQ / 自動回覆機器人",
+      "description": "透過可設定的 FAQ 關鍵字/正規表示式規則，自動回覆入站的 WhatsApp 訊息。",
+      "config": {
+        "rules": {
+          "title": "規則 (JSON)"
+        },
+        "fallbackReply": {
+          "title": "後備回覆"
+        },
+        "fallbackCooldownSec": {
+          "title": "後備冷卻時間（每個聊天秒數）"
+        },
+        "respondInGroups": {
+          "title": "亦在群組中回覆"
+        }
+      }
+    },
+    "hi": {
+      "name": "सामान्य प्रश्न (FAQ) / ऑटो-रिप्लाई बॉट",
+      "description": "कॉन्फ़िगर किए जा सकने वाले FAQ कीवर्ड/रेगेक्स (regex) नियमों के आधार पर इनबाउंड WhatsApp संदेशों का ऑटो-रिप्लाई करता है।",
+      "config": {
+        "rules": {
+          "title": "नियम (JSON)"
+        },
+        "fallbackReply": {
+          "title": "फ़ॉलबैक (Fallback) रिप्लाई"
+        },
+        "fallbackCooldownSec": {
+          "title": "फ़ॉलबैक कूलडाउन (सेकंड प्रति चैट)"
+        },
+        "respondInGroups": {
+          "title": "ग्रुप चैट्स में भी रिप्लाई करें"
+        }
+      }
+    },
+    "de": {
+      "name": "FAQ-Antwortbot",
+      "description": "Antwortet auf WhatsApp-Nachrichten anhand konfigurierbarer Schlüsselwort- und Regex-Regeln.",
+      "config": {
+        "rules": {
+          "title": "Regeln (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Standardantwort"
+        },
+        "fallbackCooldownSec": {
+          "title": "Wartezeit der Standardantwort (Sekunden pro Chat)"
+        },
+        "respondInGroups": {
+          "title": "Auch in Gruppenchats antworten"
+        }
+      }
+    },
+    "tr": {
+      "name": "SSS Otomatik Yanıt Botu",
+      "description": "WhatsApp mesajlarını yapılandırılabilir anahtar sözcük ve düzenli ifade kurallarıyla yanıtlar.",
+      "config": {
+        "rules": {
+          "title": "Kurallar (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Varsayılan yanıt"
+        },
+        "fallbackCooldownSec": {
+          "title": "Varsayılan yanıt bekleme süresi (sohbet başına saniye)"
+        },
+        "respondInGroups": {
+          "title": "Grup sohbetlerinde de yanıtla"
+        }
+      }
+    },
+    "pt-BR": {
+      "name": "Bot de perguntas frequentes",
+      "description": "Responde a mensagens do WhatsApp com regras configuráveis de palavras-chave e expressões regulares.",
+      "config": {
+        "rules": {
+          "title": "Regras (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Resposta padrão"
+        },
+        "fallbackCooldownSec": {
+          "title": "Intervalo da resposta padrão (segundos por conversa)"
+        },
+        "respondInGroups": {
+          "title": "Responder também em grupos"
+        }
+      }
+    },
+    "ko": {
+      "name": "FAQ 자동 응답 봇",
+      "description": "설정 가능한 키워드 및 정규식 규칙으로 WhatsApp 메시지에 응답합니다.",
+      "config": {
+        "rules": {
+          "title": "규칙 (JSON)"
+        },
+        "fallbackReply": {
+          "title": "기본 응답"
+        },
+        "fallbackCooldownSec": {
+          "title": "기본 응답 대기 시간 (채팅별 초)"
+        },
+        "respondInGroups": {
+          "title": "그룹 채팅에도 응답"
+        }
+      }
+    },
+    "id": {
+      "name": "Bot FAQ",
+      "description": "Membalas pesan WhatsApp berdasarkan aturan kata kunci dan ekspresi reguler yang dapat dikonfigurasi.",
+      "config": {
+        "rules": {
+          "title": "Aturan (JSON)"
+        },
+        "fallbackReply": {
+          "title": "Balasan cadangan"
+        },
+        "fallbackCooldownSec": {
+          "title": "Jeda balasan cadangan (detik per chat)"
+        },
+        "respondInGroups": {
+          "title": "Balas juga di chat grup"
+        }
+      }
+    }
+  }
+}

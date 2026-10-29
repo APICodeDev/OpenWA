@@ -1,0 +1,271 @@
+import type {
+  IPlugin, PluginContext, HookContext, HookResult, IncomingMessage, ConversationSendEnvelope,
+} from '../types/openwa';
+import { readConfig, type HttpActionConfig } from './config.ts';
+import { phoneFromJid, isBroadcastJid } from './jid.ts';
+import { matchAction } from './matcher.ts';
+import { renderText, type TemplateContext } from './url-template.ts';
+import { HttpActionClient, type FetchLike } from './client.ts';
+import { hasSeen, markSeen, prune, allowCooldown, type StorageLike, DEDUP_TTL_MS, PRUNE_INTERVAL_MS } from './reliability.ts';
+
+const PLUGIN = 'http-action';
+const REPLY_MAX = 4000;
+const DEFAULT_NOT_FOUND = 'Not found.';
+const DEFAULT_ERROR = 'Service is temporarily unavailable. Please try again later.';
+const LATE_NOTICE = 'This command arrived late and was not run. Please send it again if you still need it.';
+// From OpenWA 0.23.6 a Baileys session delivers, after it reconnects, what WhatsApp queued while it was
+// disconnected, each message with its original send time. Five minutes is far above clock skew between
+// WhatsApp and the gateway and matches the host's own auto-reply age limit.
+const LATE_AFTER_MS = 5 * 60_000;
+
+// Responder band, first: a command prefix is the most specific trigger any of these plugins has, so a
+// message addressed to it should never also be answered by a keyword bot or a flow.
+const HOOK_PRIORITY = 70;
+
+/** Dependencies handleMessage needs, injected so the per-message logic tests without OpenWA. */
+export interface HandleDeps {
+  cfg: HttpActionConfig;
+  fetch: FetchLike;
+  conversations: { send(env: ConversationSendEnvelope): Promise<unknown> };
+  storage: StorageLike;
+  cooldown: Map<string, number>;
+  now: () => number;
+  // `warn` mirrors the host's PluginLogger: the second argument is structured META, not an Error —
+  // passing an Error there renders as `{}`. Errors go to `error`, which does accept one.
+  logger: { log(m: string): void; warn(m: string, meta?: Record<string, unknown>): void; error(m: string, e?: unknown): void };
+}
+
+/** Strip C0 control chars (except \n, \t) so an attacker-influenced upstream value can't smuggle them into the reply. */
+function sanitize(s: string): string {
+  return s.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+}
+
+/** Truncate to REPLY_MAX code units without splitting a UTF-16 surrogate pair. */
+function truncate(s: string): string {
+  if (s.length <= REPLY_MAX) return s;
+  let cut = REPLY_MAX - 1;
+  if (cut > 0) {
+    const code = s.charCodeAt(cut - 1);
+    if (code >= 0xd800 && code <= 0xdbff) cut -= 1; // last included char is a high surrogate → back off
+  }
+  return `${s.slice(0, cut)}…`;
+}
+
+
+function buildCtx(msg: IncomingMessage, sessionId: string, args: string[], response?: unknown): TemplateContext {
+  // In a group `msg.from` is the GROUP jid, so `author` is the only real sender. Using `from` made
+  // `{{sender.id}}` resolve to the group for every member — a per-user lookup or an authorization check
+  // written against it silently applied to the group instead.
+  const senderJid = msg.author ?? msg.from;
+  return {
+    args,
+    message: { id: msg.id, body: msg.body },
+    chat: { id: msg.chatId },
+    sender: {
+      id: senderJid,
+      // The host assigns `senderPhone` only AFTER the message:received chain has run, and only for @lid
+      // senders, so at hook time it is always unset — `{{sender.phone}}` was empty for every sender on
+      // both engines. Keep reading it first in case that ordering ever changes, then fall back to the
+      // digits of the JID, which for a plain @c.us chat IS the number.
+      phone: msg.senderPhone ?? phoneFromJid(senderJid),
+      name: msg.contact?.pushName ?? msg.contact?.name ?? '',
+    },
+    session: { id: sessionId },
+    response,
+  };
+}
+
+/**
+ * Per-message work: match → dedup CHECK (fail-closed) → late-POST refusal → cooldown (fail-open) →
+ * fetch → map status → render → send → mark seen. The dedup MARK is written only after a successful
+ * send, so a transient send failure retries on redelivery instead of being silently dropped (mirrors
+ * chatwoot's hasSeen/markSeen).
+ */
+export async function handleMessage(deps: HandleDeps, sessionId: string, msg: IncomingMessage): Promise<void> {
+  const hit = matchAction(deps.cfg.actions, msg.body);
+  if (!hit) return; // no trigger matched → silent
+
+  // Dedup CHECK (read-only, fail-closed): drop a redelivery of an already-processed message id.
+  const dedupFailed = (e: unknown) =>
+    deps.logger.warn(`${PLUGIN}: dedup read failed, dropping message ${msg.id} unanswered`,
+      { error: e instanceof Error ? e.message : String(e) });
+  if (await hasSeen(deps.storage, sessionId, msg.id, dedupFailed)) return;
+  // Best-effort prune of expired markers (throttled hourly); never blocks the reply.
+  void prune(deps.storage, deps.now(), DEDUP_TTL_MS, PRUNE_INTERVAL_MS).catch((e) =>
+    deps.logger.error(`${PLUGIN}: prune failed`, e),
+  );
+  // A late POST is refused rather than run: a write the contact sent before an outage (and may have given
+  // up on, or done another way) would otherwise fire now. A GET only reads and still runs. A missing,
+  // zero, negative or unrepresentable timestamp counts as sent now. After the dedup read, so a redelivery
+  // of a command that already ran is never told it did not; before the cooldown, so the notice does not
+  // hold back a fresh command.
+  const sent = new Date((msg.timestamp ?? 0) * 1000);
+  const ageMs = sent.getTime() > 0 ? deps.now() - sent.getTime() : 0;
+  if (hit.action.request.method === 'POST' && ageMs > LATE_AFTER_MS) {
+    deps.logger.warn(`${PLUGIN}: action '${hit.action.id}' not run, the command arrived late`,
+      { ageSeconds: Math.round(ageMs / 1000) });
+    // Send-then-mark, as for the reply below: a failed notice stays un-marked and a redelivery retries it.
+    await deps.conversations.send({ sessionId, chatId: msg.chatId, type: 'text', text: LATE_NOTICE, replyTo: msg.id });
+    await markSeen(deps.storage, sessionId, msg.id, deps.now());
+    return;
+  }
+  // Cooldown (fail-open): one reply per chat per window. Checked before the mark so a blocked message
+  // consumes nothing and a later message (after the window) still goes through.
+  const cooldownMs = Math.max(0, deps.cfg.cooldownSeconds) * 1000;
+  if (!allowCooldown(deps.cooldown, `${sessionId}:${msg.chatId}`, deps.now(), cooldownMs)) return;
+
+  const { action, args } = hit;
+  const client = new HttpActionClient(deps.fetch, deps.cfg);
+  const ctxWith = (response?: unknown): TemplateContext => buildCtx(msg, sessionId, args, response);
+
+  let text: string;
+  try {
+    const out = await client.run(action, ctxWith());
+    if (out.status === 404) {
+      text = renderText(action.notFoundTemplate ?? DEFAULT_NOT_FOUND, ctxWith(out.data));
+    } else if (out.status >= 200 && out.status < 300) {
+      text = renderText(action.replyTemplate, ctxWith(out.data));
+    } else {
+      text = renderText(action.errorTemplate ?? DEFAULT_ERROR, ctxWith(out.data));
+    }
+  } catch (e) {
+    deps.logger.error(`${PLUGIN}: request failed`, e);
+    // Same hazard as the empty-reply fallback below: renderText can throw on a bad template, and an
+    // unguarded throw here would replace an upstream failure the operator can see with silence.
+    try {
+      text = renderText(action.errorTemplate ?? DEFAULT_ERROR, ctxWith());
+    } catch (tplErr) {
+      deps.logger.warn(`${PLUGIN}: action '${action.id}' errorTemplate failed to render`,
+        { error: tplErr instanceof Error ? tplErr.message : String(tplErr) });
+      text = DEFAULT_ERROR;
+    }
+  }
+
+  // A template referencing a field the response does not carry renders to '', and an empty envelope is
+  // sent as an empty WhatsApp bubble — the host coerces `text` and never rejects it. Substitute the
+  // error template and say so: an empty render is a template bug the operator has to see.
+  let reply = truncate(sanitize(text));
+  if (!reply.trim()) {
+    deps.logger.warn(`${PLUGIN}: action '${action.id}' rendered an empty reply; sent the error template instead`);
+    // renderText can THROW (a too-deep path, a prototype key, too many placeholders). Before this
+    // fallback existed an empty bubble was still sent and the message was marked seen; letting the
+    // fallback throw would instead reject out of handleMessage, sending nothing at all.
+    try {
+      reply = truncate(sanitize(renderText(action.errorTemplate ?? DEFAULT_ERROR, ctxWith()))).trim() || DEFAULT_ERROR;
+    } catch (e) {
+      deps.logger.warn(`${PLUGIN}: action '${action.id}' errorTemplate failed to render`,
+        { error: e instanceof Error ? e.message : String(e) });
+      reply = DEFAULT_ERROR;
+    }
+  }
+
+  // replyTo is safe here — replies are always text (media is a non-goal). See §1.4.
+  // A send rejection propagates out of handleMessage (to the hook's .catch) BEFORE markSeen runs, so the
+  // message stays un-marked and a redelivery retries — no silently-dropped reply.
+  await deps.conversations.send({
+    sessionId, chatId: msg.chatId, type: 'text', text: reply, replyTo: msg.id,
+  });
+  await markSeen(deps.storage, sessionId, msg.id, deps.now());
+}
+
+/**
+ * HTTP Action Bot — trigger a safe REST request from a WhatsApp command and render the JSON response
+ * back to chat. One request per message, one reply. Roadmap §4.
+ */
+export default class HttpActionPlugin implements IPlugin {
+  private ctx: PluginContext | null = null;
+
+  async onEnable(ctx: PluginContext): Promise<void> {
+    this.ctx = ctx;
+    const cfg = readConfig(ctx.config); // fail-fast: a bad config aborts enable
+    const cooldown = new Map<string, number>(); // per-chat cooldown, lives for the enabled lifetime
+
+    ctx.registerHook('message:received', async (h: HookContext): Promise<HookResult> => {
+      const sessionId = h.sessionId;
+      const msg = h.data as IncomingMessage | undefined;
+      if (!sessionId || !msg) return { continue: true };
+      if (msg.fromMe) return { continue: true };
+      if (typeof msg.body !== 'string' || !msg.body.trim()) return { continue: true };
+      if (!msg.chatId || !msg.id) return { continue: true };
+      // Since host 0.23.2 a poll arrives with its question as the body and a contact card with its
+      // vCard, and from 0.23.5 a Baileys 'order' carries the order note (else its title) and a
+      // 'product' the product card text (else the product title), so a non-empty body no longer means
+      // someone typed a command. This plugin performs real writes against the operator's backend, so
+      // an accidental trigger is the most expensive one in the catalog: a poll titled with a
+      // configured prefix would fire a GET or POST and claim the message. 'unknown' stays admitted:
+      // whatsapp-web.js still delivers a tapped business button or list reply there (Baileys sends
+      // them as 'text' from 0.23.6), and that is a legitimate way to invoke an action. A Baileys
+      // whole-catalog share is 'unknown' too, with the catalog title as the body, and cannot be told
+      // apart from a button reply by type.
+      if (msg.type === 'contact' || msg.type === 'poll' || msg.type === 'order' || msg.type === 'product') {
+        return { continue: true };
+      }
+
+      // Re-read config per event so a live dashboard edit is picked up without re-enable.
+      let liveCfg: HttpActionConfig;
+      try {
+        liveCfg = readConfig(ctx.config);
+      } catch (e) {
+        ctx.logger.warn(`${PLUGIN}: skipping message, config invalid: ${(e as Error).message}`);
+        return { continue: true };
+      }
+      if (msg.isGroup && !liveCfg.respondInGroups) return { continue: true };
+      // `isGroup` is a boolean over a five-way discriminator, so it cannot see a WhatsApp Channel: a
+      // `@newsletter` post arrives with isGroup false and is indistinguishable here from a 1:1 chat.
+      // Nothing filters those upstream (the host diverts only status broadcasts, message-projector
+      // handleInboundMessage), so a channel this account merely FOLLOWS could match an action and fire
+      // a real, irreversible backend write on behalf of a sender the operator has no relationship with.
+      // Broadcast-list traffic is the same shape. Checked on the JID rather than `msg.kind`, which the
+      // host only stamps from 0.10.8 while this plugin supports 0.8.0.
+      if (isBroadcastJid(msg.chatId)) return { continue: true };
+
+      // Decide ownership SYNCHRONOUSLY, before floating the request. The work runs off-dispatch to stay
+      // inside the ~5 s hook budget, so the outcome is not knowable here — but whether the message is
+      // addressed to this plugin is, and that is what a claim means (see PLUGIN-STANDARD.md).
+      // handleMessage resolves the trigger with this same call (:75), so the claim and the reply can
+      // never disagree about which messages belong to this plugin.
+      const mine = matchAction(liveCfg.actions, msg.body) !== null;
+
+      // Off-dispatch (§1.2 #2): return synchronously and float handleMessage, so a slow or blocked
+      // upstream never stalls the WA hook.
+      void handleMessage(
+        {
+          cfg: liveCfg,
+          fetch: ctx.net.fetch.bind(ctx.net),
+          conversations: ctx.conversations,
+          storage: ctx.storage,
+          cooldown,
+          now: () => Date.now(),
+          logger: ctx.logger,
+        },
+        sessionId,
+        msg,
+      ).catch((e) => ctx.logger.error(`${PLUGIN}: handler failed`, e));
+      return { continue: !mine };
+    }, HOOK_PRIORITY);
+
+    // Per-action request headers have no `secret: true` home. The host redacts plugin config per schema
+    // FIELD, and every action lives inside the single `actions` textarea, so a credential typed into an
+    // action header comes back verbatim on GET /plugins while `authToken` is masked. Marking the whole
+    // textarea secret would hide the action definitions themselves, so say it once here and name the
+    // actions, rather than let an operator assume this plugin masks every credential in its config.
+    const headerActions = cfg.actions.filter(a => a.request.headers).map(a => a.id);
+    if (headerActions.length) {
+      ctx.logger.warn(
+        `${PLUGIN}: action request headers are stored and returned unmasked by the plugins API; put a credential in the Token / API key field (authType 'apikey' names the header) rather than in an action header`,
+        { actions: headerActions },
+      );
+    }
+    ctx.logger.log(`${PLUGIN} enabled (${cfg.actions.length} action(s), ${cfg.baseUrl})`);
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
+    if (!this.ctx) return { healthy: false, message: `${PLUGIN}: not loaded` };
+    try {
+      const cfg = readConfig(this.ctx.config);
+      return { healthy: true, message: `${PLUGIN}: ${cfg.actions.length} action(s), baseUrl ${cfg.baseUrl}` };
+    } catch (e) {
+      return { healthy: false, message: (e as Error).message };
+    }
+  }
+}

@@ -1,0 +1,125 @@
+name: release
+
+# Tag a plugin release as `<plugin-id>-vX.Y.Z` (e.g. gsheets-logger-v0.2.0). This builds the plugin,
+# attaches the .zip + .sha256 to a GitHub Release, and uses the matching CHANGELOG section as notes.
+on:
+  push:
+    tags:
+      - '*-v*.*.*'
+
+permissions:
+  contents: write
+
+# GitHub has delivered a single tag push as two push events, starting two runs that raced to create the
+# same Release; the one that lost failed with "Release.tag_name already exists" although the release was
+# fine. Runs for one tag now wait for each other, and the release step below lets the later one confirm
+# the published bytes instead of failing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # This job needs `contents: write` to create the Release, but it never reaches the repository
+      # through git: `gh release create` below authenticates with GH_TOKEN instead. Without this line
+      # actions/checkout writes that write-scoped token into .git/config, where the next step,
+      # `npm ci`, runs dependency lifecycle scripts (esbuild has a postinstall) with it on disk.
+      # ci.yml documents and closes the same hazard.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Parse + validate id/version from the tag. The tag is the only external input, so validate its
+      # shape strictly and pass the parts through $GITHUB_ENV (referenced as quoted env vars below).
+      - name: Resolve plugin id + version from tag
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          if ! printf '%s' "$TAG" | grep -Eq '^[a-z0-9][a-z0-9._-]*-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Tag '$TAG' must be '<plugin-id>-vMAJOR.MINOR.PATCH'"; exit 1
+          fi
+          ID="${TAG%-v*}"
+          VERSION="${TAG##*-v}"
+          case "$ID" in *..*) echo "invalid id"; exit 1;; esac
+          if [ ! -f "$ID/manifest.json" ]; then echo "no plugin '$ID'"; exit 1; fi
+          echo "PLUGIN_ID=$ID" >> "$GITHUB_ENV"
+          echo "PLUGIN_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Assert tag version matches the manifest
+        run: |
+          MV=$(node -p "require('./'+process.env.PLUGIN_ID+'/manifest.json').version")
+          if [ "$MV" != "$PLUGIN_VERSION" ]; then
+            echo "tag version $PLUGIN_VERSION != manifest version $MV"; exit 1
+          fi
+
+      # ci.yml runs on pushes and PRs to main, never on tags — and a tag can be pushed at any commit.
+      # Without this the release path would happily publish an artifact built from a red commit, and the
+      # zip reaches users the moment the Release is created.
+      - name: Verify before publishing anything
+        run: |
+          npm run typecheck
+          npm test
+          npm run catalog:check
+
+      - name: Build & package (validates version↔changelog and size)
+        run: node package.mjs "$PLUGIN_ID"
+
+      # The catalog's download URL pins the digest of the artifact this Release attaches, computed from
+      # the same tree by the same deterministic build. If CI ever produces bytes that differ from the
+      # tree that generated plugins.json, every pinned install of this release fails verification on the
+      # host, so fail here instead, before anything is published.
+      - name: The catalog pin matches the artifact
+        run: |
+          PIN=$(node -p "new URL(require('./plugins.json').find(e => e.id === process.env.PLUGIN_ID).download).hash.slice('#sha256='.length)")
+          ACTUAL=$(sha256sum "$PLUGIN_ID.zip" | cut -d' ' -f1)
+          if [ "$PIN" != "$ACTUAL" ]; then
+            echo "catalog pins $PIN but the built artifact is $ACTUAL; regenerate the catalog from this tree"; exit 1
+          fi
+
+      # The last point at which a bundle the host cannot load is still cheap to fix. After this step the
+      # Release is created and the zip is installable.
+      - name: The built bundle loads as a plugin
+        run: node scripts/loader-check.mjs "$PLUGIN_ID"
+
+      - name: Checksum + release notes
+        run: |
+          sha256sum "$PLUGIN_ID.zip" > "$PLUGIN_ID.zip.sha256"
+          awk -v v="$PLUGIN_VERSION" '
+            $0 ~ ("^## \\[" v "\\]") { f=1; next }
+            f && /^## \[/ { exit }
+            f { print }
+          ' "$PLUGIN_ID/CHANGELOG.md" > notes.md
+          {
+            echo ""
+            echo "**Install:** download \`$PLUGIN_ID.zip\` below and upload it in the OpenWA dashboard (Plugins → Install). For install-from-URL on a production host (OpenWA ≥ 0.20.0), append \`#sha256=<digest below>\` to the asset URL."
+            echo ""
+            echo "SHA-256: \`$(cut -d' ' -f1 "$PLUGIN_ID.zip.sha256")\`"
+          } >> notes.md
+
+      # A release is immutable once created (there is no --clobber), so a second run for the same tag has
+      # nothing to publish. It succeeds only when the published zip is byte-identical to this build; any
+      # other difference means the tag and the release disagree, which must stay loud.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json tagName > /dev/null 2>&1; then
+            gh release download "$GITHUB_REF_NAME" --pattern "$PLUGIN_ID.zip" --dir published
+            PUBLISHED=$(sha256sum "published/$PLUGIN_ID.zip" | cut -d' ' -f1)
+            ACTUAL=$(sha256sum "$PLUGIN_ID.zip" | cut -d' ' -f1)
+            if [ "$PUBLISHED" = "$ACTUAL" ]; then
+              echo "Release $GITHUB_REF_NAME is already published with this build ($ACTUAL); nothing to do."
+              exit 0
+            fi
+            echo "Release $GITHUB_REF_NAME exists but holds $PUBLISHED, while this build is $ACTUAL"; exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            "$PLUGIN_ID.zip" "$PLUGIN_ID.zip.sha256" \
+            --title "$PLUGIN_ID v$PLUGIN_VERSION" \
+            --notes-file notes.md

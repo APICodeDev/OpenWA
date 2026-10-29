@@ -1,0 +1,267 @@
+# Changelog
+
+All notable changes to the Typebot Connector plugin are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to
+[Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.3.4] - 2026-10-28
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.26.0.
+- Document that a per-session override that points `apiHost` or `mediaHost` at another origin must also set `apiToken`, which OpenWA 0.26.0 no longer inherits.
+
+### Fixed
+
+- Skip a message the host delivers already deleted instead of starting or advancing a flow with an empty answer.
+
+## [0.3.3] - 2026-10-15
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.25.0 and complete dashboard translations for all supported locales.
+
+## [0.3.2] - 2026-09-24
+
+### Fixed
+
+- A bullet list written with `*` or `+` reaches WhatsApp as a list; it was read as italic and could
+  run across lines.
+
+## [0.3.1] - 2026-09-24
+
+### Added
+
+- Hindi (`hi`) dashboard text: the plugin name, description and config field titles.
+
+## [0.3.0] - 2026-09-24
+
+### Added
+
+- An optional file-upload step can be skipped from WhatsApp by replying with its Skip label.
+- A file-upload step sends its placeholder as the prompt when it is plain text, as a text step already
+  does.
+
+### Fixed
+
+- Messages WhatsApp delivers late after a reconnect no longer answer a step the contact had not seen yet.
+- A reply written during a disconnect to a step shown before it still answers it: the idle reset counts
+  from when it was written.
+- An attachment that did not come through at a file-upload step no longer invites a typed answer.
+
+## [0.2.10] - 2026-09-24
+
+### Fixed
+
+- A file-upload step no longer invites a typed answer: Typebot accepts only the file there, so the
+  prompt promised a reply the connector then refused.
+
+## [0.2.9] - 2026-09-23
+
+### Fixed
+
+- A catalog order or product card now asks the contact to type instead of answering the current step,
+  since from OpenWA 0.23.5 its note or title fills the body on Baileys and could pick a numbered choice.
+
+### Changed
+
+- **Verified against OpenWA v0.23.6** (testedOpenWAVersion 0.23.4 -> 0.23.6).
+
+## [0.2.8] - 2026-09-05
+
+### Fixed
+
+- **An attachment that could not be read is no longer reported to the contact as too large.** The
+  omitted marker carries no reason and size is one of five causes; OpenWA 0.23.4 adds a failed
+  download on both engines, which is the retryable one, so most contacts were told to do the one
+  thing that cannot help. The prompt now invites a retry without naming a cause.
+- **A WhatsApp Channel or broadcast-list post no longer starts a flow.** A `@newsletter` post arrives
+  flagged as a non-group chat, so a followed channel called the operator's Typebot on every post and
+  took a durable session row per channel, for a chat the account can never answer in.
+- The README no longer says a plugin cannot ask for a Baileys link preview; the send envelope has
+  carried `linkPreview` since host 0.14.1. This connector still leaves it unset.
+
+### Changed
+
+- **Verified against OpenWA v0.23.4** (testedOpenWAVersion 0.23.3 -> 0.23.4).
+
+## [0.2.7] - 2026-08-25
+
+### Fixed
+
+- A rejected session-state write no longer costs the contact the whole turn. The Typebot server has
+  already advanced by that point, so the bubbles are the only thing left to deliver; the write failure
+  is now logged and the turn is sent. Losing the row costs one restart on the next message, where
+  throwing cost that restart and the turn.
+
+- A shared contact card or a poll no longer answers the current step. OpenWA 0.23.2 fills the message
+  body for both, so a vCard holding a bare in-range digit (a street number, an extension) could silently
+  select a numbered choice. The contact is asked to type instead and the flow stays where it is; sharing
+  a card at a file-upload step still gets that step's own wording.
+
+### Changed
+
+- **Verified against OpenWA v0.23.3** (testedOpenWAVersion 0.23.0 → 0.23.3).
+
+## [0.2.6] - 2026-08-20
+
+### Changed
+
+- **Verified against OpenWA v0.23.0** (testedOpenWAVersion 0.22.0 → 0.23.0).
+
+## [0.2.5] - 2026-08-19
+
+### Changed
+
+- **Verified against OpenWA v0.22.0** (testedOpenWAVersion 0.20.0 → 0.22.0).
+
+## [0.2.4] - 2026-08-16
+
+### Changed
+
+- **Verified against OpenWA v0.20.0** (testedOpenWAVersion 0.19.0 → 0.20.0); the catalog download URL now pins #sha256= for production installs.
+
+## [0.2.3] — 2026-08-15
+
+### Fixed
+
+- **The manifest's `sdkVersion` is a string again.** It had been changed to the number `1`, while the
+  host types it as a string (`sdkVersion.split('.')` on hosts that read it). Harmless here only
+  because this plugin declares no ingress route, so the host never reads the field today — but it was
+  the same regression that broke loading for the ingress plugins, and a future host that reads
+  `sdkVersion` unconditionally would fail this plugin at load too.
+- **A malformed upstream response no longer throws out of the hook.** `messages` and `clientSideActions`
+  were only checked for null, so a Typebot server returning either as an object or a string raised a
+  TypeError inside the message handler. They are array-checked now and degrade to no bubbles.
+
+
+
+### Changed
+
+- **Compatibility re-verified against OpenWA v0.19.0** (testedOpenWAVersion 0.14.0 → 0.19.0). The
+  manifest passes the v0.19.0 host's load-time validation (manifest, ingress and main-entry
+  checks) and the built bundle loads under the loader contract. No capability surface this plugin
+  uses changed between 0.14 and 0.19; the v0.19 breaking changes are host-side (API key length,
+  removed REST endpoints, the plain-http install pin) and do not touch this plugin.
+
+## [0.2.2] — 2026-08-12
+
+### Changed
+
+- **Declared the `storage:use` permission.** The plugin keeps one small record per conversation in
+  plugin storage — the Typebot session id, what input the bot is waiting for, and when the chat was
+  last active. Typebot owns the flow itself; this record is the only thing tying a WhatsApp chat to
+  its running Typebot session. OpenWA is moving `ctx.storage` behind a permission the manifest has to
+  declare, and without it that record cannot be read or written: every reply from a contact would be
+  treated as a brand-new conversation and restart the flow from the top, forever. Declaring the
+  permission changes nothing on the hosts you run today — an unrecognized permission is ignored — so
+  0.2.2 behaves exactly like 0.2.1.
+
+## [0.2.1] — 2026-07-31
+
+### Fixed
+
+- **Uploading a file at a Typebot file-upload step got stuck in a loop.** The photo or document reached
+  storage every time, but the flow answered "Invalid message. Please, try again." and asked for the same
+  file again, indefinitely. A file-upload step expects the uploaded file's URL as the answer itself, while
+  a text step that merely allows an attachment expects the typed answer with the file attached alongside
+  it — the plugin was sending the second shape for both, so a file-upload step never accepted what it was
+  sent. Each is now answered the way it expects, and a file-upload step advances the flow like any other.
+
+### Verified
+
+- **Confirmed fixed against a live self-hosted Typebot install.** On 2026-07-31, a real WhatsApp photo was
+  smoke-tested end-to-end through OpenWA 0.12.1 against a self-hosted Typebot v3.17.2 instance: the upload
+  reached storage and the file-upload step advanced the flow to the next block.
+
+## [0.2.0] — 2026-07-31
+
+### Fixed
+
+- **A chat in scope for this bot could also draw a reply from another auto-reply plugin.** This plugin
+  returns before the flow turn finishes running, so it never claimed the message — meaning any
+  co-installed bot behind it in the hook chain would also answer. It now claims a chat as soon as it
+  determines the chat is in scope (the same check `handleTurn` re-applies before acting), so an outage on
+  the Typebot side produces silence for that message rather than a different plugin answering on this
+  bot's behalf.
+- **This plugin now registers at an explicit responder priority**, after a command prefix and any
+  keyword-based bot, since it auto-starts a flow for every in-scope chat and should not pre-empt a more
+  specific trigger.
+
+## [0.1.1] — 2026-07-30
+
+First release verified against a live server: a self-hosted Typebot v3.17.2 driven over real WhatsApp
+through OpenWA 0.12.1, rather than against unit tests alone. That run is what found the first item.
+
+### Fixed
+
+- **`{{waNumber}}` reached every flow empty.** It read `msg.senderPhone`, which the host assigns *after*
+  the `message:received` chain has run, and then only for `@lid` senders — so a hook handler never
+  observes it set. Measured on the live server: the same published flow rendered `num=[628999000]` when
+  its Chat API was called directly, and `num=[]` on the identical message routed through this plugin. Any
+  flow branching on the contact's number therefore took the empty branch for every contact, silently. The
+  value now falls back to the digits of the sender JID — the participant's JID in a group, where
+  `from`/`chatId` is the group rather than a person. A `@lid` sender still yields an empty string on
+  purpose: a privacy id's numeric part is not a phone number, and feeding it to a CRM lookup as one would
+  be worse than feeding it nothing.
+- **Only a real user JID becomes a phone number.** The JID→digits helper first shipped in this
+  release denylisted `@lid`, which is not enough: a group, channel or broadcast JID has a numeric
+  local part too, so those were emitted as if they were phone numbers — worse than the empty value
+  they replaced. It now allowlists `@c.us` / `@s.whatsapp.net` and strips the `:device` suffix
+  Baileys can append. Caught in self-review before release.
+- **One failed part silenced the rest of the turn.** The send loop had no per-part isolation, so a single
+  failure — an unreachable `mediaHost`, a host media path that refuses the envelope — aborted every part
+  after it. Because state is persisted *before* sending (deliberately: the Typebot server has already
+  advanced), the contact was left with a half-delivered turn while the plugin believed the prompt was
+  out, and their next message was matched against an input they never saw. Each part is now isolated and
+  a failure is logged.
+- **Rows from sessions that stop sending entirely are reclaimed too.** The abandoned-session sweep is
+  scoped to the session whose message triggered it, because its threshold comes from that session's
+  config — but that leaves a disabled or deleted tenant's rows with nothing to list them, and every
+  stored key is stat-ed on every write, so they tax every other session's turns forever. A second,
+  unscoped pass removes rows idle past a week, a threshold no per-session timeout plausibly exceeds.
+- **A group message with no author is skipped instead of merged.** Group flows are keyed per sender, and
+  an authorless message fell back to a shared `unknown` key — so every such participant drove the SAME
+  Typebot session and one contact's answer advanced another contact's flow. There is no safe way to
+  attribute it, so the turn is skipped.
+- **The abandoned-session sweep is scoped to one WhatsApp session.** Its threshold comes from the
+  config resolved for the session whose message triggered it, and `sessionTimeoutMinutes` is
+  overridable per session — so an unscoped sweep applied one session's (possibly 5-minute) timeout
+  to every other session's rows and deleted flows still live under their own, longer, timeout: a
+  contact halfway through a long form would have silently restarted at question one. The sweep and
+  its throttle are now both per session. Caught in self-review before release.
+- **Sessions abandoned mid-flow were never cleaned up.** A completed flow clears its own row, but a
+  contact who simply stops replying leaves one behind forever. Beyond disk, that has a running cost:
+  OpenWA re-measures a plugin's storage quota on every write by stat-ing every key it owns, so abandoned
+  rows make each later turn slower, permanently. Rows idle past `sessionTimeoutMinutes` are now swept at
+  most hourly, driven by traffic rather than a timer so a disabled plugin leaves nothing running.
+
+### Documentation
+
+- A text input's **placeholder is sent to the contact as the prompt** — WhatsApp has no input field to
+  show it in. This is intended, but it means a placeholder written for a web form ("Type here…") reads as
+  a nonsense chat message. Write placeholders as prompts.
+- `apiHost` **must be https**, which the plugin already enforces at enable. A self-hosted Typebot reached
+  over plain http cannot be used: the host admits an operator-configured host only when it is https, and
+  the token this plugin sends would otherwise travel in clear text. Front a self-hosted instance with TLS.
+
+## [0.1.0] — 2026-07-03
+
+Initial release — a WhatsApp ↔ Typebot bridge that runs a Typebot flow as the WhatsApp bot.
+
+- **Auto-start:** every in-scope chat (1:1 and, by default, groups) starts a Typebot session on the first
+  message and advances it on each reply, via Typebot's live Chat API (`startChat` / `continueChat`).
+- **Rendering:** text bubbles (Markdown → WhatsApp formatting), image/video/audio bubbles (sent as native
+  media), and `choice` / `picture choice` inputs rendered as a numbered list. A numeric reply is mapped back
+  to the chosen option.
+- **Inputs:** typed inputs (email/number/url/date/time/phone/rating) are passed through and validated by
+  Typebot; `file input` accepts a WhatsApp media reply, uploads it to Typebot, and submits the file URL.
+- **Lifecycle:** the session resets when the flow ends (no further input) or after an idle timeout;
+  an expired server session restarts cleanly.
+- **Runtime:** runs sandboxed in the plugin worker; the Typebot call is off-dispatch (never blocks the WA
+  pipeline) and serialized per chat. No public URL or webhook required.
+
+Requires OpenWA **≥ 0.8.2** with Integration SDK v1 (`net:fetch` + `conversation:send`) — media bubbles use
+the media-send support added to `conversation.send` in 0.8.2.

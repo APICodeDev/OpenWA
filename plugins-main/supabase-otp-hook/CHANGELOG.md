@@ -1,0 +1,227 @@
+# Changelog
+
+All notable changes to this plugin are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres
+to [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+## [0.3.12] - 2026-10-28
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.26.0.
+- Document the `503` with `Retry-After: 5` that OpenWA 0.26.0 answers `send-sms` with while it restores plugins after startup.
+
+## [0.3.11] - 2026-10-15
+
+### Changed
+
+- Align plugin metadata with OpenWA v0.25.0 and complete dashboard translations for all supported locales.
+
+## [0.3.10] - 2026-09-24
+
+### Added
+
+- Hindi (`hi`) dashboard text: the plugin name, description and config field titles.
+
+## [0.3.9] - 2026-09-23
+
+### Changed
+
+- **Verified against OpenWA v0.23.6** (testedOpenWAVersion 0.23.4 -> 0.23.6).
+- Docs: the ack note now covers OpenWA 0.23.6, which honors a declared `application/json`; 0.20.0
+  through 0.23.5 force `text/plain`, so the ack stays a bodiless `204`.
+- Docs: body-keyed dedup takes effect from OpenWA 0.23.6.
+- Docs: from OpenWA 0.23.6 the dead-session `503` carries `Retry-After: 5`, so Supabase Auth retries it.
+
+## [0.3.8] - 2026-09-20
+
+### Fixed
+
+- **A Supabase retry of one hook invocation no longer sends a second OTP.** Auth mints a fresh
+  `webhook-id` on every attempt of its retry loop while the body inside one invocation stays the same
+  bytes, so dedup keyed on that header read every attempt as a new delivery: a lost ack or a transport
+  error sent the contact a second code. The `send-sms` route now declares `dedupOn: "body"`, which keys
+  the delivery on a hash of the signed body instead, so the attempts of one invocation collapse into a
+  single send. A new sign-in is a separate invocation carrying a freshly generated OTP in that body, so
+  it is not collapsed into an earlier one. This takes effect on the first OpenWA release after 0.23.5.
+  An older host ignores the key and keeps the 0.3.7 behaviour, dedup on `webhook-id`, which catches a
+  replay of one delivery but not a retry.
+
+## [0.3.7] - 2026-09-18
+
+### Fixed
+
+- **Supabase rejected every OTP delivery, and the sign-in failed after the code had already been sent.**
+  The ack was `200` with the body `{"ok":true}` and a declared `application/json` content type, but
+  OpenWA 0.20.0 and later force `text/plain` on every ingress response, and Supabase Auth refuses a 200
+  or 202 whose content type does not parse to `application/json` ("Invalid JSON response"). The route is
+  async and the WhatsApp send is enqueued before the ack, so the contact received a code that Supabase
+  had already thrown away, and the `signInWithOtp` call returned an error. The ack is now a bodiless
+  `204`, which Supabase accepts without inspecting the response at all.
+
+### Changed
+
+- **Requires Supabase Auth v2.172.0 or newer**, the first release that accepts a bodiless `204` from an
+  HTTP hook. Every Supabase Cloud project is well past it; a self-hosted Auth older than that has to be
+  upgraded.
+- The documented dedup guarantee is corrected: `webhook-id` dedup catches a replay of one delivery, not
+  a Supabase retry. Auth mints a fresh `webhook-id` per attempt, so a retried hook is a new delivery and
+  sends a second OTP.
+
+## [0.3.6] - 2026-09-05
+
+### Fixed
+
+- **An unscoped ingress instance no longer sends every OTP to a session that cannot exist.** The host
+  stores the wildcard scope verbatim and hands it over as the delivery's session id; it was used as a
+  literal session id, which also skipped `fallbackSessionId`, the setting configured for exactly this
+  case. A wildcard scope now falls through to the fallback, and with no fallback nothing is sent.
+- **An empty `messageTemplate` is refused when the config is saved, not by every failed send.** The
+  default only applied to an absent value, so clearing the field in the dashboard composed an empty
+  message, which the host refuses, dead-lettering every OTP with nothing naming the cause.
+
+### Changed
+
+- **Verified against OpenWA v0.23.4** (testedOpenWAVersion 0.23.3 -> 0.23.4).
+
+## [0.3.5] - 2026-08-25
+
+### Fixed
+
+- **A send that fails immediately no longer loses the OTP silently.** The send was fired and forgotten
+  to stay inside the ingress worker's 5s dispatch budget, which is right for a slow send but also
+  swallowed instant rejections: no live engine for the session, the plugin not activated for it, or the
+  concurrent-capability limit. Supabase had already been acked 200 and never retries such a delivery,
+  so the code was simply gone with one warn line behind it. The send is now raced against a short
+  deadline and a failure inside that window fails the delivery, so the host retries it with backoff and
+  dead-letters it for redrive. A send that is merely slow still finishes in the background.
+
+### Added
+
+- A `healthCheck` reporting the last failed send, including one that fails after the delivery has been
+  acknowledged, which reaches no retry and no dead-letter row. The host reports a plugin without a
+  health check as healthy, so a dropped OTP left the dashboard green.
+
+### Changed
+
+- The documented ack is corrected to **200** with the body `{"ok":true}`. The manifest declares
+  `application/json` and hosts below 0.20.0 return it, but 0.20.0 and later force `text/plain` on every
+  ingress response as an XSS guard on the reflected body, so nothing should match on the content type.
+
+- **Verified against OpenWA v0.23.3** (testedOpenWAVersion 0.23.0 → 0.23.3).
+
+## [0.3.4] - 2026-08-20
+
+### Changed
+
+- **Verified against OpenWA v0.23.0** (testedOpenWAVersion 0.22.0 → 0.23.0).
+
+## [0.3.3] - 2026-08-19
+
+### Fixed
+
+- **Setup step 4 no longer tells you to PATCH the instance secret.** The host instance API accepts `secret` only at create time (or via `regenerate-secret`); the PATCH endpoint rejects the field with a 400, so the documented wiring dead-ended. The guide now wires the secret at mint time.
+
+### Changed
+
+- **Verified against OpenWA v0.22.0** (testedOpenWAVersion 0.20.0 → 0.22.0).
+
+## [0.3.2] - 2026-08-16
+
+### Changed
+
+- **Verified against OpenWA v0.20.0** (testedOpenWAVersion 0.19.0 → 0.20.0); the catalog download URL now pins #sha256= for production installs.
+
+## [0.3.1] — 2026-08-15
+
+### Fixed
+
+- **The manifest's `sdkVersion` is a string again, so the plugin loads.** It had been changed to the
+  number `1`, but the host's ingress validation reads it as a string (`sdkVersion.split('.')`), so a
+  manifest carrying the number throws at load and the plugin comes up ERROR — on any host since
+  0.7.18. No released zip carried the number; nothing was broken in the wild.
+- **Debug mode no longer writes the verification code or the destination number to the log.** Debug is
+  switched on precisely when a delivery is misbehaving, so its output is what gets pasted into a support
+  thread or shipped to a log collector — and an OTP is a live credential with the number beside it
+  naming its owner. The send line now records the message length instead of the message, and every chat
+  id in a log line is reduced to its last four digits, which is enough to correlate two lines about the
+  same chat.
+
+### Fixed
+
+- **The README no longer promises a dead-session `503` that Option B cannot deliver** — the host
+  preflight probes the instance's `sessionScope`, so a blank scope skips the check and a delivery whose
+  fallback session is down is acked `200` and lost with no provider retry. Both the provisioning list
+  and the Security section now scope that guarantee to Option A.
+
+
+### Changed
+
+- **Compatibility re-verified against OpenWA v0.19.0** (testedOpenWAVersion 0.14.0 → 0.19.0). The
+  manifest passes the v0.19.0 host's load-time validation (manifest, ingress and main-entry
+  checks) and the built bundle loads under the loader contract. No capability surface this plugin
+  uses changed between 0.14 and 0.19; the v0.19 breaking changes are host-side (API key length,
+  removed REST endpoints, the plain-http install pin) and do not touch this plugin.
+
+## [0.3.0] — 2026-07-30
+
+### Removed
+
+- **The `engine:read` permission, and the `canonicalChatId` round-trip that needed it.** The call looked
+  like it protected an OTP addressed to a contact keyed by a `@lid` privacy id, but it could never change
+  anything: the chat id is always derived as `<digits>@c.us`, and the host's resolver returns a user-kind
+  jid unchanged. It cost a 2-second race, a live-engine dependency on the OTP critical path, and a
+  permission this plugin did not need — for a guaranteed round-trip to the same string. The README
+  already claimed the plugin asked for no `engine:read`; now that is true.
+
+### Fixed
+
+- **The documented setup order could not succeed.** The guide said to install and enable the plugin
+  first, but enabling validates the plugin's *base* config and refuses to start without `appName`, while
+  the instance minted in step 1 carries a *per-instance* config. Following the README as written left
+  enable failing. A base-config step now comes before enable.
+
+### Documentation
+
+- Delivery is **at-least-once**, and returning from the handler completes the job but does not guarantee
+  it runs once: if an outcome is never recorded, the host's reconciler re-dispatches the row. The replay
+  carries the same payload, so the contact receives the *same* code again — noise, not a security
+  problem. Recorded explicitly, along with why there is deliberately no per-delivery dedup store: it
+  would put an unbounded key-per-delivery on the OTP critical path to suppress a duplicate of an
+  identical message.
+- Per-user ordering and the retry/DLQ path require `QUEUE_ENABLED=true`; with the queue off, ingress
+  runs inline, takes no ordering lock, and makes one attempt.
+
+## [0.2.0] — 2026-07-23
+
+### Added
+
+- Resolve the phone-derived `<digits>@c.us` chat id through `ctx.engine.canonicalChatId` (OpenWA
+  0.8.7+, new `engine:read` permission) before sending, so OTPs still land in the right chat for
+  contacts keyed by a `@lid` privacy id. Best-effort: on older hosts or a resolution failure the
+  phone JID is used unchanged.
+
+## [0.1.0] — 2026-07-07
+
+### Added
+
+- Receive Supabase Auth's Send SMS hook (HTTP, Standard Webhooks-signed) on the ingress route
+  `send-sms` and deliver the OTP over WhatsApp.
+- Host-side Standard Webhooks verification: the manifest declares `signature.scheme:
+  "standard-webhooks"`, and the host verifies `webhook-id` / `webhook-timestamp` / `webhook-signature`
+  (base64 HMAC-SHA256 over `${webhook-id}.${webhook-timestamp}.${rawBody}`, constant-time, 5-min replay
+  window) against the instance secret before the plugin runs. This logic originated in the plugin's
+  `verify.ts` and was ported into the OpenWA server (`ingress-signature.ts`, `verifyStandardWebhooks`),
+  so the plugin no longer ships its own copy.
+- Synchronous feedback via the host `response` contract: a `session-alive` preflight returns **503**
+  on a dead WhatsApp session and a declared **200 `application/json`** ack on success; a bad signature
+  is rejected **401** by the host. Supabase learns immediately whether the OTP could be handed off — a
+  dead session is no longer swallowed as a silent accept.
+- Operator-configurable message template with `{appName}` and `{otp}` placeholders.
+- Per-user ordering via `conversationId: { jsonPointer: "/user/id" }`; dedup keys on `webhook-id`.
+- Async ingress with retry + DLQ: the handler runs from the ingress worker; the WhatsApp send is
+  fire-and-forget to stay within the worker's 5 s dispatch budget (an awaited slow send would time out
+  and retry into a duplicate OTP).

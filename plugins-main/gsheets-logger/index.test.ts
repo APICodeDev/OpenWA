@@ -1,0 +1,499 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import GSheetsLogger, { parseConfig, flushBuffer } from './index.ts';
+
+const validSa = JSON.stringify({ client_email: 'a@b.iam.gserviceaccount.com', private_key: 'KEY' });
+
+test('parseConfig requires spreadsheetId', () => {
+  assert.throws(() => parseConfig({ serviceAccountJson: validSa }), /spreadsheetId is required/);
+});
+
+test('parseConfig rejects invalid service-account JSON', () => {
+  assert.throws(() => parseConfig({ spreadsheetId: 'sid', serviceAccountJson: 'not json' }), /not valid JSON/);
+});
+
+test('parseConfig rejects a service account missing client_email/private_key', () => {
+  assert.throws(() => parseConfig({ spreadsheetId: 'sid', serviceAccountJson: '{}' }), /missing client_email/);
+});
+
+test('parseConfig applies defaults', () => {
+  const { config } = parseConfig({ spreadsheetId: 'sid', serviceAccountJson: validSa });
+  assert.equal(config.sheetTab, 'Logs');
+  assert.equal(config.flushIntervalSec, 5);
+  assert.equal(config.flushBatchSize, 20);
+});
+
+test('parseConfig clamps non-numeric/non-positive flush interval and batch size to safe defaults', () => {
+  const base = { spreadsheetId: 'sid', serviceAccountJson: validSa };
+  // Non-numeric / zero / negative interval must not coerce to NaN (which makes setInterval hot-loop at ~1ms).
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 'abc' }).config.flushIntervalSec, 5);
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 0 }).config.flushIntervalSec, 5);
+  assert.equal(parseConfig({ ...base, flushIntervalSec: -3 }).config.flushIntervalSec, 5);
+  assert.equal(parseConfig({ ...base, flushBatchSize: 'xyz' }).config.flushBatchSize, 20);
+  assert.equal(parseConfig({ ...base, flushBatchSize: 0 }).config.flushBatchSize, 20);
+  // Valid values pass through unchanged.
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 10 }).config.flushIntervalSec, 10);
+  assert.equal(parseConfig({ ...base, flushBatchSize: 50 }).config.flushBatchSize, 50);
+});
+
+test('parseConfig floors a sub-second flush interval to >=1s (setInterval hot-loop guard)', () => {
+  const base = { spreadsheetId: 'sid', serviceAccountJson: validSa };
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 0.001 }).config.flushIntervalSec, 1);
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 0.5 }).config.flushIntervalSec, 1);
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 10 }).config.flushIntervalSec, 10); // sane values unchanged
+});
+
+test('parseConfig caps the flush interval below the 32-bit setInterval ceiling', () => {
+  // setInterval takes a 32-bit millisecond delay. Past 2_147_483s the delay overflows, Node warns, and
+  // the timer silently fires at ~1ms instead: the same hot-loop the floor above exists to prevent,
+  // reached from the other end. The host never validates configSchema bounds, so this is the plugin's
+  // job even though the manifest advertises a max.
+  const base = { spreadsheetId: 'sid', serviceAccountJson: validSa };
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 2_147_483 }).config.flushIntervalSec, 2_147_483);
+  assert.equal(parseConfig({ ...base, flushIntervalSec: 3_000_000_000 }).config.flushIntervalSec, 2_147_483);
+  assert.ok(parseConfig({ ...base, flushIntervalSec: 3e9 }).config.flushIntervalSec * 1000 <= 2_147_483_647);
+});
+
+test('flushBuffer clears the buffer on success', async () => {
+  const buffer = [['a'], ['b']];
+  await flushBuffer(buffer, async () => {});
+  assert.equal(buffer.length, 0);
+});
+
+test('flushBuffer retains rows when append fails', async () => {
+  const buffer = [['a'], ['b']];
+  await assert.rejects(flushBuffer(buffer, async () => { throw new Error('sheets down'); }));
+  assert.equal(buffer.length, 2);
+});
+
+test('flushBuffer keeps rows that arrive during the append', async () => {
+  const buffer = [['a'], ['b']];
+  await flushBuffer(buffer, async () => { buffer.push(['c']); }); // a row enqueued mid-flush
+  assert.deepEqual(buffer, [['c']]);                              // a,b flushed; c retained
+});
+
+test('flushBuffer restores the batch ahead of newer rows on failure', async () => {
+  const buffer = [['a'], ['b']];
+  await assert.rejects(flushBuffer(buffer, async () => { buffer.push(['c']); throw new Error('down'); }));
+  assert.deepEqual(buffer, [['a'], ['b'], ['c']]);               // batch restored to front, newer row after
+});
+
+// Regression: onDisable must await an in-flight flush so a failing flush's restored rows are the ones
+// persisted — not the empty post-splice buffer. With the old `flushing` boolean this lost the rows.
+test('onDisable awaits an in-flight failing flush and persists the restored rows', async () => {
+  const logger = new GSheetsLogger();
+  const setCalls: string[][][] = [];
+  let releaseAppend = (): void => {};
+  const appendGate = new Promise<void>((resolve) => { releaseAppend = resolve; });
+
+  // Inject internals directly (private fields) to drive the flush/onDisable interleaving deterministically.
+  const harness = logger as unknown as {
+    client: unknown; ctx: unknown; buffer: string[][]; flush(): Promise<void>;
+  };
+  harness.client = { appendRows: async (): Promise<void> => { await appendGate; throw new Error('sheets 500'); } };
+  harness.ctx = {
+    storage: { set: async (_key: string, value: { rows: string[][] }): Promise<void> => { setCalls.push(value.rows.map((r) => [...r])); } },
+    logger: { error: (): void => {}, warn: (): void => {} },
+  };
+  harness.buffer = [['a'], ['b']];
+
+  const flushPromise = harness.flush();   // starts flush; appendRows blocks on the gate
+  const disablePromise = logger.onDisable(); // must await the in-flight flush, not persist [] early
+  releaseAppend();                         // let appendRows reject -> flushBuffer restores [a,b]
+  await Promise.allSettled([flushPromise, disablePromise]);
+
+  // The persisted buffer must be the restored rows, never an empty array.
+  assert.deepEqual(setCalls.at(-1), [['a'], ['b']]);
+  assert.ok(!setCalls.some((c) => c.length === 0), 'must never persist an empty buffer while rows are unsent');
+});
+
+// onConfigChange now fires for sandboxed plugins (OpenWA #430), so rows buffered before a
+// spreadsheet/credential rotation must drain to the OLD client before the swap, not the new sheet.
+test('onConfigChange drains the buffer to the old client before swapping', async () => {
+  const logger = new GSheetsLogger();
+  const sentToOld: string[][] = [];
+  const harness = logger as unknown as { client: unknown; ctx: unknown; buffer: string[][] };
+  harness.client = { appendRows: async (rows: string[][]): Promise<void> => { sentToOld.push(...rows); } };
+  harness.ctx = { storage: { set: async (): Promise<void> => {} }, logger: { error: (): void => {}, warn: (): void => {} } };
+  harness.buffer = [['old-row']];
+
+  const newConfig = {
+    serviceAccountJson: JSON.stringify({ client_email: 'a@b.iam.gserviceaccount.com', private_key: 'KEY' }),
+    spreadsheetId: 'NEW_SHEET',
+  };
+  const fakeCtx = {
+    config: newConfig,
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+  };
+  await logger.onConfigChange(fakeCtx as unknown as never, newConfig);
+  await logger.onUnload(); // stop the interval started by onConfigChange
+
+  assert.deepEqual(sentToOld, [['old-row']]); // buffered row went to the OLD client
+  assert.equal(harness.buffer.length, 0);     // buffer drained before the swap
+});
+
+// Observer band (PLUGIN-STANDARD.md "Co-installation"): must run before any responder, or a claiming
+// responder (chat-flow, group-translate) silently ends the chain before the logger ever sees the message.
+test('logs at observer priority so a responder claim can never starve it', async () => {
+  const registered: Array<{ event: string; priority?: number }> = [];
+  const fakeCtx = {
+    config: { spreadsheetId: 'sid', serviceAccountJson: validSa },
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    storage: { get: async () => null, set: async () => {} },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+    registerHook: (event: string, _h: unknown, priority?: number) => void registered.push({ event, priority }),
+  };
+  const logger = new GSheetsLogger();
+  await logger.onEnable(fakeCtx as unknown as never);
+  await logger.onUnload(); // stop the flush interval started by onEnable
+  assert.equal(registered.length, 4);
+  assert.ok(registered.every(r => r.priority === 10), 'every logged event registers at 10');
+});
+
+test('the buffer is capped by total size, not just row count', () => {
+  // MAX_BUFFER caps the row COUNT at 5,000 while row.ts allows 50,000 characters per cell, so the row
+  // cap alone permits a buffer far past the 256 MB worker heap — and the message body a sender controls
+  // is one of those cells. Rows are only retained this long when Sheets is unreachable.
+  const logger = new GSheetsLogger();
+  const harness = logger as unknown as {
+    buffer: string[][];
+    ctx: unknown;
+    batchSize: number;
+    enqueue(hook: unknown): void;
+  };
+  harness.ctx = { logger: { warn: (): void => {} } };
+  harness.batchSize = Number.MAX_SAFE_INTEGER; // never trip the size-triggered flush
+  const big = 'x'.repeat(50_000);
+
+  for (let i = 0; i < 500; i++) {
+    harness.enqueue({
+      event: 'message:received',
+      sessionId: 's1',
+      timestamp: new Date('2026-06-22T10:00:00.000Z'),
+      source: 'Engine',
+      data: { id: `M${i}`, from: 'a@c.us', to: 'me', chatId: 'a@c.us', body: big, type: 'text', fromMe: false, isGroup: false },
+    });
+  }
+
+  const chars = harness.buffer.reduce((n, row) => n + row.reduce((m, cell) => m + cell.length, 0), 0);
+  assert.ok(harness.buffer.length < 500, `expected oldest rows to be dropped, buffer still holds ${harness.buffer.length}`);
+  assert.ok(chars <= 8_000_000, `buffer holds ${chars} characters — the row cap alone does not bound memory`);
+});
+
+test('onDisable survives a storage quota rejection and says how many rows were lost', async () => {
+  // ctx.storage.set REJECTS once the plugin directory would exceed its 50 MiB quota, and the repo
+  // standard is explicit that a swallowed quota error is silent data loss. onDisable persisted without
+  // a guard, so the rejection escaped the lifecycle call itself.
+  const logger = new GSheetsLogger();
+  const logged: string[] = [];
+  const harness = logger as unknown as { client: unknown; ctx: unknown; buffer: string[][] };
+  harness.client = null; // flush() is a no-op, so onDisable goes straight to persisting
+  harness.ctx = {
+    storage: { set: async (): Promise<void> => { throw new Error('quota exceeded'); } },
+    logger: { error: (msg: string): void => void logged.push(msg), warn: (): void => {} },
+  };
+  harness.buffer = [['a'], ['b']];
+
+  await assert.doesNotReject(() => logger.onDisable());
+  assert.ok(
+    logged.some((m) => m.includes('2')),
+    `expected the number of lost rows to be logged, got ${JSON.stringify(logged)}`,
+  );
+});
+
+const enableCtx = (stored: unknown, warns: string[] = []): unknown => ({
+  config: { spreadsheetId: 'sid', serviceAccountJson: validSa },
+  net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+  storage: { get: async () => stored, set: async () => {} },
+  logger: { log: (): void => {}, warn: (m: string): void => void warns.push(m), error: (): void => {} },
+  registerHook: (): void => {},
+});
+
+test('a legacy buffer migration must persist before hooks become active', async () => {
+  let registered = 0;
+  const ctx = enableCtx([['retained row']]) as { storage: unknown; registerHook: () => void };
+  ctx.storage = { get: async () => [['retained row']], set: async () => { throw new Error('quota exceeded'); } };
+  ctx.registerHook = () => { registered++; };
+  const logger = new GSheetsLogger();
+  await assert.rejects(logger.onEnable(ctx as never), /quota exceeded/);
+  assert.equal(registered, 0);
+  await logger.onUnload();
+});
+
+test('a restored buffer is filtered to rows of strings before anything uses it', async () => {
+  // The buffer comes back from ctx.storage, and everything downstream assumes rows of strings — the
+  // size accounting reads every cell's length, and the Sheets append sends them verbatim. A stored
+  // value of another shape must not reach either.
+  const logger = new GSheetsLogger();
+  await logger.onEnable(enableCtx([['ok', 'row'], null, 42, [{}], ['also', 'fine']]) as never);
+  await logger.onUnload();
+  assert.deepEqual((logger as unknown as { buffer: string[][] }).buffer, [['ok', 'row'], ['also', 'fine']]);
+});
+
+test('a restored buffer is capped on load, not only when the next message arrives', async () => {
+  // Without this the plugin can come back up holding far more than the cap allows and stay that way
+  // until traffic resumes — exactly when the host is least able to absorb it.
+  const stored = Array.from({ length: 500 }, () => ['x'.repeat(50_000)]);
+  const logger = new GSheetsLogger();
+  await logger.onEnable(enableCtx(stored) as never);
+  await logger.onUnload();
+  const buffer = (logger as unknown as { buffer: string[][] }).buffer;
+  const chars = buffer.reduce((n, row) => n + row.reduce((m, cell) => m + cell.length, 0), 0);
+  assert.ok(chars <= 8_000_000, `restored buffer holds ${chars} characters`);
+});
+
+test('restoring a buffer reports what it dropped instead of losing rows silently', async () => {
+  // This plugin exists to produce a complete audit trail, so discarding rows without a word is the
+  // worst shape the loss can take — the operator has no way to know the sheet has a hole in it.
+  const warns: string[] = [];
+  const stored = [...Array.from({ length: 400 }, () => ['x'.repeat(50_000)]), 'garbage', null];
+  const logger = new GSheetsLogger();
+  await logger.onEnable(enableCtx(stored, warns) as never);
+  await logger.onUnload();
+
+  assert.equal(warns.length, 1, `expected exactly one warning, got ${JSON.stringify(warns)}`);
+  assert.match(warns[0], /2 malformed/);
+  assert.match(warns[0], /\d+ oldest/);
+});
+
+test('rows buffered for the old spreadsheet never cross into the new one', async () => {
+  // onConfigChange drains before swapping so rows land in the sheet they belong to. But flush() swallows
+  // its own failure, so with Sheets unreachable the drain leaves every row in place — and the next flush
+  // sends message content captured under one spreadsheet and credential to a different one.
+  const logger = new GSheetsLogger();
+  const stored: Record<string, unknown> = {};
+  const warns: string[] = [];
+  const harness = logger as unknown as { client: unknown; ctx: unknown; buffer: string[][] };
+  harness.client = { appendRows: async (): Promise<void> => { throw new Error('sheets unreachable'); } };
+  harness.ctx = {
+    storage: { get: async (k: string) => stored[k] ?? null, set: async (k: string, v: unknown) => void (stored[k] = v) },
+    logger: { warn: (m: string): void => void warns.push(m), error: (): void => {}, log: (): void => {} },
+  };
+  harness.buffer = [['old-row-1'], ['old-row-2']];
+
+  await logger.onConfigChange(
+    {
+      config: { spreadsheetId: 'NEW-SHEET', serviceAccountJson: validSa },
+      net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+      storage: { get: async (k: string) => stored[k] ?? null, set: async (k: string, v: unknown) => void (stored[k] = v) },
+      logger: { warn: (m: string): void => void warns.push(m), error: (): void => {}, log: (): void => {} },
+    } as never,
+    { spreadsheetId: 'NEW-SHEET', serviceAccountJson: validSa },
+  );
+  await logger.onUnload();
+
+  assert.deepEqual(harness.buffer, [], 'undelivered rows must not remain queued against the new sheet');
+  assert.ok(warns.some((w) => /2 row/.test(w)), `the operator must be told, got ${JSON.stringify(warns)}`);
+  const parked = Object.entries(stored).find(([k]) => k.includes('undelivered'));
+  assert.ok(parked, `the rows must be kept somewhere, stored keys: ${Object.keys(stored)}`);
+  assert.deepEqual(parked?.[1], [['old-row-1'], ['old-row-2']]);
+});
+
+test('a config change that keeps the same sheet and credentials retains the rows for the timer', async () => {
+  // The paired guard for the test above. The host fires config-change on EVERY config write with no
+  // dirty check, so parking on "the buffer is non-empty" alone threw the backlog away when the
+  // operator only touched the flush interval. Nothing ever reads the parked key back, so those rows
+  // were gone for good, during precisely the Sheets outage the README promises they survive.
+  const logger = new GSheetsLogger();
+  const stored: Record<string, unknown> = {};
+  const warns: string[] = [];
+  const harness = logger as unknown as { client: unknown; ctx: unknown; buffer: string[][]; target: string };
+  const base = {
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    storage: { get: async (k: string) => stored[k] ?? null, set: async (k: string, v: unknown) => void (stored[k] = v) },
+    logger: { warn: (m: string): void => void warns.push(m), error: (): void => {}, log: (): void => {} },
+    registerHook: (): void => {},
+  };
+
+  await logger.onEnable({ ...base, config: { spreadsheetId: 'SAME', serviceAccountJson: validSa, flushIntervalSec: 5 } } as never);
+  harness.client = { appendRows: async (): Promise<void> => { throw new Error('sheets unreachable'); } };
+  harness.buffer = [['row-1'], ['row-2']];
+
+  // Same spreadsheet, same credentials; only the flush interval moved.
+  await logger.onConfigChange(
+    { ...base, config: { spreadsheetId: 'SAME', serviceAccountJson: validSa, flushIntervalSec: 30 } } as never,
+    { spreadsheetId: 'SAME', serviceAccountJson: validSa, flushIntervalSec: 30 },
+  );
+  await logger.onUnload();
+
+  assert.deepEqual(harness.buffer, [['row-1'], ['row-2']], 'rows for an unchanged target must stay queued');
+  assert.equal(
+    Object.keys(stored).some((k) => k.includes('undelivered')),
+    false,
+    `nothing may be parked when the target did not move, stored keys: ${Object.keys(stored)}`,
+  );
+});
+
+test('a failed parking write retains buffered rows and the old destination', async () => {
+  const logger = new GSheetsLogger();
+  const oldClient = { appendRows: async (): Promise<void> => { throw new Error('sheets unavailable'); } };
+  const harness = logger as unknown as { client: unknown; ctx: unknown; buffer: string[][]; target: string };
+  const ctx = {
+    config: { spreadsheetId: 'NEW-SHEET', serviceAccountJson: validSa },
+    storage: {
+      get: async () => null,
+      set: async (): Promise<void> => { throw new Error('storage quota exceeded'); },
+    },
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    logger: { log() {}, warn() {}, error() {} },
+  };
+  harness.client = oldClient;
+  harness.ctx = ctx;
+  harness.target = 'old-target';
+  harness.buffer = [['old-row']];
+  try {
+    await assert.rejects(logger.onConfigChange(ctx as never, ctx.config), /storage quota exceeded/);
+    assert.deepEqual(harness.buffer, [['old-row']]);
+    assert.equal(harness.client, oldClient);
+    assert.equal(harness.target, 'old-target');
+  } finally {
+    await logger.onUnload();
+  }
+});
+
+for (const shutdown of ['graceful', 'abrupt']) {
+test(`${shutdown} restart after failed parking keeps old rows away from the new destination`, async () => {
+  const stored: Record<string, unknown> = { buffer: [['private old row']] };
+  let rejectParking = true;
+  const ctx = {
+    config: { spreadsheetId: 'OLD-SHEET', serviceAccountJson: validSa },
+    storage: {
+      get: async (key: string) => structuredClone(stored[key] ?? null),
+      set: async (key: string, value: unknown) => {
+        if (key === 'buffer:undelivered' && rejectParking) throw new Error('quota exceeded');
+        stored[key] = structuredClone(value);
+      },
+    },
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    logger: { log() {}, warn() {}, error() {} },
+    registerHook() {},
+  };
+  const first = new GSheetsLogger();
+  const second = new GSheetsLogger();
+  const third = new GSheetsLogger();
+  try {
+    await first.onEnable(ctx as never);
+    const harness = first as unknown as { client: unknown; buffer: string[][] };
+    harness.client = { appendRows: async () => { throw new Error('sheets unavailable'); } };
+    harness.buffer = [['private old row']];
+    ctx.config = { ...ctx.config, spreadsheetId: 'NEW-SHEET' };
+    await assert.rejects(first.onConfigChange(ctx as never, ctx.config), /quota exceeded/);
+    if (shutdown === 'graceful') await first.onDisable();
+    else await first.onUnload();
+    assert.ok(!JSON.stringify(stored.buffer).includes('KEY'), 'saved identity must not contain credentials');
+
+    await assert.rejects(second.onEnable(ctx as never), /quota exceeded/);
+    await second.onDisable();
+    rejectParking = false;
+    await third.onEnable(ctx as never);
+    assert.deepEqual((third as unknown as { buffer: string[][] }).buffer, []);
+    assert.deepEqual(stored['buffer:undelivered'], [['private old row']]);
+  } finally {
+    await Promise.all([first.onUnload(), second.onUnload(), third.onUnload()]);
+  }
+});
+}
+
+test('a persisted buffer resumes under the same destination after restart', async () => {
+  const stored: Record<string, unknown> = { buffer: [['retained row']] };
+  const ctx = {
+    config: { spreadsheetId: 'SAME', serviceAccountJson: validSa },
+    storage: {
+      get: async (key: string) => structuredClone(stored[key] ?? null),
+      set: async (key: string, value: unknown) => { stored[key] = structuredClone(value); },
+    },
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    logger: { log() {}, warn() {}, error() {} },
+    registerHook() {},
+  };
+  const first = new GSheetsLogger();
+  const second = new GSheetsLogger();
+  try {
+    await first.onEnable(ctx as never);
+    (first as unknown as { client: unknown }).client = { appendRows: async () => { throw new Error('unavailable'); } };
+    await first.onDisable();
+    ctx.config.serviceAccountJson = JSON.stringify({ private_key: 'KEY', client_email: 'a@b.iam.gserviceaccount.com' }, null, 2);
+    await second.onEnable(ctx as never);
+    const delivered: string[][] = [];
+    (second as unknown as { client: unknown }).client = { appendRows: async (rows: string[][]) => { delivered.push(...rows); } };
+    await second.onDisable();
+    assert.deepEqual(delivered, [['retained row']]);
+    assert.equal(stored['buffer:undelivered'], undefined);
+  } finally {
+    await Promise.all([first.onUnload(), second.onUnload()]);
+  }
+});
+
+test('overlapping config changes leave the latest requested destination active', async () => {
+  let release = () => {};
+  let entered = () => {};
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const parking = new Promise<void>(resolve => { entered = resolve; });
+  const stored: Record<string, unknown> = {};
+  const ctx = {
+    config: { spreadsheetId: 'B', serviceAccountJson: validSa },
+    storage: {
+      get: async (key: string) => {
+        if (key === 'buffer:undelivered') { entered(); await gate; }
+        return stored[key] ?? null;
+      },
+      set: async (key: string, value: unknown) => { stored[key] = structuredClone(value); },
+    },
+    net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+    logger: { log() {}, warn() {}, error() {} },
+  };
+  const logger = new GSheetsLogger();
+  const harness = logger as unknown as { ctx: unknown; target: string; client: unknown; buffer: string[][] };
+  harness.ctx = ctx;
+  harness.target = 'A';
+  harness.client = { appendRows: async () => { throw new Error('unavailable'); } };
+  harness.buffer = [['old row']];
+  try {
+    const first = logger.onConfigChange(ctx as never, ctx.config);
+    await parking;
+    harness.buffer.push(['arrived during parking']);
+    ctx.config = { ...ctx.config, spreadsheetId: 'C' };
+    const second = logger.onConfigChange(ctx as never, ctx.config);
+    release();
+    await Promise.all([first, second]);
+    assert.equal((harness.client as { spreadsheetId: string }).spreadsheetId, 'C');
+    assert.deepEqual(harness.buffer, []);
+    assert.deepEqual(stored['buffer:undelivered'], [['old row'], ['arrived during parking']]);
+  } finally {
+    release();
+    await logger.onUnload();
+  }
+});
+
+test('a credential rotation parks the rows, but re-pasting the same key reformatted does not', async () => {
+  // Two halves of the destination identity, each of which has to be right. Dropping the credentials
+  // from it would let a rotation send rows captured under the old account to the new one; comparing
+  // the raw JSON text instead of the parsed identity would treat a re-paste with different formatting
+  // as a rotation and park (lose) the backlog.
+  const run = async (nextSa: string) => {
+    const logger = new GSheetsLogger();
+    const stored: Record<string, unknown> = {};
+    const harness = logger as unknown as { client: unknown; buffer: string[][] };
+    const base = {
+      net: { fetch: async () => ({ ok: true, status: 200, body: '{}' }) },
+      storage: { get: async (k: string) => stored[k] ?? null, set: async (k: string, v: unknown) => void (stored[k] = v) },
+      logger: { warn: (): void => {}, error: (): void => {}, log: (): void => {} },
+      registerHook: (): void => {},
+    };
+    await logger.onEnable({ ...base, config: { spreadsheetId: 'SAME', serviceAccountJson: validSa } } as never);
+    harness.client = { appendRows: async (): Promise<void> => { throw new Error('sheets unreachable'); } };
+    harness.buffer = [['row-1']];
+    const newConfig = { spreadsheetId: 'SAME', serviceAccountJson: nextSa };
+    await logger.onConfigChange({ ...base, config: newConfig } as never, newConfig);
+    await logger.onUnload();
+    return { parked: Object.keys(stored).some((k) => k.includes('undelivered')), buffered: harness.buffer.length };
+  };
+
+  // Same credentials, re-serialised with the keys in the other order and extra whitespace.
+  const reformatted = JSON.stringify({ private_key: 'KEY', client_email: 'a@b.iam.gserviceaccount.com' }, null, 2);
+  assert.deepEqual(await run(reformatted), { parked: false, buffered: 1 }, 're-pasting the same key must not park');
+
+  // A genuinely different service account is a real destination change and must park.
+  const rotated = JSON.stringify({ client_email: 'other@b.iam.gserviceaccount.com', private_key: 'KEY2' });
+  assert.deepEqual(await run(rotated), { parked: true, buffered: 0 }, 'a rotation must park');
+});

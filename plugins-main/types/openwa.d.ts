@@ -1,0 +1,762 @@
+// Vendored OpenWA plugin contract. There is no published @openwa SDK package; keep this in sync
+// with the OpenWA version you target. All imports of this module must be `import type`.
+//
+// Last aligned against OpenWA core v0.26.0 (tag 386464e), verified field-by-field against
+// src/core/plugins/plugin.interfaces.ts, src/core/hooks/{hook.interfaces,hook-results}.ts, plugin-net.ts,
+// sandbox/{protocol,worker-bootstrap,worker-capability,worker-hooks,worker-webhooks}.ts and
+// src/engine/interfaces/whatsapp-engine.interface.ts, with behavior the interfaces do not show read from
+// hook-manager.service.ts, plugin-sandbox-bridge.ts, both engines' message mappers and media paths, and
+// src/modules/integration/ingress{.controller,.service,-ack,-preflight}.ts. Where this file narrows the
+// host on purpose it says so; where the host is stricter than this file, the comment names the runtime
+// consequence.
+// Since 0.24.0: minOpenWAVersion is enforced at install and load, and config-derived network grants pin
+// the HTTPS origin including its port. Since 0.25.0: IncomingMessage includes poll details and
+// ChatSummary includes lastMessageType. Hook names and capability signatures used by these plugins
+// remain compatible.
+// Unlike the ranges below, 0.23.4 → 0.23.6 moves the plugin runtime itself. 0.23.5 changed only message
+// content and one ingress redaction; the rest is 0.23.6. Each item is recorded below where it belongs:
+//   1. Hook results: from 0.23.6 message:received / message:sent adopt only a plain object with string
+//      id and chatId, and webhook:before only a plain-object payload; anything else, null included, is
+//      skipped. See HookResult.data.
+//   2. Hook order: from 0.23.6 a sandboxed plugin's handlers for one event run as one host-side chain at
+//      the lowest priority any of them asked for, and a non-finite priority counts as 100. See
+//      PluginContext.registerHook.
+//   3. Ingress: 0.23.6 refuses more manifests at load, honors a declared ack Content-Type of
+//      application/json or text/plain, answers a re-delivery with the route's ack, adds Retry-After on
+//      the preflight 503, reads `dedupOn` and flattens repeated query values. 0.23.5 redacts a
+//      shared-secret route's credential header. See PluginManifest.ingress, IngressResponseContract,
+//      PluginIngressRoute and WebhookRequest.
+//   4. Messages: 'order' / 'product' types with their `order` / `product` fields (0.23.5, both engines;
+//      Baileys also fills `body`), `button` / `buttons` with Baileys button, template and list replies
+//      typed 'text' (0.23.6, Baileys only), Baileys delivering after reconnect what WhatsApp queued
+//      during a disconnect (0.23.6) and dropping an inbound re-delivery before message:received (0.23.6),
+//      and the Baileys streaming-abort `sizeBytes` (0.23.5). See IncomingMessage.
+//   5. session:created: from 0.23.6 the payload is the session as the REST API returns it, without the
+//      stored proxyUrl or config blob. This file does not type that payload.
+// The sandbox protocol gained an `inFlight` event list that the worker runtime fills itself. What a
+// plugin sees is narrower re-entrancy: from 0.23.6 only a capability call made from inside a hook
+// dispatch is guarded, so a send from an ingress handler or a timer runs every plugin's hooks even while
+// one of this plugin's dispatches is pending. From 0.26.0 the guard also ends with the dispatch, so a send
+// a handler schedules from a timer or a detached promise after it returned runs every plugin's hooks;
+// only a dispatch that overran the 5 s budget stays guarded until the worker answers it or exits (the 32
+// newest such claims per worker).
+// 0.25.0 → 0.26.0 did not move the plugin contract: plugin.interfaces.ts changed one comment (a secret is
+// removed by `null`), worker-hooks.ts gained an internal `error` field, and hook.interfaces.ts,
+// hook-results.ts, sandbox/protocol.ts and the other worker files are unchanged. What the engine interface
+// gained is left out ON PURPOSE because no hook or capability carries it: PollVoteEvent / onPollVote and
+// MessageReceiptEvent / onMessageReceipt feed the `poll.vote` and `message.receipt` webhook and socket events
+// (a `webhook:before` handler now sees those two event names), `IncomingMessage.originalBody` is removed
+// before the hooks run, and the `authors` argument of `sendSeen` and `contactPhoneLookupPersistence` are
+// engine internals. What changed in CONTENT: a message delivered already deleted reaches
+// `message:received` and `message:sent` as an empty `revoked` placeholder (see IncomingMessage).
+// The 0.23.3 → 0.23.4 diff over src/core/plugins/ and src/core/hooks/ is EMPTY, file for file, so the
+// contract itself did not move; the whole delta lives in the engine interface and reaches a plugin as
+// payload CONTENT. Two items, both recorded below where they belong rather than only here:
+//   1. ChatSummary gained archived/pinned/muted (REQUIRED host-side) and muteExpiration (optional).
+//      They ride out of `engine.getChats` unreshaped. See ChatSummary for why this file keeps all four
+//      optional while the host makes three of them required.
+//   2. A FAILED inbound media download now emits the `omitted` marker on BOTH engines instead of
+//      dropping the `media` field. Nothing in this file changed shape for it, but the cause list on
+//      `IncomingMessage.media.omitted` did, and a plugin that reads a present `media` as "there was
+//      media" now takes that branch for one more reason. See that note.
+// The 0.20.0 → 0.23.3 diff over the four plugin-runtime sources is EMPTY. The engine interface gained
+// only optional trailing parameters (mentions on replyToMessage/editMessage, messageIds on sendSeen),
+// none of them reachable from a plugin: the sandbox capability router is a 19-verb allowlist carrying
+// neither verb. The one plugin-visible change in that range is BEHAVIORAL and lives in the engine
+// adapter rather than the contract. 0.23.2 made the Baileys body extractor fill `body` for polls,
+// shared events, business button replies and contact cards, matching what whatsapp-web.js has always
+// returned. See the `IncomingMessage.body` note below: it invalidated the guard this file used to
+// recommend, and five shipped plugins had followed that recommendation.
+// The 0.23.3 alignment also closed nine SILENT OMISSIONS in PluginManifest, every one of them typed by
+// the host and riding the index signature below as an unknown extra: description, author, homepage,
+// repository, license, dependencies, peerDependencies, provides and requires. Most are set by every
+// manifest in this repo, and the host returns description, author and provides on GET /plugins, so a
+// typo in one of those blanks a dashboard card and nothing complains.
+// The 0.19.0 → 0.20.0 diff over those files was empty too; 0.20.0's plugin-facing changes lived
+// elsewhere (the production #sha256 pin on URL installs in plugin-download.ts, ingress text/plain
+// reflections, credential-dir modes) and none of them altered a member this file tracks. The 0.14.5 → 0.19.0 diff
+// over those files changes no member this file tracks either: the one behavioral
+// addition in that range — the "storage:use" gate on ctx.storage — was already vendored above. That
+// alignment also fixed two SILENT OMISSIONS that had survived every earlier pass: `manifest.sdkVersion`
+// and the typed `manifest.ingress` route (with IngressSignatureSpec / IngressResponseContract), both
+// shipped by the host since 0.7.18. A manifest field this file doesn't type is a field nothing checks —
+// which is how a numeric sdkVersion ("1" → 1) reached main and crashed the host's load-time validation.
+//
+// ⚠️ "verified field-by-field" is a HAND check, and nothing enforces it — this repo ships separately
+// and cannot import from core. It has been wrong before: the v0.14.0 alignment silently omitted six
+// host fields, four of which predated it by several minor versions, and every one of them was an
+// unannounced gap rather than a deliberate narrowing. When re-aligning, diff MEMBER BY MEMBER against
+// the files named above and annotate anything left out, so a future reader can tell an omission
+// from a decision.
+//
+// v0.7 surface: `ctx.net.fetch` (host-proxied, SSRF-guarded outbound HTTP — gated by the
+// "net:fetch" permission + manifest `net.allow` host allowlist), and the manifest fields
+// `sessionScoped` (per-session activation; ctx.config is the resolved per-session slice), `net`, and
+// `configUi` (a sandboxed-iframe config editor). The richer `configSchema` field set (textarea + enum
+// select, array/items, object/properties, min/max/pattern — see PluginConfigField) is plain manifest
+// JSON — the plugin still reads `ctx.config` as `Record<string, unknown>` and validates defensively.
+//
+// Host bounds a plugin cannot see from the types (all host-side, re-checked at v0.26.0):
+//   30 s per lifecycle phase (onLoad/onEnable/onDisable/onUnload) and per capability call, except
+//   the send verbs (ctx.messages.sendText / ctx.messages.reply / ctx.conversations.send) at 120 s;
+//   5 s per hook dispatch (overrun → the host fails OPEN with {continue:true} and drops your result);
+//   5 s per ingress webhook dispatch; 5 s for healthCheck (an overrun is reported unhealthy, not hung);
+//   32 concurrent capability calls per plugin (the 33rd throws);
+//   16 concurrent net.fetch calls GLOBALLY — shared across ALL plugins and workers, not per plugin;
+//   50 MiB total ctx.storage per plugin; 10 MiB net.fetch response body; 256 MB worker heap;
+//   200 log lines / 10 s, 8 KiB per line.
+
+export type HookEvent =
+  | 'session:created' | 'session:starting' | 'session:ready' | 'session:qr'
+  | 'session:disconnected' | 'session:error' | 'session:deleted'
+  | 'message:received' | 'message:sending' | 'message:sent' | 'message:failed' | 'message:ack' | 'message:persisted'
+  // v0.11.0: emitted when the host deletes a redundant echo row during send reconciliation. The payload
+  // is `{ sessionId, message }` where `message` is the host's persisted DB row — NOT an IncomingMessage.
+  | 'message:deleted'
+  | 'webhook:before' | 'webhook:queued' | 'webhook:delivered' | 'webhook:after' | 'webhook:error'
+  | 'ingress:error';
+
+export interface HookContext<T = unknown> {
+  event: HookEvent;
+  data: T;
+  sessionId?: string;
+  timestamp: Date;
+  source: string;
+}
+
+export interface HookResult<T = unknown> {
+  /**
+   * `false` stops the remaining handler chain — nothing more.
+   *
+   * On a NOTIFICATION event (`message:received`, `message:sent`, `session:*`, …) that means you claim
+   * the event against sibling plugins only: the host still persists the message, still dispatches it
+   * to webhooks, and still pushes it over the websocket. Use it for "I answered this, don't let
+   * another bot answer too" — never to hide an event.
+   *
+   * It is a real VETO only on the two pre-action events: `message:sending` (blocks the send; the API
+   * caller gets HTTP 400 "Message sending blocked by plugin") and `webhook:before` (cancels that one
+   * webhook delivery).
+   */
+  continue: boolean;
+  /**
+   * Modified data, threaded to the next handler and applied by the host. Omit it to leave the payload
+   * alone. From host 0.23.6 a result is adopted only when the event can use it: on `message:received` /
+   * `message:sent` a plain object with string `id` and `chatId`, on `webhook:before` an object whose
+   * `payload` is a plain object. Anything else, `null` included, is skipped and the chain keeps the last
+   * usable value, between plugins and between one sandboxed plugin's own handlers alike. Hosts up to
+   * 0.23.5 adopted any non-undefined value, `null` included, and a `null` on `message:received` /
+   * `message:sent` lost that message from history, webhooks and the websocket.
+   */
+  data?: T;
+  /**
+   * In-process (built-in plugin) only — the sandbox wire result carries just `{continue, data}`, so a
+   * sandboxed marketplace plugin CANNOT surface a failure this way. Throw instead: the host catches
+   * it, keeps the chain running, and records it on the plugin's health surface.
+   */
+  error?: Error;
+}
+
+// Returning a plain (non-promise) result is accepted — the worker awaits either form.
+export type HookHandler<T = unknown> = (ctx: HookContext<T>) => Promise<HookResult<T>> | HookResult<T>;
+
+export interface PluginLogger {
+  log(message: string, meta?: Record<string, unknown>): void;
+  debug(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, error?: unknown, meta?: Record<string, unknown>): void;
+}
+
+/**
+ * Per-plugin key/value storage. Needs the "storage:use" permission — all four verbs assert it, so an
+ * undeclared plugin is denied at the first call rather than at load. It was ungated until OpenWA gated
+ * it (core `plugin-capability-context.ts` `buildStorageCapability`); declaring it is inert on an older
+ * host, which is why a plugin should declare it now rather than when its host is upgraded.
+ *
+ * One JSON file per key under `<dataDir>/plugins/<pluginId>/`, so key COUNT is a real cost, not just
+ * key size:
+ *
+ * - `set` REJECTS once the plugin's directory would exceed 50 MiB ("storage quota exceeded"). Up to
+ *   0.25.x the quota was measured by a synchronous readdir + stat of every key on EVERY write, so a
+ *   plugin that wrote one key per message paid O(keys) syscalls per message, on the host's event loop;
+ *   0.26.0 keeps a running total (one scan to seed it, one stat per write). Hosts below 0.26.0 stay
+ *   supported, so prefer bucketed keys (one key per session per hour holding a map) over one key per message, and
+ *   always handle a rejected `set` — dropping it silently turns a full quota into lost data.
+ * - `list()` with no prefix returns every key in the directory, which in a layout where package files
+ *   and state share a directory can include `manifest`/`package`; pass a prefix (the host filters for
+ *   you) or re-filter. On a read error `list` resolves `[]` rather than rejecting.
+ */
+export interface PluginStorage {
+  get<T = unknown>(key: string): Promise<T | null>;
+  set<T = unknown>(key: string, value: T): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(prefix?: string): Promise<string[]>;
+}
+
+export interface MessageResponseDto {
+  messageId: string;
+  timestamp: number;
+}
+
+export interface PluginMessagingCapability {
+  sendText(sessionId: string, chatId: string, text: string): Promise<MessageResponseDto>;
+  reply(sessionId: string, chatId: string, quotedMessageId: string, text: string): Promise<MessageResponseDto>;
+}
+
+export interface ChatSummary {
+  id: string;
+  name: string;
+  isGroup: boolean;
+  /** User-facing chat kind. `isGroup` is retained for back-compat; `kind` is the full discriminator. */
+  kind: ChatKind;
+  unreadCount: number;
+  timestamp: number;
+  lastMessage?: string;
+  /** Engine-neutral last-message type, when available on host 0.25.0+. */
+  lastMessageType?: string;
+  /**
+   * Archived / pinned / muted state. Host 0.23.4+ only, and REQUIRED on the host's own ChatSummary.
+   * Deliberately optional here: the catalogue advertises minOpenWAVersion floors down to 0.6.1, and on
+   * every host below 0.23.4 these three are simply absent from the wire payload, so typing them
+   * required would declare `undefined` as `boolean` for most of the supported range.
+   */
+  archived?: boolean;
+  pinned?: boolean;
+  /**
+   * NOT normalized across engines, so do not read it as one verdict. Baileys computes
+   * `muteEndTime > now`, so a lapsed mute reads false. whatsapp-web.js copies the library's own
+   * `Chat.isMuted`, which compares nothing against now, so a lapsed or absent page-side mute record
+   * can still read true.
+   */
+  muted?: boolean;
+  /**
+   * Epoch MILLISECONDS the mute ends, present only when `muted`. `0` means muted INDEFINITELY, not
+   * epoch zero: special-case it before any comparison, or an indefinite mute reads as long expired.
+   * Only whatsapp-web.js ever emits `0`, and only it can report an instant already in the past;
+   * Baileys omits the field unless the instant is still in the future.
+   */
+  muteExpiration?: number;
+}
+
+export interface PluginEngineReadCapability {
+  getGroupInfo(sessionId: string, groupId: string): Promise<unknown>;
+  getContacts(sessionId: string): Promise<unknown>;
+  getContactById(sessionId: string, contactId: string): Promise<unknown>;
+  checkNumberExists(sessionId: string, phone: string): Promise<unknown>;
+  getChats(sessionId: string): Promise<unknown>;
+  /** Recent messages for a chat, both directions. The host clamps `limit` (max 100). Available to a
+   *  SANDBOXED plugin from v0.8.6: 0.8.5 added the capability in-process, 0.8.6 bridged it to the worker. */
+  getChatHistory(sessionId: string, chatId: string, limit?: number, includeMedia?: boolean): Promise<IncomingMessage[]>;
+  /**
+   * Canonical (neutral) form of a chat id: resolves a `@lid` privacy id to its stable `<phone>@c.us` when
+   * the mapping is known, else returns the id unchanged. Lets a plugin key a chat by one identity across
+   * WhatsApp's `@lid` migration (best-effort). Available on OpenWA 0.8.7+.
+   */
+  canonicalChatId(sessionId: string, chatId: string): Promise<string>;
+}
+
+// ── v0.7: host-proxied, SSRF-guarded outbound HTTP ──────────────────────────────────────────────
+// Gated by the "net:fetch" permission + manifest `net.allow` (host allowlist, port optional; deny by default).
+// Use this for ALL outbound HTTP — the raw worker `fetch` is unguarded and discouraged.
+export interface PluginNetRequestInit {
+  method?: string;
+  headers?: Record<string, string>;
+  // The sandbox bridges the request to the host via structuredClone, which preserves typed arrays, so
+  // a binary body (e.g. an assembled multipart/form-data upload) is sent intact. A string body is
+  // UTF-8 encoded by the host fetch, so binary MUST be passed as Uint8Array/Buffer, not a string.
+  body?: string | Uint8Array;
+  // Host default 15 s, host maximum 30 s; a value <= 0 is clamped to 1 ms (every request then aborts).
+  // Note this is the FETCH budget, which races the outer 30 s capability-call budget — keep it lower.
+  timeoutMs?: number;
+}
+
+/**
+ * The whole response object, exactly as it crosses the worker boundary. There are no `text()`/`json()`/
+ * `arrayBuffer()` methods — functions cannot survive structuredClone. Parse with `JSON.parse(res.body)`.
+ */
+export interface PluginNetResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  // The response body, read host-side (capped at 10 MiB) and handed back as a UTF-8 string.
+  body: string;
+}
+
+export interface PluginNetCapability {
+  fetch(url: string, init?: PluginNetRequestInit): Promise<PluginNetResponse>;
+}
+
+export interface PluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  /** Deliberate narrowing of the host's PluginType enum: INSTALLABLE_TYPES is {'extension'}, so a
+   *  manifest declaring engine/storage/queue/auth is rejected at load (install: HTTP 400; boot: the
+   *  directory is skipped and the registry entry is forced to ERROR). The other tiers are built-ins. */
+  type: 'extension';
+  main: string;
+  /** Dashboard-facing metadata, all typed by the host and all set by every manifest here. The host
+   *  returns `description` and `author` on GET /plugins (with `provides` below), so a misspelled key
+   *  blanks the dashboard card rather than failing anything: the index signature at the bottom of this
+   *  interface accepts it as an unknown extra and nothing else checks the name. `homepage`,
+   *  `repository` and `license` are typed by the host but read only by this repo's catalog. */
+  description?: string;
+  author?: string;
+  homepage?: string;
+  repository?: string;
+  license?: string;
+  permissions?: string[];
+  sessions?: string[];
+  hooks?: HookEvent[];
+  /** Feature names this plugin advertises. Returned by the host on GET /plugins (absent reads as []). */
+  provides?: string[];
+  /** Feature names this plugin expects from other plugins. Typed by the host, read by nothing in it. */
+  requires?: string[];
+  /** npm-style dependency maps. Typed by the host, read by nothing in it: there is no install-time
+   *  `npm install`, so a plugin bundles its dependencies into `main` and these stay documentation. */
+  dependencies?: Record<string, string>;
+  peerDependencies?: Record<string, string>;
+  /** Integration SDK major.minor the plugin was authored against (e.g. '1' or '1.2'). STRING — the
+   *  host's ingress validation calls sdkVersion.split('.'), so a JSON number (1, not "1") throws at
+   *  load and the whole plugin comes up ERROR. Only the major is enforced; absent = treated as '1'. */
+  sdkVersion?: string;
+  /** Oldest supported host. On 0.25.0, install and load reject an older host or a malformed floor. */
+  minOpenWAVersion?: string | null;
+  /** Inbound webhook routes this plugin claims (needs the "webhook:ingress" permission). Validated by
+   *  the host at load, and any failure takes the WHOLE plugin down, not just the route (install: HTTP
+   *  400; boot: the directory is skipped and the registry entry is forced to ERROR): SDK-major match,
+   *  the permission, unique non-empty routes, toleranceSec > 0, no scheme:'none' route unless the
+   *  operator opted in (ALLOW_UNSIGNED_INGRESS), response.ack.status an integer in 100..599, and every
+   *  response.ack header name an RFC 7230 token whose value carries no CR/LF. Host 0.23.6 tightens
+   *  these: each route must be ONE URL path segment (no '/', '\', '?', '#', '%' or control character,
+   *  and not '.' or '..'), toleranceSec a finite number > 0 (a numeric string such as "300" still
+   *  loads), dedupOn 'header' or 'body', ack status 200..599 (a 1xx is refused), ack body a string, and
+   *  every ack header value a string Node can write (tab, printable ASCII and 0x80-0xFF only).
+   *  Host 0.25.0 also rejects unknown signature schemes and HMAC encodings other than hex/base64. */
+  ingress?: PluginIngressRoute[];
+  /** v0.7: per-session activation (default true). The platform owns which sessions a plugin runs for. */
+  sessionScoped?: boolean;
+  /** v0.7: outbound HTTP host allowlist for ctx.net.fetch — "host" or "host:port"; deny by default.
+   *  The catalogue uses both forms: a bare host matches any port, which is what most entries rely on.
+   *  `allowConfigHosts` admits only the HTTPS origin, including its port, of each named config key.
+   *  Non-HTTPS URLs and URLs with embedded credentials do not add a grant. */
+  net?: { allow?: string[]; allowConfigHosts?: string[] };
+  /** v0.7: a sandboxed-iframe config editor served by the host. */
+  configUi?: { entry: string; height?: number };
+  /** Declarative config schema (rendered by the host into an authenticated form). */
+  configSchema?: PluginConfigSchema;
+  /** Localization strings for the dashboard Catalog tab, keyed by BCP-47 locale tag. */
+  i18n?: PluginI18n;
+  [key: string]: unknown;
+}
+
+/**
+ * v0.7 declarative config schema — the host renders it into an authenticated form. Recursive: an
+ * `object` field nests `properties`; an `array` field describes its element via `items` (an
+ * array-of-rows when `items.type === 'object'`). The plugin still reads `ctx.config` as
+ * `Record<string, unknown>` and validates defensively — the schema only drives the host's form.
+ */
+export interface PluginConfigField {
+  /** 'textarea' is a multi-line string; a field with `enum` renders as a <select>. */
+  type: 'string' | 'number' | 'boolean' | 'array' | 'object' | 'textarea';
+  title?: string;
+  description?: string;
+  default?: unknown;
+  enum?: unknown[];
+  required?: boolean;
+  /** Sensitive value (API key, token): masked on read, preserved on an unchanged write, at any depth. An
+   *  explicit `null` in a write removes it (host 0.26.0); the mask and an empty string keep it. A per-session
+   *  override or instance that points a `net.allowConfigHosts` key at another origin than the layer beneath
+   *  does not inherit that layer's secrets (host 0.26.0) and must bring its own. */
+  secret?: boolean;
+  /** Validation hints surfaced as HTML input attributes (advisory; not hard-enforced by the host). */
+  min?: number; // number: value bound; string/textarea: minLength; array: min rows
+  max?: number; // number: value bound; string/textarea: maxLength; array: max rows
+  pattern?: string; // string/textarea: HTML validation regex
+  items?: PluginConfigField; // array element schema; array-of-rows when items.type === 'object'
+  properties?: Record<string, PluginConfigField>; // nested-object fields (type: 'object')
+}
+
+export interface PluginConfigSchema {
+  type: 'object';
+  properties: Record<string, PluginConfigField>;
+}
+
+/** Localized display text for a plugin or one of its config fields. */
+export interface PluginI18nText {
+  title?: string;
+  description?: string;
+}
+
+/** Translations for a single BCP-47 locale (e.g. "es", "zh-CN"). */
+export interface PluginI18nLocale {
+  name?: string;
+  description?: string;
+  config?: Record<string, PluginI18nText>;
+}
+
+/** Map of BCP-47 locale tag → locale translations. Set as `manifest.i18n`. */
+export type PluginI18n = Record<string, PluginI18nLocale>;
+
+// ── Integration SDK v1: inbound webhook ingress (manifest side) ────────────────────────────────
+export interface IngressSignatureSpec {
+  /**
+   * - `hmac-sha256`: HMAC over `contentTemplate` (tokens `{rawBody}`/`{timestamp}`/`{id}`).
+   * - `shared-secret`: constant-time compare of a header value against `instance.secret`.
+   * - `standard-webhooks`: host-side Standard Webhooks verify (headers `webhook-id`/`webhook-timestamp`/
+   *   `webhook-signature`, signed content `${webhook-id}.${webhook-timestamp}.${rawBody}`, base64
+   *   HMAC-SHA256 with the base64-decoded Svix key, `v1,` prefix). The wire format is fixed by the
+   *   spec, so `header`/`contentTemplate`/`encoding`/`prefix`/`timestampHeader` are IGNORED — only
+   *   `toleranceSec` and `dedupHeader` apply. The operator pastes the Svix secret as `instance.secret`.
+   * - `none`: fully unauthenticated public endpoint — rejected at load unless the operator set
+   *   ALLOW_UNSIGNED_INGRESS=true.
+   */
+  scheme: 'hmac-sha256' | 'shared-secret' | 'standard-webhooks' | 'none';
+  header?: string;
+  contentTemplate?: string;
+  encoding?: 'hex' | 'base64';
+  prefix?: string;
+  timestampHeader?: string;
+  /** Replay window for timestampHeader; must be a finite number > 0 when present (finite enforced from
+   *  host 0.23.6; host default 300 applies when absent). */
+  toleranceSec?: number;
+  dedupHeader?: string;
+}
+
+export interface IngressResponseContract {
+  /** Host-side preflight gates run before the delivery is accepted. A failed `session-alive` answers 503
+   *  and persists nothing, so the provider's retry counts as a new delivery; from host 0.23.6 that 503
+   *  carries `Retry-After`, which some providers require before they retry at all. */
+  preflight?: Array<{ type: 'session-alive' }>;
+  /** The synchronous reply the host sends instead of default-202. `body` may template
+   *  `{rawBody}`/`{timestamp}`/`{id}`. A WebhookResponse returned from the handler is ignored —
+   *  this ack is the only synchronous reply.
+   *
+   *  From host 0.23.6 a declared `Content-Type` is honored when its media type is application/json or
+   *  text/plain (sent without parameters); any other type goes out as text/plain, and 0.20.0 through
+   *  0.23.5 always send text/plain. 0.23.6 also drops declared framing and browser-protection headers
+   *  (Content-Length, Transfer-Encoding, Content-Encoding, Trailer, Set-Cookie, Content-Security-Policy,
+   *  Strict-Transport-Security, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
+   *  Access-Control-Allow-Origin, Access-Control-Allow-Credentials), and answers a re-delivery with this
+   *  same ack, its body rendered from the retry (hosts up to 0.23.5 answered `200 duplicate`). */
+  ack?: { status?: number; body?: string; headers?: Record<string, string> };
+  deadlineMs?: number; // documented provider ack budget (advisory; not enforced)
+}
+
+export interface PluginIngressRoute {
+  route: string; // ONE URL path segment (refused at load otherwise from 0.23.6); host prefixes it; no port
+  /** 'sync-reply' is inert dead code — the pipeline is always async + fast-ack; declare synchronous
+   *  behavior via `response` instead. Kept in the union for SDK v1 additive-only compatibility. */
+  mode: 'async' | 'sync-reply';
+  signature: IngressSignatureSpec;
+  challenge?: { method: 'GET'; tokenParam: string; echoParam: string };
+  /** Authenticity is verified by the host per `signature`; the worker does no extra 'self' pass. */
+  verify: 'core' | 'self';
+  maxBodyBytes: number;
+  /** Where the provider's conversation id lives, so the host can compute a per-conversation ordering
+   *  key. Absent ⇒ per-instance serialization. */
+  conversationId?: { header?: string; jsonPointer?: string };
+  /** What identifies a retry of the same delivery. `header` (the default) trusts the dedup header
+   *  whenever the provider sends one and hashes the raw body only when it is absent; `body` keys every
+   *  delivery on that hash whatever the header says, for a provider that mints a fresh delivery id on
+   *  each retry attempt. On a body-keyed route the persisted delivery id and the `{id}` ack token become
+   *  that content hash, and byte-identical bodies collapse within the host's
+   *  INGRESS_DEDUP_RETENTION_DAYS. A provider whose retries legitimately differ in the signed body (a
+   *  fresh timestamp or nonce inside the signed payload) keeps the default, since `body` would dedup
+   *  nothing for it. Any other value is refused at manifest load. IGNORED by hosts up to 0.23.5, which
+   *  key on the header regardless; the floor is 0.23.6. From 0.23.6 a dedup header that is present but
+   *  blank counts as absent (body hash); earlier hosts keyed all such deliveries on the empty string and
+   *  dropped every one after the first while still acking it. */
+  dedupOn?: 'header' | 'body';
+  response?: IngressResponseContract;
+}
+
+/**
+ * What a SANDBOXED plugin receives. There is no `manifest` and no `hookManager` on the sandbox context
+ * (see core `sandbox/worker-bootstrap.ts`) — reading `ctx.manifest.version` would typecheck against an
+ * older copy of this file and throw at runtime, so both are omitted here.
+ *
+ * One member is deliberately NOT vendored: `registerSearchProvider`, which the host does provide. No
+ * plugin here is a search backend, and typing it would mean hand-copying the host's SearchQuery /
+ * SearchResults shapes with nothing to keep them honest. Adding it needs the `search:provide`
+ * permission in the manifest (required since core 0.12.2 — the host denies the registration outright
+ * without it), and under the default SEARCH_PROVIDER=auto a plugin that registers becomes the
+ * gateway's ACTIVE search backend, superseding builtin-fts — worth knowing before adding it.
+ */
+export interface PluginContext {
+  pluginId: string;
+  /** The RESOLVED config for `sessionId` (the per-session slice merged over the "*" defaults). */
+  config: Record<string, unknown>;
+  logger: PluginLogger;
+  /** Per-plugin key/value store (needs the "storage:use" permission — see PluginStorage). */
+  storage: PluginStorage;
+  /**
+   * `priority` sorts ascending (default 100). From host 0.23.6 a non-finite or non-numeric value counts
+   * as 100; older hosts sorted on the raw value, so one NaN left the whole event's order undefined. The
+   * host runs all of this plugin's handlers for one event as a single chain (in their own priority
+   * order) placed at the LOWEST priority any of them asked for; up to 0.23.5 that chain stayed at the
+   * first-registered handler's priority, so a later, lower one did not move it ahead of other plugins.
+   */
+  registerHook(event: HookEvent, handler: HookHandler, priority?: number): void;
+  messages: PluginMessagingCapability;
+  engine: PluginEngineReadCapability;
+  /** v0.7: host-proxied, SSRF-guarded outbound HTTP (needs the "net:fetch" permission + manifest net.allow). */
+  net: PluginNetCapability;
+  /** v1: claim an inbound ingress webhook route (needs the "webhook:ingress" permission). */
+  registerWebhook(route: string, handler: WebhookHandler): void;
+  /** v1: normalized outbound send, translated host-side to MessageService (needs "conversation:send"). */
+  conversations: PluginConversationsCapability;
+  /** v1: flip a mapped conversation's bot/human/closed handover state (needs "conversation:send"). */
+  handover: PluginHandoverCapability;
+  /** v1: create/read the WA-chat <-> provider-conversation mapping (needs "conversation:send"). */
+  mappings: PluginMappingsCapability;
+}
+
+// ── Integration SDK v1: inbound webhook ingress, normalized send, handover, conversation mapping ────
+export interface WebhookRequest {
+  instanceId: string;
+  method: string;
+  /** Provider headers, names lowercased, a repeated header comma-joined. Credentials arrive as
+   *  '[redacted]': authorization, proxy-authorization, cookie, x-hub-signature, x-hub-signature-256,
+   *  x-signature, x-signature-ed25519 and x-webhook-signature since host 0.20.0, webhook-signature since host
+   *  0.26.0, and a shared-secret
+   *  route's own declared `signature.header` since 0.23.5. The host verified the request before it was
+   *  stored, so a handler has nothing to re-verify from them. */
+  headers: Record<string, string>;
+  /** From host 0.23.6 a repeated key carries its FIRST value (`?a=1&a=2` reads '1'); earlier hosts
+   *  passed Express's array through despite this type. */
+  query: Record<string, string>;
+  body: string;
+  rawBody: string;
+  verified: boolean;
+  deliveryId: string;
+  sessionId?: string;
+}
+/**
+ * IGNORED by the host: the ingress pipeline reads only whether your handler resolved or threw. The
+ * provider's synchronous reply is computed host-side from `manifest.ingress[].response.ack` (default
+ * 202). Kept on the signature so existing handlers still typecheck — do not design against it.
+ */
+export type WebhookResponse = { status?: number; headers?: Record<string, string>; body?: string };
+export type WebhookHandler = (req: WebhookRequest) => Promise<WebhookResponse | void> | WebhookResponse | void;
+
+export type HandoverState = 'bot' | 'human' | 'closed';
+
+/**
+ * Per-type behavior of the host facade — the type union alone does not tell you which combinations
+ * throw. `PluginCapabilityError` is thrown (not swallowed) for each rejection below.
+ *
+ * - `text`: sent as text; with `replyTo` it becomes a quote-reply.
+ * - media (`image`/`file`/`audio`/`video`/`voice`) WITH `mediaUrl`: native media, `text` is the
+ *   caption. Setting `replyTo` on a media part THROWS — the engine media path cannot quote.
+ * - media WITHOUT `mediaUrl`: silently falls through to a text send, so an unset `text` delivers an
+ *   EMPTY message. Put the URL in `text` if that is your fallback.
+ * - `location`: needs `latitude`/`longitude`, else it THROWS (it no longer degrades to a text link).
+ *   `replyTo` on a location also THROWS. `text` doubles as the location description.
+ */
+export interface ConversationSendEnvelope {
+  sessionId?: string;
+  instanceId?: string;
+  chatId?: string;
+  type: 'text' | 'image' | 'file' | 'audio' | 'video' | 'voice' | 'location';
+  text?: string;
+  mediaUrl?: string;
+  replyTo?: string;
+  /**
+   * Ask the engine for a link preview on a plain text send. Baileys generates one only when this is
+   * `true`, so a plugin relaying a URL gets a bare link without it; whatsapp-web.js previews by
+   * default and takes `false` to suppress. Ignored on media, location and quoted sends, which route
+   * through engine paths that take no preview option.
+   */
+  linkPreview?: boolean;
+  /** WGS84, required for `type: 'location'` (-90..90 / -180..180), ignored otherwise. */
+  latitude?: number;
+  longitude?: number;
+  source?: { provider: string; externalConversationId: string };
+}
+export interface PluginConversationsCapability {
+  send(env: ConversationSendEnvelope): Promise<unknown>;
+}
+export interface PluginHandoverCapability {
+  set(key: { sessionId: string; chatId: string; instanceId: string }, state: HandoverState): Promise<unknown>;
+}
+export interface PluginMappingsCapability {
+  upsert(key: { sessionId: string; chatId: string; instanceId: string }, providerConversationId: string): Promise<unknown>;
+  get(
+    key: { sessionId: string; chatId: string; instanceId: string },
+  ): Promise<{ providerConversationId: string; handoverState: HandoverState } | null>;
+  getByProvider(
+    instanceId: string,
+    providerConversationId: string,
+  ): Promise<{ sessionId: string; chatId: string; handoverState: HandoverState } | null>;
+}
+
+export interface IPlugin {
+  onLoad?(context: PluginContext): Promise<void>;
+  onEnable?(context: PluginContext): Promise<void>;
+  onDisable?(context: PluginContext): Promise<void>;
+  onUnload?(context: PluginContext): Promise<void>;
+  onConfigChange?(context: PluginContext, newConfig: Record<string, unknown>): Promise<void>;
+  healthCheck?(): Promise<{ healthy: boolean; message?: string }>;
+}
+
+/** User-facing chat kind, derived from `chatId` host-side. `@lid` folds into 'individual'. */
+export type ChatKind = 'individual' | 'group' | 'channel' | 'status' | 'broadcast' | 'unknown';
+
+export interface PollDetails {
+  name: string;
+  options: string[];
+  allowMultipleAnswers: boolean;
+}
+
+export interface IncomingMessage {
+  id: string;
+  from: string;
+  to: string;
+  chatId: string;
+  /**
+   * Empty for sticker, voice, image/video/document without a caption, call, revoked and masked.
+   * NOT empty for every other non-text type: a poll carries its question, a shared event its name, a
+   * tapped business button its label, and a shared contact card its vCard (several cards arrive
+   * newline-joined). whatsapp-web.js has always populated these; Baileys matched it in host 0.23.2.
+   * On Baileys since 0.23.5 an 'order' carries its note (else its title) and a 'product' card its text
+   * (else the product title); before that both arrived there as 'unknown' with an empty body.
+   * whatsapp-web.js passes its own `msg.body` for both.
+   *
+   * So `!body.trim()` is NOT a test for "a human typed this". A matcher that treats the body as a
+   * command, a menu key or prose to forward must gate on `type` too, denying 'contact', 'poll', 'order'
+   * and 'product' (hosts below 0.23.5 never emit the last two, so denying them there is a no-op).
+   * Do NOT deny 'unknown': on whatsapp-web.js business button and list replies land there and are real
+   * user input. On Baileys they did too up to 0.23.5; from 0.23.6 Baileys types button, template and
+   * list replies 'text', with the tapped label in `body` and its id in `button`. Known residual: a
+   * Baileys whole-catalog share stays 'unknown' with the catalog title in `body`, and by type it cannot
+   * be told apart from a whatsapp-web.js button reply, so it still reaches a matcher.
+   * Do NOT allowlist 'text': media captions arrive in `body` under their own media type.
+   */
+  body: string;
+  /** Host `MessageType`: text|image|video|audio|voice|document|sticker|location|contact|poll|call|
+   *  revoked|order|product|masked|unknown ('order' and 'product' from host 0.23.5). Kept as `string`
+   *  here so a new host type never breaks a typecheck. A message delivered already deleted arrives as
+   *  `revoked` with an empty `body` and no media, quote or card fields (host 0.26.0). */
+  type: string;
+  /**
+   * Unix SECONDS, the original send time. From host 0.23.6 a Baileys session delivers after reconnect
+   * what WhatsApp queued while it was disconnected (inbound messages on `message:received`, and on
+   * `message:sent` what the account typed on its phone meanwhile), each carrying its original
+   * `timestamp`; up to 0.23.5 they were dropped. Time-sensitive logic (business hours, cooldowns,
+   * staleness) must read this, not the processing time. 0.23.6 Baileys also drops a re-delivery of a
+   * message it already stored, before either hook fires (best effort), so a duplicate is rarer but
+   * still possible: keep deduping on `id`.
+   */
+  timestamp: number;
+  fromMe: boolean;
+  isGroup: boolean;
+  /** Required on the host payload; optional here because plugins only ever read it. */
+  kind?: ChatKind;
+  /** Sender in a group, status or broadcast-list message when `from` names the shared chat. */
+  author?: string;
+  /** The sender is identified by a privacy id (`@lid`) rather than a phone number. */
+  isLidSender?: boolean;
+  /** A status/story broadcast rather than a real conversation. */
+  isStatusBroadcast?: boolean;
+  /**
+   * Best-effort sender MSISDN, and only for `@lid` senders with RESOLVE_LID_TO_PHONE enabled. The host
+   * assigns it AFTER the `message:received` hook chain has run, so a hook handler always observes
+   * `undefined`.
+   *
+   * To get digits at hook time, take the local part of the sender JID — but ONLY when the JID is a real
+   * user, on an ALLOWLIST, never a denylist: `@lid` (privacy id), `@g.us` (group), `@newsletter`
+   * (channel) and `@broadcast` all have numeric local parts too, and passing one of those on as a phone
+   * number is worse than passing nothing (it silently keys a CRM lookup or an authorization check to a
+   * number belonging to nobody). Also strip the multi-device suffix Baileys can append:
+   *
+   *   const jid = msg.author ?? msg.from;                    // in a group, `from` is the GROUP
+   *   const at = jid.lastIndexOf('@');
+   *   const dom = at < 0 ? '' : jid.slice(at + 1).toLowerCase();
+   *   const user = at < 0 ? '' : jid.slice(0, at).split(':')[0];   // 628123:12@s.whatsapp.net
+   *   const phone = (dom === 'c.us' || dom === 's.whatsapp.net') && /^\d+$/.test(user) ? user : '';
+   */
+  senderPhone?: string | null;
+  mentionedIds?: string[];
+  contact?: MessageContact;
+  /** Choices and selection mode, without vote counts, on host 0.25.0+. */
+  poll?: PollDetails;
+  // Inbound media, materialized by the adapter before the hook fires (both engines). `data` is base64
+  // and ABSENT when `omitted` is true (`sizeBytes` is still set). For a voice note `type` is `'voice'`
+  // and `mimetype` is typically `'audio/ogg; codecs=opus'`.
+  media?: {
+    mimetype: string;
+    filename?: string;
+    data?: string;
+    /** True when the blob was dropped for ANY of: the inbound size cap (declared-size pre-gate or the
+     *  streaming abort), a download timeout (which is also how download-concurrency saturation
+     *  surfaces, since the limiter queue is unbounded and never rejects), a host-wide disabled
+     *  download (MEDIA_DOWNLOAD_ENABLED=false), a FAILED download (host 0.23.4+ on both engines;
+     *  before that a failure dropped the whole `media` field instead), the own-send echo on
+     *  `message:sent` (the adapter skips the download outright, since the API caller already holds the
+     *  bytes), and on getChatHistory a spent CHAT_HISTORY_MEDIA_BUDGET_BYTES. Do NOT tell the user "that file was too large": size is one
+     *  cause out of five, and the others are worth a retry. */
+    omitted?: boolean;
+    /** Byte size, but NOT a trustworthy one when `omitted` is true: it is the SENDER-DECLARED size on
+     *  the pre-gate, disabled-download, timeout and failed-download exits (`0` when the sender declared
+     *  nothing), and on the Baileys streaming abort the bytes received when the cap tripped, a lower
+     *  bound rather than the real size (host 0.23.5+; up to 0.23.4 Baileys reported the CAP itself on
+     *  both the abort and a timeout). */
+    sizeBytes?: number;
+  };
+  // The message this one replies to (swipe-to-reply / quote), when present. `id` is the quoted WhatsApp
+  // message id; `body` is its text. Carried on the inbound hook payload for reply-threading relays.
+  // Since host 0.23.2 the quote runs through the SAME extractor as the live message, so a quoted poll
+  // or contact card carries its text here rather than an empty string. Same caveat as `body` above.
+  quotedMessage?: { id: string; body: string };
+  // Shared location (`type: 'location'`), when present.
+  location?: { latitude: number; longitude: number; description?: string; address?: string; url?: string };
+  /** WhatsApp disappearing-messages timer in seconds, per chat, on every message. 0 or absent = no
+   *  timer. Known values: 86400 (24h), 604800 (7d), 7776000 (90d). */
+  ephemeralDuration?: number;
+  /** Set for `call` (call_log) messages: video vs voice, and whether an incoming call went
+   *  unanswered. */
+  call?: { video: boolean; missed: boolean };
+  /** Set on 'order' (host 0.23.5+, both engines, only when the order id is present). No line items.
+   *  `token` is a single-order CREDENTIAL: pass it through unchanged and never log it. */
+  order?: { orderId: string; token?: string };
+  /** Set on 'product' (host 0.23.5+, both engines, only when the product id is present); the other
+   *  fields are best-effort. */
+  product?: { productId: string; title?: string; description?: string; businessOwnerJid?: string };
+  /** Set when the sender tapped a business button, template quick-reply, list row or native-flow
+   *  control (host 0.23.6+, Baileys only). `id` is the business-defined handle; `text` the visible
+   *  label, also in `body`. */
+  button?: { id: string; text?: string };
+  /** The choices an inbound business prompt offers, URL/call CTAs omitted (host 0.23.6+, Baileys only).
+   *  Set on the prompt itself; a tap sets `button` instead. */
+  buttons?: Array<{ id: string; text: string }>;
+  /** Styling of a text status/story: background as `#RRGGBB`. Only set by engines that expose it. */
+  backgroundColor?: string;
+  /** Styling of a text status/story: the WhatsApp font index. Only set by engines that expose it. */
+  font?: number;
+}
+
+/**
+ * Sender contact info on `IncomingMessage.contact` — synchronous cache fields only (the host omits the
+ * async getters that would hit WhatsApp per message). Every field is optional and in practice both
+ * engines populate little more than `pushName`, so treat anything else as absent unless proven.
+ */
+export interface MessageContact {
+  /** Sender JID (`…@c.us` or a `…@lid` privacy id). */
+  id?: string;
+  /** Phone digits, best-effort. For `@lid` senders `IncomingMessage.senderPhone` is authoritative. */
+  number?: string;
+  name?: string;
+  pushName?: string;
+  shortName?: string;
+  type?: string;
+  isMyContact?: boolean;
+  isWAContact?: boolean;
+  isBusiness?: boolean;
+  isEnterprise?: boolean;
+  verifiedName?: string;
+  verifiedLevel?: number;
+  isBlocked?: boolean;
+  /** Label IDs (CRM). Names are not resolved — that would need a network call. */
+  labels?: string[];
+}

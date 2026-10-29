@@ -1,0 +1,268 @@
+import type { PluginContext } from '../types/openwa';
+
+export interface FlowNode {
+  text: string;
+  options?: Record<string, FlowNode>;
+}
+
+export interface SessionFlow {
+  trigger: string; // e.g. "hi"; empty string = any message triggers
+  greeting: string;
+  options?: Record<string, FlowNode>;
+}
+
+export interface UserState {
+  path: string[];
+  lastActive: number;
+  /**
+   * CONSECUTIVE unmatched inputs at the current node, reset by any valid choice. Absent on a state
+   * written before this field existed, which reads as 0.
+   *
+   * A miss refreshes `lastActive` like any other turn, because the bot has just re-prompted with the
+   * menu and must honour the answer to it. What stops that from keeping a flow alive forever is this
+   * counter, not a frozen clock: see MAX_MISSES.
+   */
+  misses?: number;
+}
+
+export class FlowEngine {
+  private static readonly TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes state expiration
+  private static readonly MAX_REPROCESS = 1; // bound the invalid-path reset (no unbounded recursion)
+  /**
+   * Consecutive misses before the flow is dropped, silently, and the contact has to re-trigger.
+   *
+   * Every miss draws an "Invalid option" reply, so without a bound the flow answers a contact who has
+   * stopped following the menu on every message, forever: refreshing `lastActive` on a miss meant the
+   * TTL could never fire for the one contact it exists to release, and against an auto-replying peer
+   * the two bots held each other open indefinitely. Bounding the misses is what closes that, and it
+   * does so without the cure being worse than the disease: freezing the clock instead would expire a
+   * flow between the bot's re-prompt and the contact's correct answer to it, so the bot would ask for
+   * a choice and then ignore it.
+   */
+  private static readonly MAX_MISSES = 3;
+  /**
+   * From OpenWA 0.23.6 a Baileys session delivers, after it reconnects, what WhatsApp queued while it
+   * was disconnected, each message with its original send time. Five minutes is far above clock skew
+   * between WhatsApp and the gateway and matches the host's own auto-reply age limit.
+   */
+  private static readonly LATE_AFTER_MS = 5 * 60_000;
+  /** Per (session,chat) promise chain serializing the state read→write. Self-evicts when drained. */
+  private static readonly locks = new Map<string, Promise<unknown>>();
+  private static readonly replyTails = new Map<string, Promise<void>>();
+
+  /**
+   * Process an incoming message and send auto-replies according to `flow` (the resolved per-session
+   * config). Returns true if the message was consumed (a reply was queued, or it arrived late inside an
+   * open flow), false otherwise. Serializes per (session, conversation) so concurrent messages for the
+   * same conversation can't interleave the state read→write.
+   *
+   * `actor` scopes the flow state to a participant: in a group, pass the sender so each member walks
+   * their own menu (a group chat is shared by many people); in a 1:1 chat leave it undefined so the
+   * state key is just the chatId (unchanged). Replies always go to `chatId`.
+   *
+   * `sentAt` is the message's own send time in unix seconds; missing or invalid reads as now.
+   */
+  public static async processMessage(
+    context: PluginContext,
+    flow: SessionFlow,
+    sessionId: string,
+    chatId: string,
+    messageBody: string,
+    messageId: string,
+    actor?: string,
+    sentAt?: number,
+  ): Promise<boolean> {
+    const conversation = actor ? `${chatId}|${actor}` : chatId;
+    // The bounded re-process inside the body calls processLocked directly (bypassing this lock) so a
+    // conversation never waits on its own still-pending chain entry (self-deadlock). Store a settled
+    // tail so a rejection can't wedge the chain, and evict the key once the chain drains.
+    const lockKey = `${sessionId}__${conversation}`;
+    const prev = this.locks.get(lockKey) ?? Promise.resolve();
+    const run = prev.then(() =>
+      this.processLocked(context, flow, sessionId, chatId, conversation, messageBody, messageId, sentAt, 0),
+    );
+    const tail = run.catch(() => {});
+    this.locks.set(lockKey, tail);
+    try {
+      return await run;
+    } finally {
+      if (this.locks.get(lockKey) === tail) this.locks.delete(lockKey);
+    }
+  }
+
+  /** Delete persisted flow states whose last activity is older than the TTL. Lazy per-key expiry only
+   *  runs when a conversation messages again, so an abandoned flow would otherwise linger forever; the
+   *  plugin calls this periodically. Returns the number of entries removed. */
+  public static async sweepExpired(context: PluginContext): Promise<number> {
+    const keys = (await context.storage.list('state__')).filter(k => k.startsWith('state__'));
+    const expired = (s: UserState | null): boolean => !!s && Date.now() - s.lastActive > this.TIMEOUT_MS;
+    let removed = 0;
+    for (const k of keys) {
+      if (!expired(await context.storage.get<UserState>(k))) continue;
+      // Re-read immediately before deleting: a message may have re-created fresh state for this key since
+      // the scan. Only delete if it is STILL expired, so a live flow isn't wiped.
+      // This narrows the check→delete race to a tiny window; a per-key lock would close it fully
+      // but isn't worth it for a 30-min GC of already-stale state that self-heals on the next message.
+      if (expired(await context.storage.get<UserState>(k))) {
+        await context.storage.delete(k);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
+  private static queueReply(context: PluginContext, sessionId: string, chatId: string, messageId: string, text: string): void {
+    const key = `${sessionId}__${chatId}`;
+    // Keep delivery order without holding the state lock or the host's five-second hook dispatch.
+    const run = (this.replyTails.get(key) ?? Promise.resolve())
+      .then(() => context.messages.reply(sessionId, chatId, messageId, text))
+      .then(() => {}, err => context.logger.error('chat-flow: reply failed', err));
+    this.replyTails.set(key, run);
+    void run.finally(() => {
+      if (this.replyTails.get(key) === run) this.replyTails.delete(key);
+    });
+  }
+
+  private static async processLocked(
+    context: PluginContext,
+    flow: SessionFlow,
+    sessionId: string,
+    chatId: string,
+    conversation: string,
+    messageBody: string,
+    messageId: string,
+    sentAt: number | undefined,
+    depth = 0,
+  ): Promise<boolean> {
+    // Not the message body: this line runs for every inbound message, and the dashboard renders plugin
+    // logs. The length is what a diagnostic actually uses — "did the engine see anything at all".
+    context.logger.debug('[FlowEngine] Processing message', { sessionId, chatId, bodyLength: messageBody.length });
+
+    const input = messageBody.trim();
+    const stateKey = `state__${sessionId}__${conversation}`.replace(/:/g, '_');
+    let state = await context.storage.get<UserState>(stateKey);
+    // Never the state itself: `path` is the trail of options this contact picked, which is message
+    // content by another name. A stored row can be malformed, so read its depth defensively.
+    context.logger.debug('[FlowEngine] Loaded state', { stateKey, hasState: !!state, pathDepth: state?.path?.length ?? 0 });
+
+    // Check expiration
+    if (state && Date.now() - state.lastActive > this.TIMEOUT_MS) {
+      context.logger.debug('[FlowEngine] Flow state expired', { stateKey });
+      await context.storage.delete(stateKey);
+      state = null;
+    }
+
+    // A message written more than LATE_AFTER_MS before the menu on screen, and delivered that late, was
+    // never typed at that menu: a backlog from a disconnect. Matched here it would walk into sub-menus
+    // the contact never saw or spend the miss budget. Claim it without a reply so no sibling answers it.
+    const sent = new Date((sentAt ?? 0) * 1000);
+    const at = sent.getTime() > 0 ? sent.getTime() : Date.now();
+    if (state && Date.now() - at > this.LATE_AFTER_MS && state.lastActive - at > this.LATE_AFTER_MS) {
+      context.logger.debug('[FlowEngine] Message sent before the current menu. Ignoring.', { stateKey });
+      return true;
+    }
+
+    const trigger = flow.trigger.trim();
+    const isTriggerWord = trigger !== '' && input.toLowerCase() === trigger.toLowerCase();
+    context.logger.debug('[FlowEngine] Trigger check', { trigger, isTriggerWord });
+
+    // If no active flow state, check if we should start one
+    if (!state) {
+      if (trigger !== '' && !isTriggerWord) {
+        context.logger.debug('[FlowEngine] No active state and input does not match trigger. Ignoring.');
+        return false;
+      }
+      context.logger.debug('[FlowEngine] Starting new flow', { greeting: flow.greeting });
+      // Store the state BEFORE the greeting goes out. A write that fails after a delivered greeting
+      // leaves the flow unstarted, and with the documented empty `trigger` the next message reads as
+      // another first message and greets again: one outbound message per inbound message, uncapped.
+      // The other order is self-healing, because state whose greeting never arrived answers the next
+      // message with the fallback at the bottom of this method, which repeats the greeting text.
+      await context.storage.set(stateKey, { path: [], lastActive: Date.now() });
+      this.queueReply(context, sessionId, chatId, messageId, flow.greeting);
+      return true;
+    }
+
+    // If trigger word is received while in flow, restart the flow
+    if (isTriggerWord) {
+      context.logger.debug('[FlowEngine] Trigger word received during active flow. Restarting flow.');
+      await context.storage.set(stateKey, { path: [], lastActive: Date.now() });
+      this.queueReply(context, sessionId, chatId, messageId, flow.greeting);
+      return true;
+    }
+
+    // Traverse the configuration options according to the user's path
+    let currentNode: FlowNode | undefined = { text: flow.greeting, options: flow.options };
+
+    context.logger.debug('[FlowEngine] Traversing path', { pathDepth: state.path.length });
+    for (const key of state.path) {
+      if (currentNode && currentNode.options && Object.hasOwn(currentNode.options, key)) {
+        currentNode = currentNode.options[key];
+      } else {
+        // State is invalid (e.g. config changed under the user). Reset, then re-process — bounded.
+        context.logger.debug('[FlowEngine] State path invalid (config mismatch). Resetting state.');
+        await context.storage.delete(stateKey);
+        if (depth >= this.MAX_REPROCESS) {
+          context.logger.debug('[FlowEngine] Max reprocess depth reached; not recursing.', { depth });
+          return false;
+        }
+        // Recurse on the locked body, NOT processMessage — re-entering the lock would deadlock on this
+        // conversation's own still-pending chain entry.
+        return this.processLocked(context, flow, sessionId, chatId, conversation, messageBody, messageId, sentAt, depth + 1);
+      }
+    }
+
+    // Check if user input matches any option of the current node
+    context.logger.debug('[FlowEngine] Current node options', {
+      options: currentNode.options ? Object.keys(currentNode.options) : null,
+    });
+    // Object.hasOwn, not a bare `options[input]`: the user-supplied `input` must not match inherited
+    // Object.prototype names (e.g. "constructor", "toString", "__proto__"), which would otherwise be a
+    // truthy false-match and send `reply(undefined)`.
+    const nextNode =
+      currentNode.options && Object.hasOwn(currentNode.options, input) ? currentNode.options[input] : undefined;
+
+    if (nextNode) {
+      context.logger.debug('[FlowEngine] Input matched option');
+      state.path.push(input);
+      state.lastActive = Date.now();
+      state.misses = 0; // progress: the miss budget is per stall, not per flow
+      // Record the move before the reply goes out, for the same reason as the greeting above. Sending a
+      // sub-menu the stored path never moved to means the contact's next answer is matched against the
+      // menu they were shown a level up, where the same key usually names a different option.
+      if (nextNode.options && Object.keys(nextNode.options).length > 0) {
+        context.logger.debug('[FlowEngine] Next node has sub-options. Saving updated path.');
+        await context.storage.set(stateKey, state);
+      } else {
+        context.logger.debug('[FlowEngine] Leaf node reached. Clearing flow state.');
+        await context.storage.delete(stateKey);
+      }
+      this.queueReply(context, sessionId, chatId, messageId, nextNode.text);
+      return true;
+    } else if (!currentNode.options || Object.keys(currentNode.options).length === 0) {
+      // The resolved node is a leaf with no way forward (config changed under the user). End the flow
+      // instead of looping "Invalid option" forever; the next trigger starts cleanly.
+      context.logger.debug('[FlowEngine] Resolved node is a dead leaf (config changed). Ending flow.');
+      await context.storage.delete(stateKey);
+      return false;
+    } else {
+      const misses = (state.misses ?? 0) + 1;
+      if (misses >= FlowEngine.MAX_MISSES) {
+        // Budget spent: end the flow WITHOUT another reply. This is the bound on the runaway, so it
+        // must not itself send, or two bots would still trade one message per flow forever.
+        context.logger.debug('[FlowEngine] Miss budget spent. Ending flow silently.');
+        await context.storage.delete(stateKey);
+        return false;
+      }
+      context.logger.debug('[FlowEngine] Input did not match any options. Replying with fallback.');
+      const invalidMsg = `Invalid option. Please choose one of the available options:\n\n${currentNode.text}`;
+      // Recorded BEFORE the reply, like every other branch here: a reply that goes out against a miss
+      // the store never counted is a miss that never expires the budget.
+      state.misses = misses;
+      state.lastActive = Date.now();
+      await context.storage.set(stateKey, state);
+      this.queueReply(context, sessionId, chatId, messageId, invalidMsg);
+      return true;
+    }
+  }
+}

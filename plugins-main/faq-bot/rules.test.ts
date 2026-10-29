@@ -1,0 +1,337 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { parseRules, matchRule, isSafeRegexPattern, MAX_REGEX_INPUT } from './rules.ts';
+
+const ok = JSON.stringify([
+  { mode: 'contains', pattern: 'harga', reply: 'Harga mulai 100rb' },
+  { mode: 'exact', pattern: 'menu', reply: 'Menu: 1) Harga 2) Jam' },
+  { mode: 'regex', pattern: '^/start', reply: 'Selamat datang' },
+]);
+
+test('parseRules rejects non-JSON, JSON primitives, and empty', () => {
+  assert.throws(() => parseRules('not json'));
+  // JSON primitives are not an array/object → still rejected with the array hint.
+  assert.throws(() => parseRules('42'), /array/i);
+  assert.throws(() => parseRules('"hi"'), /array/i);
+  assert.throws(() => parseRules('null'), /array/i);
+  assert.throws(() => parseRules('[]'), /no usable/i);
+});
+
+test('parseRules accepts a single rule object by wrapping it in an array', () => {
+  const { rules } = parseRules(JSON.stringify({ mode: 'contains', pattern: 'hi', reply: 'hello' }));
+  assert.equal(rules.length, 1);
+  assert.equal(rules[0].reply, 'hello');
+  // An object missing required fields is still wrapped, then rejected by field validation.
+  assert.throws(() => parseRules('{}'), /mode/i);
+});
+
+test('parseRules rejects a rule with a bad mode or empty pattern/reply', () => {
+  assert.throws(() => parseRules(JSON.stringify([{ mode: 'nope', pattern: 'x', reply: 'y' }])), /mode/i);
+  assert.throws(() => parseRules(JSON.stringify([{ mode: 'contains', pattern: '', reply: 'y' }])), /pattern/i);
+  assert.throws(() => parseRules(JSON.stringify([{ mode: 'contains', pattern: 'x', reply: '' }])), /reply/i);
+});
+
+test('parseRules skips an invalid regex but keeps valid rules', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '(', reply: 'bad' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.equal(rules.length, 1);
+  assert.deepEqual(skipped, ['(']);
+});
+
+test('parseRules skips a catastrophic-backtracking regex (nested unbounded quantifiers)', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '(a+)+$', reply: 'evil' },
+      { mode: 'regex', pattern: '(\\w+\\s?)*$', reply: 'evil2' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.equal(rules.length, 1);
+  assert.deepEqual(skipped, ['(a+)+$', '(\\w+\\s?)*$']);
+});
+
+test('parseRules rejects nested unbounded quantifiers hidden behind extra groups', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '((a+))+$', reply: 'evil' },
+      { mode: 'regex', pattern: '(((a+)))*', reply: 'evil2' },
+      { mode: 'regex', pattern: '((\\w+\\s?))*$', reply: 'evil3' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.equal(rules.length, 1);
+  assert.deepEqual(skipped, ['((a+))+$', '(((a+)))*', '((\\w+\\s?))*$']);
+});
+
+test('parseRules keeps grouped patterns that carry only a single quantifier', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '((ab)+)', reply: 'a' },
+      { mode: 'regex', pattern: '(a+)', reply: 'b' },
+      { mode: 'regex', pattern: '((cat|dog))', reply: 'c' },
+    ]),
+  );
+  assert.equal(skipped.length, 0);
+  assert.equal(rules.length, 3);
+});
+
+test('parseRules keeps safe regexes (single/non-nested quantifiers, lookahead)', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '^/start', reply: 'a' },
+      { mode: 'regex', pattern: '(abc)+', reply: 'b' },
+      { mode: 'regex', pattern: '\\d{2,5}', reply: 'c' },
+      { mode: 'regex', pattern: 'a*b*c*', reply: 'd' },
+      { mode: 'regex', pattern: '(?=.*foo)', reply: 'e' },
+    ]),
+  );
+  assert.equal(skipped.length, 0);
+  assert.equal(rules.length, 5);
+  assert.equal(matchRule(rules, 'abcabc')?.reply, 'b');
+});
+
+test('parseRules rejects 3+ adjacent overlapping unbounded quantifiers (sibling ReDoS)', () => {
+  // 3+ same-level adjacent quantifiers over overlapping classes backtrack polynomially (O(n^3)+) and hang
+  // on a 1000-char body. Two adjacent is only O(n^2) — safe under the cap — so it is allowed (next test).
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '.*.*.*done', reply: 'evil1' },
+      { mode: 'regex', pattern: '\\w*\\w*\\w*\\w*\\w*!', reply: 'evil3' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.equal(rules.length, 1);
+  assert.deepEqual(skipped, ['.*.*.*done', '\\w*\\w*\\w*\\w*\\w*!']);
+});
+
+test('parseRules allows two adjacent overlapping quantifiers (O(n^2) is safe under the 1000-char cap)', () => {
+  const { skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '.*.*done', reply: 'a' }, // two dots
+      { mode: 'regex', pattern: '.*\\d+', reply: 'b' },   // dot then \d
+      { mode: 'regex', pattern: '\\w+.*', reply: 'c' },
+    ]),
+  );
+  assert.deepEqual(skipped, []);
+});
+
+test('parseRules rejects a LARGE/unbounded repeat of a variable-width group, allows a small bounded one', () => {
+  // `(a?){40}` is exponential (2^40); a small bounded repeat like `(ab?){2}` is bounded by the constant and
+  // safe. Reject on unbounded or a large count; allow the small ones common in real (e.g. phone) patterns.
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '(a?){40}b', reply: 'evil1' },
+      { mode: 'regex', pattern: '(a?){25}b', reply: 'evil2' },
+      { mode: 'regex', pattern: '(a?)+b', reply: 'evil3' }, // unbounded outer
+      { mode: 'regex', pattern: '(ab?){2}', reply: 'ok1' },
+      { mode: 'regex', pattern: '(\\d{2,4}){3}', reply: 'ok2' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.deepEqual(skipped, ['(a?){40}b', '(a?){25}b', '(a?)+b']);
+  assert.equal(rules.length, 3); // ok1, ok2, hi
+});
+
+test('parseRules: an empty character class [^] / [] does not hide a catastrophic pattern (JS class semantics)', () => {
+  // In JavaScript `[^]` matches ANY char and `[]` is an empty class — the `]` closes the class. A POSIX-style
+  // "leading ] is a literal member" reading would swallow the rest of the pattern and bypass the screen.
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '[^](a+)+!', reply: 'evil1' },
+      { mode: 'regex', pattern: '[](a+)+!', reply: 'evil2' },
+      { mode: 'contains', pattern: 'hi', reply: 'hello' },
+    ]),
+  );
+  assert.equal(rules.length, 1);
+  assert.deepEqual(skipped, ['[^](a+)+!', '[](a+)+!']);
+});
+
+test('parseRules: a normal character class is still accepted (no regression from the empty-class fix)', () => {
+  const { rules, skipped } = parseRules(
+    JSON.stringify([
+      { mode: 'regex', pattern: '[abc]+', reply: 'a' },
+      { mode: 'regex', pattern: '[a\\]b]+', reply: 'b' }, // an escaped ] inside the class
+      { mode: 'regex', pattern: '[^0-9]*x', reply: 'c' },
+    ]),
+  );
+  assert.deepEqual(skipped, []);
+  assert.equal(rules.length, 3);
+});
+
+test('parseRules keeps legitimate patterns (adjacent DISJOINT classes, separated widecards, fixed nesting)', () => {
+  // Regression guard: the hardening must not reject ordinary operator patterns. Adjacent quantifiers
+  // over disjoint classes (a/b/c, \s/\d) are linear; a wildcard separated by a literal is fine; a group
+  // with only a fixed-width body ({2}) repeated is fine.
+  const corpus = [
+    'a*b*c*',        // adjacent, disjoint literals — already a shipped assertion
+    'order\\s+\\d+', // adjacent, disjoint classes
+    '.*urgent.*',    // two wildcards separated by a mandatory literal
+    'https?://\\S+', // single unbounded quantifier
+    '(cat|dog)s?',   // group not repeated
+    'colou?r',       // lone optional
+    '\\d{3}-\\d{4}', // bounded, no repeat-of-variable
+    '(\\d{2}){3}',   // repeated group, FIXED-width body — safe
+    'hi|hello|hey',
+    '\\bprice\\b',
+  ].map((pattern, i) => ({ mode: 'regex', pattern, reply: String(i) }));
+  const { rules, skipped } = parseRules(JSON.stringify(corpus));
+  assert.deepEqual(skipped, []);
+  assert.equal(rules.length, corpus.length);
+});
+
+test('a regex only sees the first MAX_REGEX_INPUT characters, which is what bounds a blow-up', () => {
+  // The input cap is the control for polynomial backtracking, so it has to be pinned. A pattern the
+  // structural screen accepts can still be quadratic or cubic, and the only thing keeping that under
+  // the host's 5 s hook budget is how much text it is handed. Measured on the worst shape that gets
+  // past the screen, `((a|b)*(a|b)*)(a|b)*$` against alternating input: 1000 characters runs past 8 s,
+  // 300 takes 5.8 s, 250 takes 2.8 s, 150 takes 362 ms.
+  const { rules } = parseRules(JSON.stringify([{ mode: 'regex', pattern: 'needle', reply: 'found' }]));
+  assert.ok(matchRule(rules, 'needle at the very start'), 'a match inside the window still works');
+  assert.equal(matchRule(rules, 'x'.repeat(200) + 'needle'), null, 'past the window a regex no longer matches');
+
+  // `contains` and `exact` cannot backtrack, so they are deliberately NOT capped: an operator who
+  // needs "mentions X anywhere in a long message" should use `contains`, and it keeps working.
+  const { rules: contains } = parseRules(JSON.stringify([{ mode: 'contains', pattern: 'needle', reply: 'found' }]));
+  assert.ok(matchRule(contains, 'x'.repeat(5000) + 'needle'), 'contains still sees the whole body');
+});
+
+test('the cap holds the shapes the structural screen lets through', () => {
+  // These are accepted by isSafeRegexPattern and are genuinely polynomial. They are safe only because
+  // of the cap, so this pins the two together: raising it without re-measuring fails here.
+  //
+  // The input has to be adversarial INSIDE the window. The cap slices from the front, so a failing
+  // tail appended to a long message is simply cut off and the regex matches cheaply. An attacker
+  // sends a message whose first MAX_REGEX_INPUT characters are the bad case, which is what this
+  // builds: alternating text filling the window exactly, ending in a character no branch accepts.
+  const adversarial = 'ab'.repeat(Math.ceil(MAX_REGEX_INPUT / 2)).slice(0, MAX_REGEX_INPUT - 1) + 'Z';
+  assert.equal(adversarial.length, MAX_REGEX_INPUT);
+  for (const pattern of ['((a|b)*(a|b)*)(a|b)*$', '(a|b)*(a|b)*(a|b)*$', '[ab]*[bc]*[cd]*$']) {
+    assert.equal(isSafeRegexPattern(pattern), true, `guard rail: the screen accepts ${pattern}`);
+    const { rules } = parseRules(JSON.stringify([{ mode: 'regex', pattern, reply: 'r' }]));
+    // CPU time, not wall time: at this cap a pattern costs 0.8 to 1 s of CPU, and on a busy machine or
+    // beside the other test files the same work took over 2 s of wall time with nothing wrong. Raising
+    // the cap still fails here, because the cost grows with it (250 characters take about 2.8 s).
+    const started = process.cpuUsage();
+    matchRule(rules, adversarial + 'x'.repeat(5000));
+    const { user, system } = process.cpuUsage(started);
+    assert.ok((user + system) / 1000 < 2000, `${pattern} must stay bounded by the cap`);
+  }
+});
+
+test('matchRule: contains is case-insensitive substring; no match returns null', () => {
+  const { rules } = parseRules(ok);
+  assert.equal(matchRule(rules, 'Brp HARGAnya?')?.reply, 'Harga mulai 100rb');
+  assert.equal(matchRule(rules, 'apa kabar'), null);
+});
+
+test('matchRule: exact trims + case-insensitive; regex uses the i flag', () => {
+  const { rules } = parseRules(ok);
+  assert.equal(matchRule(rules, '  MENU ')?.reply, 'Menu: 1) Harga 2) Jam');
+  assert.equal(matchRule(rules, '/START now')?.reply, 'Selamat datang');
+  assert.equal(matchRule(rules, 'nothing here'), null);
+});
+
+test('a bounded repeat of an unbounded body is rejected', () => {
+  // The doc reasoned that a small bounded repeat is "bounded by the constant and safe". That holds for a
+  // variable-width body, not for an unbounded one: `(a+){3}` expands to `a+a+a+`, which backtracks
+  // exponentially. Measured before this case was closed: 200 characters took 1.4 s, 1000 took over 6 s.
+  for (const pattern of ['(a+){3}b', '(a+){2}b', '(\\w+){4}!', '(a*){3}b']) {
+    assert.equal(isSafeRegexPattern(pattern), false, `should reject: ${pattern}`);
+  }
+  // A bounded repeat of a VARIABLE body stays allowed — that is the case the constant really does bound.
+  assert.equal(isSafeRegexPattern('(ab?){2}'), true);
+  assert.equal(isSafeRegexPattern('(abc){5}'), true);
+});
+
+test('a nullable group does not break a run of adjacent unbounded quantifiers', () => {
+  // Rule 2 treats a group boundary as breaking adjacency, which is true only when the group must consume
+  // something. `(x?)` can match empty, so `.*(x?).*(x?).*` is `.*.*.*` wearing a disguise — three
+  // adjacent unbounded quantifiers over overlapping atoms. Measured: 1000 characters took over 6 s.
+  for (const pattern of ['.*(x?).*(x?).*!', '.*(x*).*(x*).*!', '\\w*(a?)\\w*(a?)\\w*!']) {
+    assert.equal(isSafeRegexPattern(pattern), false, `should reject: ${pattern}`);
+  }
+  // A group that must consume still breaks the run, which is what makes these patterns safe.
+  assert.equal(isSafeRegexPattern('.*(x).*(y).*!'), true);
+});
+
+test('an ambiguous repeated alternation is rejected, an unambiguous one is kept', () => {
+  // Two branches that can consume the SAME text give the engine more than one way forward at each
+  // position, and it must try them all on failure. Measured on the real engine: `^([a-z]|[a-z0-9])+$`
+  // takes 259 ms against 23 characters and over a minute against 31, well inside the 1000-char body cap,
+  // and JS regex execution cannot be interrupted. One short message from a stranger pinned the worker,
+  // and every later message queued behind it, so the plugin silently stopped answering.
+  for (const pattern of ['(a|a)*$', '^([a-z]|[a-z0-9])+$', '^(\\w|\\d)+$', '(a|ab)+', '(x|xy|xyz)+']) {
+    assert.equal(isSafeRegexPattern(pattern), false, `should reject: ${pattern}`);
+  }
+  // Sharing a first character is NOT enough: `two` and `three` both start with `t` but diverge at the
+  // next character, so no input can split two ways. Rejecting these would break ordinary keyword rules.
+  for (const pattern of ['(one|two|three)+', '(cat|dog)', '^(yes|no)$', '(foo|bar)*', '(ya|tidak)+', 'hal(o|lo)']) {
+    assert.equal(isSafeRegexPattern(pattern), true, `should accept: ${pattern}`);
+  }
+});
+
+test('a wrapping group does not hide an ambiguous repeated alternation', () => {
+  // The rejection only ever inspected the branches of the group being closed, so moving the quantifier
+  // one level out left it looking at a single-branch frame and it stopped firing. Every pattern here is
+  // the accepted one above with nothing added but cover; measured on the real engine against a
+  // 27-character message, `((a|a))+$` took ~8.9 s and `^(([a-z]|[a-z0-9]))+$` ~4.9 s, both past the
+  // host's 5 s hook budget, which a regex cannot be interrupted to honour.
+  for (const pattern of [
+    '((a|a))+$',
+    '(?:(a|a))+$',
+    '((?:a|a))+$',
+    '(((a|a)))+$',
+    '^(([a-z]|[a-z0-9]))+$',
+    '((\\w|\\d))+$',
+    '^((ya|ya))+$',
+    '((a|a)){2}',
+    '((a|a)){3,}',
+  ]) {
+    assert.equal(isSafeRegexPattern(pattern), false, `should reject: ${pattern}`);
+  }
+  // An ambiguous alternation that is never repeated is linear, however deeply it is wrapped.
+  for (const pattern of ['(a|a)', '((a|a))', '((a|a)){1}', '((a|a))?', '((a|b))+$']) {
+    assert.equal(isSafeRegexPattern(pattern), true, `should accept: ${pattern}`);
+  }
+});
+
+test('a wrapper that adds a mandatory atom is not cover, so ordinary keyword rules still compile', () => {
+  // The guard rail for the test above, and the reason the propagation is limited to PURE cover. Every
+  // pattern here nests an alternation whose branches share a first character inside a repeated group,
+  // which is the shape the test above rejects. They are all linear anyway, because the wrapper also
+  // contributes a MANDATORY atom (a space, a comma, a colon) that realigns every iteration, so the
+  // branches can never consume the same text two ways. Each measures 0.0 ms against the 1000-character
+  // input cap, and each is a rule an operator really writes. Propagating the inner verdict through
+  // these wrappers refused all of them, which would silently stop an upgraded install from replying
+  // with no config change and no error the operator sees.
+  for (const pattern of [
+    '^((no|nope) )+$',
+    '^((thank|thanks) )+$',
+    '^((cek|cekresi):)+$',
+    '((ok|oke)\\s)+',
+    '^((ya|yaa),)+$',
+    '^((halo|(hai|hei)) )+$',
+    '^((satu|dua|(tiga|empat)),)+$',
+    '^((cs|(admin|support)):)+$',
+    '^((0|00),)+$',
+  ]) {
+    assert.equal(isSafeRegexPattern(pattern), true, `should accept: ${pattern}`);
+    // Accepting is only meaningful if accepting is safe, so prove each is fast at the full input cap.
+    const started = Date.now();
+    new RegExp(pattern, 'i').test('no '.repeat(333) + 'x');
+    assert.ok(Date.now() - started < 200, `${pattern} is slow at the input cap`);
+  }
+});
+
+test('an accepted alternation stays fast at the full input cap', () => {
+  // The guard rail for the test above: proving a pattern is accepted is only meaningful if accepting it
+  // is actually safe.
+  const re = new RegExp('^(one|two|three)+$');
+  const started = performance.now();
+  re.test('one'.repeat(333) + 'x');
+  assert.ok(performance.now() - started < 100, 'an accepted alternation must not backtrack');
+});

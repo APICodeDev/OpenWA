@@ -1,0 +1,353 @@
+{
+  "id": "chat-flow",
+  "name": "Chat Flow",
+  "version": "1.1.13",
+  "type": "extension",
+  "main": "dist/index.js",
+  "description": "Interactive, stateful auto-reply: a trigger word starts a greeting + numbered menu, replies traverse a configurable menu tree, and per-chat state expires after 15 minutes.",
+  "author": "Yudhi Armyndharis <yudhi@rmyndharis.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/rmyndharis/OpenWA-plugins/tree/main/chat-flow",
+  "repository": "https://github.com/rmyndharis/OpenWA-plugins",
+  "keywords": [
+    "menu",
+    "flow",
+    "interactive",
+    "auto-reply",
+    "chatbot",
+    "whatsapp",
+    "openwa"
+  ],
+  "status": "stable",
+  "minOpenWAVersion": "0.7.0",
+  "testedOpenWAVersion": "0.26.0",
+  "provides": [
+    "auto-reply"
+  ],
+  "permissions": [
+    "messages:send",
+    "storage:use"
+  ],
+  "sessionScoped": true,
+  "sessions": [
+    "*"
+  ],
+  "hooks": [
+    "message:received"
+  ],
+  "configUi": {
+    "entry": "config/index.html",
+    "height": 600
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "trigger": {
+        "type": "string",
+        "title": "Trigger word",
+        "description": "The word that starts the flow (case-insensitive). Leave empty to start on any message."
+      },
+      "greeting": {
+        "type": "textarea",
+        "required": true,
+        "title": "Greeting + menu",
+        "description": "Sent when the flow starts. Include your numbered menu here."
+      },
+      "respondInGroups": {
+        "type": "boolean",
+        "default": false,
+        "title": "Also respond in group chats"
+      },
+      "options": {
+        "type": "array",
+        "required": true,
+        "title": "Menu options",
+        "description": "The menu tree. Each option has a key (what the user types, e.g. \"1\"), the reply text, and optional sub-options. Edit visually in the Flow editor.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "title": "Key"
+            },
+            "text": {
+              "type": "textarea",
+              "title": "Reply text"
+            },
+            "options": {
+              "type": "array",
+              "title": "Sub-options",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "title": "Key"
+                  },
+                  "text": {
+                    "type": "textarea",
+                    "title": "Reply text"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "i18n": {
+    "es": {
+      "name": "Flujo de Chat",
+      "description": "Auto-respuesta interactiva con estado: una palabra clave abre un saludo y un menú numerado; las respuestas recorren un árbol de menús configurable.",
+      "config": {
+        "trigger": {
+          "title": "Palabra clave"
+        },
+        "greeting": {
+          "title": "Saludo + menú"
+        },
+        "respondInGroups": {
+          "title": "Responder también en grupos"
+        },
+        "options": {
+          "title": "Opciones del menú"
+        }
+      }
+    },
+    "fr": {
+      "name": "Flux de Chat",
+      "description": "Réponse automatique interactive et avec état : un mot-clé ouvre un message d'accueil et un menu numéroté ; les réponses parcourent une arborescence de menus configurable.",
+      "config": {
+        "trigger": {
+          "title": "Mot-clé déclencheur"
+        },
+        "greeting": {
+          "title": "Message d'accueil + menu"
+        },
+        "respondInGroups": {
+          "title": "Répondre aussi dans les groupes"
+        },
+        "options": {
+          "title": "Options du menu"
+        }
+      }
+    },
+    "it": {
+      "name": "Flusso di Chat",
+      "description": "Risposta automatica interattiva e con stato: una parola chiave apre un saluto e un menu numerato; le risposte percorrono un albero di menu configurabile.",
+      "config": {
+        "trigger": {
+          "title": "Parola chiave"
+        },
+        "greeting": {
+          "title": "Saluto + menu"
+        },
+        "respondInGroups": {
+          "title": "Rispondi anche nei gruppi"
+        },
+        "options": {
+          "title": "Opzioni del menu"
+        }
+      }
+    },
+    "ar": {
+      "name": "تدفّق المحادثة",
+      "description": "رد تلقائي تفاعلي ذو حالة: كلمة مفتاحية تفتح تحية وقائمة مرقّمة؛ تتنقّل الردود عبر شجرة قوائم قابلة للتهيئة.",
+      "config": {
+        "trigger": {
+          "title": "الكلمة المفتاحية"
+        },
+        "greeting": {
+          "title": "التحية + القائمة"
+        },
+        "respondInGroups": {
+          "title": "الرد في المجموعات أيضًا"
+        },
+        "options": {
+          "title": "خيارات القائمة"
+        }
+      }
+    },
+    "he": {
+      "name": "זרימת צ'אט",
+      "description": "מענה אוטומטי אינטראקטיבי עם מצב: מילת מפתח פותחת ברכה ותפריט ממוספר; התשובות עוברות בעץ תפריטים הניתן להגדרה.",
+      "config": {
+        "trigger": {
+          "title": "מילת מפתח"
+        },
+        "greeting": {
+          "title": "ברכה + תפריט"
+        },
+        "respondInGroups": {
+          "title": "מענה גם בקבוצות"
+        },
+        "options": {
+          "title": "אפשרויות התפריט"
+        }
+      }
+    },
+    "te": {
+      "name": "చాట్ ఫ్లో",
+      "description": "ఇంటరాక్టివ్, స్థితి ఆధారిత ఆటో-రిప్లై: ఒక ట్రిగ్గర్ పదం స్వాగతం + నంబర్ మెనూను తెరుస్తుంది; జవాబులు కాన్ఫిగర్ చేయదగిన మెనూ ట్రీలో ప్రయాణిస్తాయి.",
+      "config": {
+        "trigger": {
+          "title": "ట్రిగ్గర్ పదం"
+        },
+        "greeting": {
+          "title": "స్వాగతం + మెనూ"
+        },
+        "respondInGroups": {
+          "title": "గ్రూపుల్లోనూ స్పందించు"
+        },
+        "options": {
+          "title": "మెనూ ఎంపికలు"
+        }
+      }
+    },
+    "zh-CN": {
+      "name": "聊天流程",
+      "description": "交互式有状态自动回复：触发词打开问候语和带编号的菜单；回复会沿可配置的菜单树前进。",
+      "config": {
+        "trigger": {
+          "title": "触发词"
+        },
+        "greeting": {
+          "title": "问候语 + 菜单"
+        },
+        "respondInGroups": {
+          "title": "也在群组中回复"
+        },
+        "options": {
+          "title": "菜单选项"
+        }
+      }
+    },
+    "zh-HK": {
+      "name": "聊天流程",
+      "description": "互動式有狀態自動回覆：觸發詞開啟問候語和編號選單；回覆會沿可設定的選單樹前進。",
+      "config": {
+        "trigger": {
+          "title": "觸發詞"
+        },
+        "greeting": {
+          "title": "問候語 + 選單"
+        },
+        "respondInGroups": {
+          "title": "亦在群組中回覆"
+        },
+        "options": {
+          "title": "選單選項"
+        }
+      }
+    },
+    "hi": {
+      "name": "चैट फ्लो",
+      "description": "इंटरएक्टिव, स्टेटफुल ऑटो-रिप्लाई: एक ट्रिगर शब्द ग्रीटिंग + क्रमांकित मेनू को शुरू करता है, रिप्लाई एक कॉन्फ़िगर किए जा सकने वाले मेनू ट्री में आगे बढ़ते हैं, और प्रति-चैट स्टेट 15 मिनट के बाद समाप्त हो जाता है।",
+      "config": {
+        "trigger": {
+          "title": "ट्रिगर शब्द"
+        },
+        "greeting": {
+          "title": "ग्रीटिंग + मेनू"
+        },
+        "respondInGroups": {
+          "title": "ग्रुप चैट्स में भी रिप्लाई करें"
+        },
+        "options": {
+          "title": "मेनू विकल्प"
+        }
+      }
+    },
+    "de": {
+      "name": "Chat-Menü",
+      "description": "Ein Auslösewort startet ein konfigurierbares Menü. Der Gesprächsstatus läuft nach 15 Minuten ab.",
+      "config": {
+        "trigger": {
+          "title": "Auslösewort"
+        },
+        "greeting": {
+          "title": "Begrüßung und Menü"
+        },
+        "respondInGroups": {
+          "title": "Auch in Gruppenchats antworten"
+        },
+        "options": {
+          "title": "Menüoptionen"
+        }
+      }
+    },
+    "tr": {
+      "name": "Sohbet Akışı",
+      "description": "Bir tetikleyici sözcük yapılandırılabilir bir menüyü başlatır. Sohbet durumu 15 dakika sonra sona erer.",
+      "config": {
+        "trigger": {
+          "title": "Tetikleyici sözcük"
+        },
+        "greeting": {
+          "title": "Karşılama ve menü"
+        },
+        "respondInGroups": {
+          "title": "Grup sohbetlerinde de yanıtla"
+        },
+        "options": {
+          "title": "Menü seçenekleri"
+        }
+      }
+    },
+    "pt-BR": {
+      "name": "Fluxo de conversa",
+      "description": "Uma palavra inicia um menu configurável. O estado da conversa expira após 15 minutos.",
+      "config": {
+        "trigger": {
+          "title": "Palavra de ativação"
+        },
+        "greeting": {
+          "title": "Saudação e menu"
+        },
+        "respondInGroups": {
+          "title": "Responder também em grupos"
+        },
+        "options": {
+          "title": "Opções do menu"
+        }
+      }
+    },
+    "ko": {
+      "name": "채팅 흐름",
+      "description": "시작 단어로 설정 가능한 메뉴를 열며 대화 상태는 15분 후 만료됩니다.",
+      "config": {
+        "trigger": {
+          "title": "시작 단어"
+        },
+        "greeting": {
+          "title": "인사말 및 메뉴"
+        },
+        "respondInGroups": {
+          "title": "그룹 채팅에도 응답"
+        },
+        "options": {
+          "title": "메뉴 항목"
+        }
+      }
+    },
+    "id": {
+      "name": "Alur Percakapan",
+      "description": "Kata pemicu memulai menu yang dapat dikonfigurasi. Status percakapan kedaluwarsa setelah 15 menit.",
+      "config": {
+        "trigger": {
+          "title": "Kata pemicu"
+        },
+        "greeting": {
+          "title": "Sapaan dan menu"
+        },
+        "respondInGroups": {
+          "title": "Balas juga di chat grup"
+        },
+        "options": {
+          "title": "Pilihan menu"
+        }
+      }
+    }
+  }
+}

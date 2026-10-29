@@ -1,0 +1,77 @@
+import type { IPlugin, PluginContext } from '../types/openwa';
+import { handleSendSms, readConfig } from './handler.ts';
+
+/**
+ * Supabase Send SMS Hook.
+ *
+ * Receives Supabase Auth's Send SMS hook on the ingress route "send-sms". The host verifies the
+ * Standard Webhooks signature (manifest signature.scheme: 'standard-webhooks', secret = instance.secret)
+ * and runs the `session-alive` preflight before dispatching this handler, so Supabase gets synchronous
+ * feedback: 401 on a bad signature, 503 on a dead session, and 204 on accept. The ack carries no body
+ * and no content type, the one shape Supabase Auth accepts from every supported host. It refuses a 200
+ * or a 202 whose content type does not parse to application/json. Hosts 0.20.0 through 0.23.5 force
+ * text/plain on every ingress response (`res.type('text/plain')` after `res.set`, ingress.controller.ts)
+ * so a declared application/json never reaches the wire there; 0.23.6 honors a declared
+ * application/json or text/plain (ackContentType, ingress-ack.ts) and still sends any other type as
+ * text/plain. The floor is 0.8.16, so the ack stays a 204, which carries no content type on any host
+ * and returns before Supabase inspects the response at all.
+ * Needs Supabase Auth v2.172.0+, the first release that accepts a bodiless 204 from an HTTP hook.
+ *
+ * This handler runs async from the ingress worker (retry + DLQ) and only parses the payload + fires the
+ * WhatsApp send. It waits just long enough to catch a send that fails immediately, so the host retries
+ * and dead-letters those, and leaves a slow one running in the background: an awaited slow send would
+ * burn the worker's 5 s dispatch budget and retry into a duplicate OTP.
+ */
+export default class SupabaseSmsHook implements IPlugin {
+  // Outcome of the most recent send, cleared by the next one that succeeds. A send that fails AFTER the
+  // handler's fail-fast window has closed reaches nobody else: Supabase was acked 204 and the ingress
+  // job already completed, so there is no retry and no dead-letter row. healthCheck is the only surface
+  // the dashboard renders, so this is where such an OTP surfaces as lost.
+  private lastSendError: string | null = null;
+
+  async onEnable(ctx: PluginContext): Promise<void> {
+    // Fail fast at enable time on the base config so a missing secret surfaces in the dashboard
+    // instead of failing per-delivery. Per-instance config is re-read in the handler via ctx.config.
+    readConfig(ctx.config);
+
+    ctx.registerWebhook('send-sms', async req => {
+      // Re-read config per delivery so edits (secret rotation, template tweak) apply live.
+      //
+      // A config edit made after enable never re-runs the check above: the plugin declares no
+      // onConfigChange, and the host pushes config to the worker fire-and-forget. So an operator who
+      // clears a required field saves successfully and the breakage first appears HERE, on every
+      // delivery. Letting the throw escape would dead-letter each OTP while healthCheck stayed green,
+      // which is the one state this plugin's health surface exists to prevent; record it instead.
+      let config: ReturnType<typeof readConfig>;
+      try {
+        config = readConfig(ctx.config);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        ctx.logger.warn(`supabase-otp-hook: config is invalid, OTP not sent: ${reason}`);
+        this.lastSendError = reason;
+        return;
+      }
+      return handleSendSms(
+        {
+          config,
+          messages: ctx.messages,
+          log: (m, meta) => ctx.logger.warn(m, meta),
+          onSendResult: error => {
+            this.lastSendError = error;
+          },
+        },
+        req,
+      );
+    });
+
+    ctx.logger.log('supabase-otp-hook enabled');
+  }
+
+  async healthCheck(): Promise<{ healthy: boolean; message?: string }> {
+    if (!this.lastSendError) return { healthy: true };
+    // Unhealthy while the last OTP is on record as undelivered. The plugin is up, but the one thing it
+    // exists to do did not happen, and the host reporting a plugin without a health check as healthy is
+    // what kept that invisible.
+    return { healthy: false, message: `last OTP send failed: ${this.lastSendError.slice(0, 200)}` };
+  }
+}

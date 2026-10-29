@@ -1,0 +1,520 @@
+{
+  "id": "http-action",
+  "name": "HTTP Action Bot",
+  "version": "0.2.13",
+  "type": "extension",
+  "main": "dist/index.js",
+  "description": "Triggers safe REST API requests from WhatsApp commands and renders JSON responses back to chat.",
+  "author": "Yudhi Armyndharis <yudhi@rmyndharis.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/rmyndharis/OpenWA-plugins/tree/main/http-action",
+  "repository": "https://github.com/rmyndharis/OpenWA-plugins",
+  "keywords": [
+    "api",
+    "rest",
+    "automation",
+    "connector",
+    "whatsapp",
+    "openwa"
+  ],
+  "status": "stable",
+  "testedOpenWAVersion": "0.26.0",
+  "minOpenWAVersion": "0.8.0",
+  "sdkVersion": "1",
+  "provides": [
+    "api-automation",
+    "rest-connector",
+    "dynamic-reply"
+  ],
+  "permissions": [
+    "net:fetch",
+    "conversation:send",
+    "storage:use"
+  ],
+  "net": {
+    "allow": [],
+    "allowConfigHosts": [
+      "baseUrl"
+    ]
+  },
+  "sessionScoped": true,
+  "sessions": [
+    "*"
+  ],
+  "hooks": [
+    "message:received"
+  ],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "title": "Base URL",
+        "required": true,
+        "description": "HTTPS origin, e.g. https://erp.example.com. Its host is auto-added to the outbound allowlist (allowConfigHosts). Must be non-empty — without it every fetch is silently gated to a no-op."
+      },
+      "authType": {
+        "type": "string",
+        "enum": [
+          "none",
+          "bearer",
+          "apikey"
+        ],
+        "default": "none"
+      },
+      "authToken": {
+        "type": "string",
+        "title": "Token / API key",
+        "secret": true,
+        "description": "Bearer token or API key (per authType). Masked ***."
+      },
+      "apiKeyHeader": {
+        "type": "string",
+        "default": "X-API-Key",
+        "description": "Header name to use when authType=apikey."
+      },
+      "respondInGroups": {
+        "type": "boolean",
+        "default": false
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 3000,
+        "min": 500
+      },
+      "cooldownSeconds": {
+        "type": "number",
+        "default": 3,
+        "min": 0
+      },
+      "actions": {
+        "type": "textarea",
+        "title": "Actions (JSON array)",
+        "required": true,
+        "description": "JSON array of actions. Example: [{\"id\":\"check-order\",\"match\":{\"type\":\"prefix\",\"value\":\"cek-order \"},\"request\":{\"method\":\"GET\",\"path\":\"/orders/{{args.0}}\"},\"replyTemplate\":\"Order {{response.orderId}}: {{response.status}}\"}]. Parsed at config time. Values inside request.headers are NOT masked: this field holds every action as one JSON string, and marking it secret would hide the action definitions themselves, so anything typed into an action header is returned in plaintext by GET /plugins. Put credentials in Token / API key."
+      }
+    }
+  },
+  "i18n": {
+    "es": {
+      "name": "Bot de acciones HTTP",
+      "description": "Ejecuta solicitudes seguras a API REST desde comandos de WhatsApp y muestra las respuestas JSON en el chat.",
+      "config": {
+        "baseUrl": {
+          "title": "URL base"
+        },
+        "authType": {
+          "title": "Tipo de autenticación"
+        },
+        "authToken": {
+          "title": "Token / clave de API"
+        },
+        "apiKeyHeader": {
+          "title": "Encabezado de clave de API"
+        },
+        "respondInGroups": {
+          "title": "Responder en grupos"
+        },
+        "timeoutMs": {
+          "title": "Tiempo de espera de la solicitud (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Enfriamiento (segundos)"
+        },
+        "actions": {
+          "title": "Acciones (array JSON)"
+        }
+      }
+    },
+    "fr": {
+      "name": "Bot d'actions HTTP",
+      "description": "Déclenche des requêtes API REST sécurisées depuis des commandes WhatsApp et affiche les réponses JSON dans le chat.",
+      "config": {
+        "baseUrl": {
+          "title": "URL de base"
+        },
+        "authType": {
+          "title": "Type d'authentification"
+        },
+        "authToken": {
+          "title": "Jeton / clé API"
+        },
+        "apiKeyHeader": {
+          "title": "En-tête de clé API"
+        },
+        "respondInGroups": {
+          "title": "Répondre dans les groupes"
+        },
+        "timeoutMs": {
+          "title": "Délai d'attente de la requête (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Temps de recharge (secondes)"
+        },
+        "actions": {
+          "title": "Actions (tableau JSON)"
+        }
+      }
+    },
+    "it": {
+      "name": "Bot di azioni HTTP",
+      "description": "Esegue richieste sicure a API REST dai comandi WhatsApp e mostra le risposte JSON nella chat.",
+      "config": {
+        "baseUrl": {
+          "title": "URL di base"
+        },
+        "authType": {
+          "title": "Tipo di autenticazione"
+        },
+        "authToken": {
+          "title": "Token / chiave API"
+        },
+        "apiKeyHeader": {
+          "title": "Header della chiave API"
+        },
+        "respondInGroups": {
+          "title": "Rispondi nei gruppi"
+        },
+        "timeoutMs": {
+          "title": "Timeout della richiesta (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Tempo di attesa (secondi)"
+        },
+        "actions": {
+          "title": "Azioni (array JSON)"
+        }
+      }
+    },
+    "ar": {
+      "name": "بوت إجراءات HTTP",
+      "description": "يشغّل طلبات REST API آمنة من أوامر WhatsApp ويعرض استجابات JSON في المحادثة.",
+      "config": {
+        "baseUrl": {
+          "title": "الرابط الأساسي"
+        },
+        "authType": {
+          "title": "نوع المصادقة"
+        },
+        "authToken": {
+          "title": "الرمز / مفتاح API"
+        },
+        "apiKeyHeader": {
+          "title": "ترويسة مفتاح API"
+        },
+        "respondInGroups": {
+          "title": "الرد في المجموعات"
+        },
+        "timeoutMs": {
+          "title": "مهلة الطلب (ميلي ثانية)"
+        },
+        "cooldownSeconds": {
+          "title": "فترة التهدئة (بالثواني)"
+        },
+        "actions": {
+          "title": "الإجراءات (مصفوفة JSON)"
+        }
+      }
+    },
+    "he": {
+      "name": "בוט פעולות HTTP",
+      "description": "מפעיל בקשות REST API בטוחות מפקודות WhatsApp ומציג תגובות JSON חזרה בצ'אט.",
+      "config": {
+        "baseUrl": {
+          "title": "כתובת בסיס"
+        },
+        "authType": {
+          "title": "סוג אימות"
+        },
+        "authToken": {
+          "title": "אסימון / מפתח API"
+        },
+        "apiKeyHeader": {
+          "title": "כותרת מפתח API"
+        },
+        "respondInGroups": {
+          "title": "השב בקבוצות"
+        },
+        "timeoutMs": {
+          "title": "פסק זמן לבקשה (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "צינון (שניות)"
+        },
+        "actions": {
+          "title": "פעולות (מערך JSON)"
+        }
+      }
+    },
+    "te": {
+      "name": "HTTP యాక్షన్ బాట్",
+      "description": "WhatsApp కమాండ్‌ల నుండి సురక్షిత REST API అభ్యర్థనలను ట్రిగర్ చేసి, JSON ప్రతిస్పందనలను చాట్‌లో చూపిస్తుంది.",
+      "config": {
+        "baseUrl": {
+          "title": "బేస్ URL"
+        },
+        "authType": {
+          "title": "ప్రామాణీకరణ రకం"
+        },
+        "authToken": {
+          "title": "టోకెన్ / API కీ"
+        },
+        "apiKeyHeader": {
+          "title": "API కీ హెడర్"
+        },
+        "respondInGroups": {
+          "title": "గ్రూపులలో స్పందించు"
+        },
+        "timeoutMs": {
+          "title": "అభ్యర్థన గడువు (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "కూల్‌డౌన్ (సెకన్లు)"
+        },
+        "actions": {
+          "title": "చర్యలు (JSON శ్రేణి)"
+        }
+      }
+    },
+    "zh-CN": {
+      "name": "HTTP 动作机器人",
+      "description": "从 WhatsApp 命令触发安全的 REST API 请求，并将 JSON 响应展示回聊天中。",
+      "config": {
+        "baseUrl": {
+          "title": "基础 URL"
+        },
+        "authType": {
+          "title": "认证类型"
+        },
+        "authToken": {
+          "title": "令牌 / API 密钥"
+        },
+        "apiKeyHeader": {
+          "title": "API 密钥请求头"
+        },
+        "respondInGroups": {
+          "title": "在群组中回复"
+        },
+        "timeoutMs": {
+          "title": "请求超时（毫秒）"
+        },
+        "cooldownSeconds": {
+          "title": "冷却时间（秒）"
+        },
+        "actions": {
+          "title": "动作（JSON 数组）"
+        }
+      }
+    },
+    "zh-HK": {
+      "name": "HTTP 動作機器人",
+      "description": "從 WhatsApp 指令觸發安全的 REST API 請求，並將 JSON 回應顯示回對話中。",
+      "config": {
+        "baseUrl": {
+          "title": "基礎 URL"
+        },
+        "authType": {
+          "title": "認證類型"
+        },
+        "authToken": {
+          "title": "權杖 / API 金鑰"
+        },
+        "apiKeyHeader": {
+          "title": "API 金鑰標頭"
+        },
+        "respondInGroups": {
+          "title": "在群組中回覆"
+        },
+        "timeoutMs": {
+          "title": "請求逾時（毫秒）"
+        },
+        "cooldownSeconds": {
+          "title": "冷卻時間（秒）"
+        },
+        "actions": {
+          "title": "動作（JSON 陣列）"
+        }
+      }
+    },
+    "hi": {
+      "name": "HTTP एक्शन बॉट",
+      "description": "WhatsApp कमांड्स से सुरक्षित REST API अनुरोधों को ट्रिगर करता है और JSON रिस्पॉन्स को वापस चैट में रेंडर करता है।",
+      "config": {
+        "baseUrl": {
+          "title": "बेस URL"
+        },
+        "authType": {
+          "title": "प्रमाणीकरण प्रकार"
+        },
+        "authToken": {
+          "title": "टोकन / API कुंजी"
+        },
+        "apiKeyHeader": {
+          "title": "API कुंजी हेडर"
+        },
+        "respondInGroups": {
+          "title": "ग्रुप चैट्स में रिप्लाई करें"
+        },
+        "timeoutMs": {
+          "title": "अनुरोध टाइमआउट (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "कूलडाउन (सेकंड)"
+        },
+        "actions": {
+          "title": "एक्शन्स (JSON ऐरे)"
+        }
+      }
+    },
+    "de": {
+      "name": "HTTP-Aktionsbot",
+      "description": "Führt sichere REST-Anfragen aus WhatsApp-Befehlen aus und sendet die JSON-Ergebnisse zurück.",
+      "config": {
+        "baseUrl": {
+          "title": "Basis-URL"
+        },
+        "authType": {
+          "title": "Authentifizierungstyp"
+        },
+        "authToken": {
+          "title": "Token / API-Schlüssel"
+        },
+        "apiKeyHeader": {
+          "title": "API-Schlüssel-Header"
+        },
+        "respondInGroups": {
+          "title": "Auch in Gruppenchats antworten"
+        },
+        "timeoutMs": {
+          "title": "Anfragezeitlimit (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Wartezeit (Sekunden)"
+        },
+        "actions": {
+          "title": "Aktionen (JSON-Array)"
+        }
+      }
+    },
+    "tr": {
+      "name": "HTTP Eylem Botu",
+      "description": "WhatsApp komutlarından güvenli REST istekleri çalıştırır ve JSON sonuçlarını sohbete gönderir.",
+      "config": {
+        "baseUrl": {
+          "title": "Temel URL adresi"
+        },
+        "authType": {
+          "title": "Kimlik doğrulama türü"
+        },
+        "authToken": {
+          "title": "Belirteç / API anahtarı"
+        },
+        "apiKeyHeader": {
+          "title": "API anahtarı başlığı"
+        },
+        "respondInGroups": {
+          "title": "Grup sohbetlerinde de yanıtla"
+        },
+        "timeoutMs": {
+          "title": "İstek zaman aşımı (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Bekleme süresi (saniye)"
+        },
+        "actions": {
+          "title": "Eylemler (JSON dizisi)"
+        }
+      }
+    },
+    "pt-BR": {
+      "name": "Bot de ações HTTP",
+      "description": "Executa requisições REST seguras a partir de comandos do WhatsApp e envia os resultados JSON à conversa.",
+      "config": {
+        "baseUrl": {
+          "title": "URL base"
+        },
+        "authType": {
+          "title": "Tipo de autenticação"
+        },
+        "authToken": {
+          "title": "Token / chave da API"
+        },
+        "apiKeyHeader": {
+          "title": "Cabeçalho da chave da API"
+        },
+        "respondInGroups": {
+          "title": "Responder também em grupos"
+        },
+        "timeoutMs": {
+          "title": "Tempo limite da requisição (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Intervalo (segundos)"
+        },
+        "actions": {
+          "title": "Ações (array JSON)"
+        }
+      }
+    },
+    "ko": {
+      "name": "HTTP 작업 봇",
+      "description": "WhatsApp 명령으로 안전한 REST 요청을 실행하고 JSON 결과를 채팅으로 보냅니다.",
+      "config": {
+        "baseUrl": {
+          "title": "기본 URL"
+        },
+        "authType": {
+          "title": "인증 유형"
+        },
+        "authToken": {
+          "title": "토큰 / API 키"
+        },
+        "apiKeyHeader": {
+          "title": "API 키 헤더"
+        },
+        "respondInGroups": {
+          "title": "그룹 채팅에도 응답"
+        },
+        "timeoutMs": {
+          "title": "요청 제한 시간 (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "대기 시간 (초)"
+        },
+        "actions": {
+          "title": "작업 (JSON 배열)"
+        }
+      }
+    },
+    "id": {
+      "name": "Bot Aksi HTTP",
+      "description": "Menjalankan permintaan REST yang aman dari perintah WhatsApp dan mengirim hasil JSON kembali ke chat.",
+      "config": {
+        "baseUrl": {
+          "title": "URL dasar"
+        },
+        "authType": {
+          "title": "Jenis autentikasi"
+        },
+        "authToken": {
+          "title": "Token / kunci API"
+        },
+        "apiKeyHeader": {
+          "title": "Header kunci API"
+        },
+        "respondInGroups": {
+          "title": "Balas juga di chat grup"
+        },
+        "timeoutMs": {
+          "title": "Batas waktu permintaan (ms)"
+        },
+        "cooldownSeconds": {
+          "title": "Jeda (detik)"
+        },
+        "actions": {
+          "title": "Aksi (array JSON)"
+        }
+      }
+    }
+  }
+}
