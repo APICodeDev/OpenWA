@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule, DASHBOARD_DIST, dashboardServingEnabled, dashboardBuildPresent } from './app.module';
 import { ShutdownService } from './common/services/shutdown.service';
-import { LoggerService, LogLevel, createLogger } from './common/services/logger.service';
+import { applyLogLevelFromEnv, createLogger } from './common/services/logger.service';
 import {
   createSwaggerConfig,
   documentErrorResponses,
@@ -46,12 +46,10 @@ import { prestartBuiltinDatabase } from './modules/docker/docker.service';
 let appInstance: INestApplication | undefined;
 
 async function bootstrap() {
-  // Apply the operator-configured log verbosity (LOG_LEVEL) before anything logs. Unset means INFO.
-  // A misspelling is skipped here; validateEnv below rejects it before the boot has any side effect.
-  const requestedLevel = process.env.LOG_LEVEL?.trim().toLowerCase();
-  if (requestedLevel && (Object.values(LogLevel) as string[]).includes(requestedLevel)) {
-    LoggerService.setLogLevel(requestedLevel as LogLevel);
-  }
+  // The env loader already applied LOG_LEVEL to its own lines once the env files were merged; applying
+  // it again here is a no-op that keeps the rule visible. Unset means INFO. A misspelling is skipped;
+  // validateEnv below rejects it before the boot has any side effect.
+  applyLogLevelFromEnv();
 
   // Backstop for promise rejections that escaped a local handler (e.g. a fire-and-forget engine-event
   // dispatch), including the expected engine-teardown case it downgrades to a warning (see the helper).

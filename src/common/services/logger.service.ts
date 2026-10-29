@@ -475,6 +475,18 @@ export class LoggerService implements NestLoggerService {
   }
 }
 
+/**
+ * Apply LOG_LEVEL as boot reads it: trimmed, lower-cased, and only a level this logger knows. A
+ * misspelling is skipped here and refused by validateEnv with its own message. Shared by the env
+ * loader and main.ts so the two cannot read the variable differently.
+ */
+export function applyLogLevelFromEnv(raw: string | undefined = process.env.LOG_LEVEL): void {
+  const requested = raw?.trim().toLowerCase();
+  if (requested && (Object.values(LogLevel) as string[]).includes(requested)) {
+    LoggerService.setLogLevel(requested as LogLevel);
+  }
+}
+
 // Create a factory for easy instantiation
 export function createLogger(context: string): LoggerService {
   const logger = new LoggerService();
