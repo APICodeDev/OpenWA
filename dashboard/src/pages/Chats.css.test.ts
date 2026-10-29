@@ -72,6 +72,29 @@ test('the session picker is capped by the list column, so the layout never clips
   assert.equal(declared('.chats-page .session-picker-list', 'overflow-y'), 'auto');
 });
 
+test('the room menu is capped by the room, so the layout never clips its last entries on a short window', () => {
+  // Hung from its button the menu had no cap, and at 740 by 360 it ran 190px past the layout's bottom edge.
+  const declared = (selector: string, property: string): string | undefined =>
+    rulesFor(selector)
+      .map(body => new RegExp(`(?:^|;)\\s*${property}:\\s*([^;]+)`).exec(body)?.[1].trim())
+      .filter(Boolean)
+      .pop();
+  assert.equal(declared('.chats-page .room-container', 'position'), 'relative');
+  assert.equal(declared('.chats-page .room-menu', 'position'), undefined, 'the menu button holds the menu');
+  assert.equal(declared('.chats-page .room-header', 'position'), undefined, 'the header holds the menu');
+  assert.equal(declared('.chats-page .room-menu-popover', 'position'), 'absolute');
+  assert.match(declared('.chats-page .room-menu-popover', 'max-height') ?? '', /^calc\(100% - /);
+  assert.equal(declared('.chats-page .room-menu-popover', 'overflow-y'), 'auto');
+  // Placed under the header and at the menu button's end edge: the header's end padding, the contact panel button
+  // and the gap between the two.
+  assert.equal(declared('.chats-page .room-header', 'height'), '64px');
+  assert.match(declared('.chats-page .room-header', 'padding-inline') ?? '', / 0\.75rem$/);
+  assert.equal(declared('.chats-page .room-header-actions', 'gap'), '0.25rem');
+  assert.equal(declared('.chats-page .icon-btn', 'width'), '40px');
+  assert.equal(declared('.chats-page .room-menu-popover', 'inset-inline-end'), 'calc(0.75rem + 40px + 0.25rem)');
+  assert.match(declared('.chats-page .room-menu-popover', 'top') ?? '', /^calc\(64px /);
+});
+
 test('the page gives up the phone bar under the query that draws it, so 768px keeps its full height', () => {
   const layout = readFileSync(join(here, '..', 'components', 'Layout.tsx'), 'utf8');
   const mobile = /const MOBILE_QUERY = '([^']+)'/.exec(layout)?.[1];

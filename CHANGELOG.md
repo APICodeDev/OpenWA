@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Name the buttons that remove a staged file and close a reply above the dashboard chat composer for screen readers.
 - Announce the unread badges on dashboard chat list rows to screen readers, including the dot of a chat marked as unread.
 - Keep the reply, react and delete actions of dashboard chat messages visible beside each bubble on touch screens, which have no hover to reveal them.
+- Fit the dashboard chat room's menu to the room's height, scrolling its entries, so a short window no longer cuts off the last ones.
 
 ## [0.26.0] - 2026-10-28
 
