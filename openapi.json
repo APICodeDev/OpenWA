@@ -1495,6 +1495,16 @@
               }
             }
           },
+          "409": {
+            "description": "Baileys: the session never linked to WhatsApp, so there is nothing to unlink. It was stopped locally and `phone` is cleared; no success audit is written. Stop or delete a session that is not linked instead of retrying the logout.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Session was stopped locally, but the logout operation is incomplete (no send, no acknowledgement, timeout/transport error, or local-cleanup failure). Retryable — the body carries `code: 'SESSION_LOGOUT_INCOMPLETE'`; `phone` is cleared and no success audit is written. Start the session again and retry the logout.",
             "content": {

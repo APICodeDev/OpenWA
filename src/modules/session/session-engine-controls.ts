@@ -26,6 +26,7 @@ import { awaitNoOpenTransaction } from '../../common/utils/shared-connection';
 import { EngineFactory } from '../../engine/engine.factory';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { IWhatsAppEngine } from '../../engine/interfaces/whatsapp-engine.interface';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { SessionErrorStore } from './session-error-store.service';
 import { SessionRestrictionStore } from './session-restriction-store.service';
 import { PresenceStore } from './presence-store.service';
@@ -708,7 +709,9 @@ export class SessionEngineControls {
    * Throws a retryable BadGatewayException (502) carrying a stable `code: 'SESSION_LOGOUT_INCOMPLETE'`
    * when an accepted engine-backed attempt stopped locally but the unlink operation did NOT complete
    * — no identity/no send, no IQ acknowledgement, timeout/transport error, OR local credential
-   * cleanup failure. After EVERY engine-backed attempt (200 OR 502) the session is torn down locally
+   * cleanup failure. A Baileys session that never linked has nothing to unlink, so its engine refuses
+   * with EngineNotReadyError, answered as that 409 after the same local teardown rather than as a 502
+   * whose retry could only repeat. After EVERY engine-backed attempt (200, 409 OR 502) the session is torn down locally
    * (map reconciled, status DISCONNECTED) and `phone` is cleared so the boot auto-start does not
    * resurrect the session into an uncertain/invalid credential state. No success audit is written on
    * the 502 path (the controller audits SESSION_LOGGED_OUT only after the service resolves). The
@@ -734,6 +737,9 @@ export class SessionEngineControls {
     // Announced by the write below rather than from the engine callback, as in stop().
     this.operatorTeardowns.set(id, engine);
     let unlinked: boolean;
+    // The teardown helper keeps only whether the call settled; the engine's refusal of a session that
+    // never linked is kept here so it can answer instead of the 502.
+    let neverLinked: EngineNotReadyError | undefined;
     try {
       // Await THIS engine's in-flight INITIALIZING write before teardown / the final DISCONNECTED
       // write so a delayed pre-initialize status update can never settle after the retirement.
@@ -741,7 +747,17 @@ export class SessionEngineControls {
       // The credential fence is keyed by session NAME (see awaitPendingTeardown). Captured immutably
       // here so a raw logout that outlives its deadline race is tracked under the right name even if
       // the row is later deleted/recreated.
-      unlinked = await this.fences.teardownEngineSafely(id, engine, e => e.logout(), 'logout', session.name);
+      unlinked = await this.fences.teardownEngineSafely(
+        id,
+        engine,
+        e =>
+          e.logout().catch((error: unknown) => {
+            if (error instanceof EngineNotReadyError) neverLinked = error;
+            throw error;
+          }),
+        'logout',
+        session.name,
+      );
       this.engines.deleteIfLive(id, engine);
       // Clear `phone` AFTER the attempt, whatever its outcome, to take the session out of the boot
       // auto-start query (phone IS NOT NULL). A completed engine-backed unlink wipes the stored
@@ -757,6 +773,7 @@ export class SessionEngineControls {
       }
     }
 
+    if (neverLinked) throw neverLinked;
     if (!unlinked) {
       this.logger.warn(`Session stopped locally but the logout operation did not complete: ${session.name}`, {
         sessionId: id,

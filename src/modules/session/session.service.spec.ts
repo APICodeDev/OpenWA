@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { EngineTransportError } from '../../common/errors/engine-transport.error';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
 import { ConfigService } from '@nestjs/config';
 import { SessionService, AUTOSTART_SHUTDOWN_WAIT_MS, AUTOSTART_THROTTLE_MS } from './session.service';
 import { SessionOwnershipService } from './session-ownership.service';
@@ -647,6 +648,28 @@ describe('SessionService', () => {
       // credentials were torn down, so re-entering boot auto-start would only resurrect a session
       // that can no longer reach READY.
       expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+    });
+
+    // A session that never linked has no device to remove: its engine refuses the logout as not ready, and
+    // that refusal answers instead of the 502, whose advice to start the session and retry would only repeat.
+    it('logout() answers the 409 of a session that never linked, after the same local teardown', async () => {
+      (repository.findOne as jest.Mock).mockResolvedValue(createMockSession());
+      (repository.update as jest.Mock).mockResolvedValue({ affected: 1 });
+      const refusal = new EngineNotReadyError(
+        'This session was never linked to WhatsApp, so there is nothing to unlink.',
+      );
+      const engine = { logout: jest.fn().mockRejectedValue(refusal) };
+      enginesOf().set('sess-uuid-1', engine);
+
+      const thrown = await service.logout('sess-uuid-1').catch((e: unknown) => e);
+
+      expect(thrown).toBe(refusal);
+      expect(enginesOf().has('sess-uuid-1')).toBe(false);
+      expect(repository.update).toHaveBeenCalledWith('sess-uuid-1', { phone: null });
+      expect(repository.update).toHaveBeenCalledWith(
+        'sess-uuid-1',
+        expect.objectContaining({ status: SessionStatus.DISCONNECTED }),
+      );
     });
 
     it('logout() rejects with 400 when no engine is loaded (session already stopped) and does NOT clear phone', async () => {
