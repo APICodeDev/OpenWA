@@ -1211,7 +1211,8 @@ export class WwebjsLifecycle {
    * timeout. Probe failure or timeout means dead — a wedged page can keep reporting CONNECTED
    * (whatsapp-web.js #5728), so turning consecutive probe failures into a reconnect decision stays
    * the calling watchdog's job. One exception: inside the bounded navigation re-inject window a
-   * failing probe answers alive, since the page is healing, not dead (#1081).
+   * failing probe answers alive, since the page is healing, not dead (#1081). A page that answered
+   * CONNECTED in time is alive too when only the helpers read of an unverified reload is still pending.
    */
   async probeLiveness(): Promise<boolean> {
     // The watchdog also probes an ACTION_REQUIRED session, observe-only (it never reconnects one): the page
@@ -1223,37 +1224,51 @@ export class WwebjsLifecycle {
     const client = this.client;
     // Set once getState() answered CONNECTED, so a probe that could not then read the page still knows that.
     let connected = false;
+    // True while the helpers read below is in flight, so a timeout can tell it never answered.
+    let helpersPending = false;
     // CONNECTED is WhatsApp Web's socket, which comes back after a reload whether or not whatsapp-web.js
     // re-injected into the new page. While a reload is unverified, ask the page for the helpers too.
     const probe = async (): Promise<boolean> => {
       if ((await client.getState()) !== WAState.CONNECTED) return false;
       connected = true;
-      return this.reinjectUnverifiedSince === 0 || (await this.pageHasWwebjsHelpers(client));
+      if (this.reinjectUnverifiedSince === 0) return true;
+      helpersPending = true;
+      try {
+        return await this.pageHasWwebjsHelpers(client);
+      } finally {
+        helpersPending = false;
+      }
     };
 
+    const running = probe();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const injected = await Promise.race([
-        probe(),
+        running,
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => reject(new Error('liveness probe timed out')), 10_000);
           timeout.unref?.();
         }),
       ]);
       if (connected && injected) {
-        // Observed recovery closes the navigation episode. Without this, an episode whose re-inject
-        // died silently (no 'ready' re-emit, but WA Web's socket back up) would keep a stale episode
-        // anchor forever, denying the grace to every LATER navigation via the episode cap. Only an episode
-        // this answer can speak for: a navigation stamped while getState() was pending is a newer one.
-        if (navigationsBefore === this.navigationCount) {
-          this.clearNavigationReinjectWindow();
-          this.reinjectUnverifiedSince = 0;
-        }
+        this.closeRecoveredEpisode(navigationsBefore);
         return true;
       }
       if (connected) return this.reinjectStillHealing();
       return this.isInNavigationReinjectWindow();
     } catch {
+      // A helpers read the timeout cut short proves nothing either way, so it does not count toward the cap: the
+      // page answered CONNECTED in time and the reload stays unverified until a read answers. A late yes is the
+      // same proof as an in-budget one. A failed read counts.
+      if (connected && helpersPending) {
+        void running.then(
+          found => {
+            if (found && this.client === client) this.closeRecoveredEpisode(navigationsBefore);
+          },
+          () => undefined,
+        );
+        return true;
+      }
       if (connected) return this.reinjectStillHealing();
       // Inside the navigation window the evaluate rejecting (context destroyed, window.require not
       // yet a function) means the page is healing, not dead — answer alive so the watchdog does not
@@ -1267,10 +1282,22 @@ export class WwebjsLifecycle {
   }
 
   /**
+   * Observed recovery closes the navigation episode. Without this, an episode whose re-inject died silently (no
+   * 'ready' re-emit, but WA Web's socket back up) would keep a stale episode anchor forever, denying the grace to
+   * every LATER navigation via the episode cap. Only an episode this answer can speak for: a navigation stamped
+   * while the probe was pending is a newer one.
+   */
+  private closeRecoveredEpisode(navigationsBefore: number): void {
+    if (navigationsBefore !== this.navigationCount) return;
+    this.clearNavigationReinjectWindow();
+    this.reinjectUnverifiedSince = 0;
+  }
+
+  /**
    * A connected page whose reload no probe has found re-injected: still healing until the episode cap, then not
    * alive. Measured from the first unverified navigation, so a reload that is merely slow (the sync after a
    * reload can take minutes on a loaded host) keeps answering alive far past the grace window, and the watchdog
-   * recycles the session only once the helpers stayed missing for that long.
+   * recycles the session only once the helpers read kept answering no, or failing, for that long.
    */
   private reinjectStillHealing(): boolean {
     return this.reinjectUnverifiedSince === 0 || Date.now() - this.reinjectUnverifiedSince < NAVIGATION_EPISODE_CAP_MS;

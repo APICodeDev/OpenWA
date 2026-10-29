@@ -42,6 +42,7 @@ describe('liveness of a ready page after a reload', () => {
   const later = (ms: number): void => {
     jest.setSystemTime(Date.now() + ms);
   };
+  const delayed = <T>(value: T, ms: number): Promise<T> => new Promise(resolve => setTimeout(() => resolve(value), ms));
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -103,7 +104,7 @@ describe('liveness of a ready page after a reload', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(false);
   });
 
-  it('treats a helpers read that fails or hangs like missing helpers, inside the same probe budget', async () => {
+  it('treats a helpers read that fails like missing helpers', async () => {
     const { adapter, client } = wire();
     client.pupPage.evaluate.mockRejectedValue(new Error('Execution context was destroyed.'));
     reload(client);
@@ -111,12 +112,65 @@ describe('liveness of a ready page after a reload', () => {
     await expect(adapter.probeLiveness()).resolves.toBe(true);
 
     later(NAVIGATION_EPISODE_CAP_MS);
-    client.pupPage.evaluate.mockReturnValue(new Promise<never>(() => {}));
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  // getState() answered CONNECTED inside the probe budget, and a helpers read that has not finished proves nothing
+  // either way, so it is not counted toward the cap. The reload stays unverified and the next probe asks again.
+  it('answers alive when the helpers read is still pending at the deadline, and asks again next time', async () => {
+    const { adapter, client } = wire();
+    reload(client);
+    later(NAVIGATION_EPISODE_CAP_MS);
+    client.pupPage.evaluate.mockReturnValueOnce(new Promise<never>(() => {}));
     const probe = adapter.probeLiveness();
-    const assertion = expect(probe).resolves.toBe(false);
+    const assertion = expect(probe).resolves.toBe(true);
     await jest.advanceTimersByTimeAsync(10_000);
     await assertion;
     expect(jest.getTimerCount()).toBe(0);
+
+    client.pupPage.evaluate.mockResolvedValue(false);
+    await expect(adapter.probeLiveness()).resolves.toBe(false);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(2);
+  });
+
+  // A loaded renderer after a reload that did re-inject: getState() answers CONNECTED after 7 s and the helpers read
+  // answers yes 5 s later, past the 10 s budget. Probed at the watchdog's cadence (every 60 s, each probe given 15 s),
+  // the page must never read dead, also once the episode cap has passed.
+  it('keeps a slow but re-injected page alive on every watchdog probe', async () => {
+    const { adapter, client } = wire();
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, 7_000));
+    client.pupPage.evaluate.mockImplementation(() => delayed(true, 5_000));
+    reload(client);
+    client.emit('ready');
+
+    const answers: boolean[] = [];
+    for (let tick = 0; tick < 5; tick++) {
+      await jest.advanceTimersByTimeAsync(60_000 - 15_000);
+      const probe = adapter.probeLiveness();
+      await jest.advanceTimersByTimeAsync(15_000);
+      answers.push(await probe);
+    }
+
+    expect(answers).toEqual([true, true, true, true, true]);
+  });
+
+  // A yes that arrives after the deadline is the same proof an in-budget yes gives, so it verifies the reload and
+  // closes its episode. Left open, that episode would deny the reload grace to every later reload of the page.
+  it('lets a late yes from the helpers read verify the reload, so a later reload is graced again', async () => {
+    const { adapter, client } = wire();
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, 7_000));
+    client.pupPage.evaluate.mockImplementation(() => delayed(true, 5_000));
+    reload(client);
+    const probe = adapter.probeLiveness();
+    await jest.advanceTimersByTimeAsync(15_000);
+    await expect(probe).resolves.toBe(true);
+
+    later(NAVIGATION_EPISODE_CAP_MS);
+    client.getState.mockRejectedValue(new Error('Execution context was destroyed.'));
+    reload(client);
+    await expect(adapter.probeLiveness()).resolves.toBe(true);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(1);
   });
 
   it('does not ask the page when no reload is pending', async () => {
