@@ -2580,6 +2580,18 @@
   display: flex;
 }
 
+/* A touch screen has no hover to reveal them, and a tap on a message's text is no click on iOS, so the actions stay
+   visible there. They sit beside the bubble, in the gap the container keeps for them: over its corner they would hide
+   the start of every short message. */
+@media (hover: none) {
+  .chats-page .message-actions-menu {
+    display: flex;
+    position: static;
+    background: transparent;
+    box-shadow: none;
+  }
+}
+
 /* A bubble is a keyboard stop (ChatThread): the ring says which message the arrow keys act on. */
 .chats-page .message-bubble-container:focus-visible {
   outline: 2px solid var(--focus-ring);
