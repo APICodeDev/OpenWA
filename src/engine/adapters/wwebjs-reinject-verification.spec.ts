@@ -54,6 +54,19 @@ describe('liveness of a ready page after a reload', () => {
     }
     return answers;
   };
+  /** As watchdogAnswers, on a page that reloads again 20 s after each probe (a navigation loop). */
+  const loopAnswers = async (adapter: WhatsAppWebJsAdapter, client: FakeClient, ticks: number): Promise<boolean[]> => {
+    const answers: boolean[] = [];
+    for (let tick = 0; tick < ticks; tick++) {
+      await jest.advanceTimersByTimeAsync(20_000);
+      reload(client);
+      await jest.advanceTimersByTimeAsync(60_000 - 15_000 - 20_000);
+      const probe = adapter.probeLiveness();
+      await jest.advanceTimersByTimeAsync(15_000);
+      answers.push(await probe);
+    }
+    return answers;
+  };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -181,6 +194,34 @@ describe('liveness of a ready page after a reload', () => {
 
   // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the
   // watchdog's count, or two dead answers in a row never occur.
+  // A page stuck reloading that never re-injects: each late no is about a page the next reload replaces, but the
+  // reloads belong to one unverified episode, so the no still counts toward its cap, as an in-budget no does.
+  it('recycles a navigation loop that never re-injects when every helpers read answers no late', async () => {
+    const { adapter, client } = wire();
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, 7_000));
+    client.pupPage.evaluate.mockImplementation(() => delayed(false, 5_000));
+    reload(client);
+
+    const answers = await loopAnswers(adapter, client, 8);
+
+    expect(answers).toEqual([true, true, true, false, false, false, false, false]);
+  });
+
+  // The same loop on a page that does re-inject, only slowly and only from the fourth read on: the no kept from the
+  // reloads before costs one dead answer at most, the late yes closes the episode, and the next reload starts clean.
+  it('keeps a slow reloading page alive once it re-injects, after late no answers earlier in the episode', async () => {
+    const { adapter, client } = wire();
+    let reads = 0;
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, 7_000));
+    client.pupPage.evaluate.mockImplementation(() => delayed(reads++ >= 3, 5_000));
+    reload(client);
+
+    const answers = await loopAnswers(adapter, client, 8);
+
+    expect(answers.some((alive, i) => i > 0 && !alive && !answers[i - 1])).toBe(false);
+    expect(answers.slice(-4)).toEqual([true, true, true, true]);
+  });
+
   it('recycles a reload that never re-injected when its helpers read is late only on some probes', async () => {
     const { adapter, client } = wire();
     let slow = true;

@@ -276,8 +276,11 @@ export class WwebjsLifecycle {
    * nothing at all. Only a probe that reads whatsapp-web.js's helpers in the current page clears it.
    */
   private reinjectUnverifiedSince = 0;
-  /** The navigation a helpers read last answered no for, or failed in (its navigationCount); -1 when none. */
-  private helpersMissingAtNavigation = -1;
+  /**
+   * The unverified reload episode (its reinjectUnverifiedSince) in which a helpers read last answered no, or failed;
+   * 0 when none. Kept per episode, not per navigation, so a page stuck reloading still counts its answers.
+   */
+  private helpersMissingInEpisode = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -1243,7 +1246,7 @@ export class WwebjsLifecycle {
         helpersPending = false;
         // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
         if (!found && this.client === client && navigationsBefore === this.navigationCount) {
-          this.helpersMissingAtNavigation = navigationsBefore;
+          this.helpersMissingInEpisode = this.reinjectUnverifiedSince;
         }
       }
     };
@@ -1266,8 +1269,8 @@ export class WwebjsLifecycle {
       return this.isInNavigationReinjectWindow();
     } catch {
       // A helpers read the timeout cut short is no answer yet: the page answered CONNECTED in time, so it is alive
-      // unless an earlier read already answered no, or failed, for this page, which counts toward the cap as an
-      // in-budget one does. When the late read answers, a yes verifies the reload and a no or a failure is kept.
+      // unless an earlier read in this reload episode already answered no, or failed, which counts toward the cap as
+      // an in-budget one does. When the late read answers, a yes verifies the reload and a no or a failure is kept.
       if (connected && helpersPending) {
         void running.then(
           found => {
@@ -1275,7 +1278,7 @@ export class WwebjsLifecycle {
           },
           () => undefined,
         );
-        return this.helpersMissingAtNavigation === this.navigationCount ? this.reinjectStillHealing() : true;
+        return this.helpersMissingInEpisode === this.reinjectUnverifiedSince ? this.reinjectStillHealing() : true;
       }
       if (connected) return this.reinjectStillHealing();
       // Inside the navigation window the evaluate rejecting (context destroyed, window.require not
