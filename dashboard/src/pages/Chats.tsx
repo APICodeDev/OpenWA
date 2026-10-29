@@ -1813,12 +1813,13 @@ export function Chats() {
     return () => document.removeEventListener('keydown', closeOpenViewOnEscape);
   }, [activeStatusContactId, activeChannel, activeChat, showContactInfo, showNewChat]);
 
-  // Image media items for the lightbox, in render order. `getMediaSrc` reconstructs a usable src
+  // Image and sticker media items for the lightbox, in render order (an archived sticker opens in its own viewer
+  // too, see ArchivedMediaPreview). `getMediaSrc` reconstructs a usable src
   // from either a base64 payload or a URL — the ChatMessageView shape stores both in `data`.
   const imageMedia = useMemo<LightboxItem[]>(
     () =>
       messages
-        .filter(m => m.type === 'image' && Boolean(getMediaSrc(m.metadata?.media)))
+        .filter(m => (m.type === 'image' || m.type === 'sticker') && Boolean(getMediaSrc(m.metadata?.media)))
         .map(m => ({
           id: m.id,
           url: getMediaSrc(m.metadata?.media),

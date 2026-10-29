@@ -2618,6 +2618,32 @@ test('the media viewer saves an image under its file name, not its caption', asy
   assert.equal(links[0].download, 'photo.png');
 });
 
+// A sticker is drawn with the image's zoom affordance, and an archived one already opens in its own viewer.
+test('a sticker opens in the media viewer, as an image does', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  firstPageExtra = [
+    {
+      ...DB_MESSAGE,
+      id: 'db-sticker',
+      waMessageId: 'wamid.sticker',
+      body: '',
+      type: 'sticker',
+      timestamp: 1_700_000_003,
+      createdAt: new Date(1_700_000_003_000).toISOString(),
+      metadata: { media: { mimetype: 'image/webp', data: 'http://localhost/media/sticker.webp' } },
+    },
+  ];
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  const sticker = await waitFor(() => {
+    const found = container.querySelector('.room-messages img.chat-image-media');
+    assert.ok(found, 'the sticker bubble did not render');
+    return found;
+  });
+  fireEvent.click(sticker);
+  assert.ok(await screen.findByRole('button', { name: 'Download' }), 'the viewer did not open on the sticker');
+});
+
 // whatsapp-web.js reports that a channel post has media but gives no URL for it.
 test('a channel post with media and no URL says the media is unavailable', async () => {
   const { screen, fireEvent, within, waitFor } = rtl;
