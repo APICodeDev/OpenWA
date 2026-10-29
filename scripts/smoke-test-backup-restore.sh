@@ -2926,7 +2926,7 @@ backup_av() {
   printf '%s' "$rc"
 }
 AV_PG='DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_USERNAME=app\nDATABASE_NAME=shared\n'
-AV_SCOPED="-n|openwa_s|-e|plpgsql|-e|pg_trgm|-e|unaccent|-h|db|-p|5432|-U|app|shared|"
+AV_SCOPED="-n|openwa_s|--no-comments|-e|plpgsql|-e|pg_trgm|-e|unaccent|-h|db|-p|5432|-U|app|shared|"
 for AV_FROM in env dotenv generated; do
   case "$AV_FROM" in
     env) rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s)" ;;
@@ -2950,7 +2950,7 @@ fi
 # The DATABASE_URL branch is scoped the same way.
 rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s DATABASE_URL=postgres://app@db/shared)"
 if [ "$rc" -ne 0 ] ||
-  [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-n|openwa_s|-e|plpgsql|-e|pg_trgm|-e|unaccent|postgres://app@db/shared|" ]; then
+  [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-n|openwa_s|--no-comments|-e|plpgsql|-e|pg_trgm|-e|unaccent|postgres://app@db/shared|" ]; then
   fail "(av) DATABASE_URL did not get the scoped dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
 fi
 # public, spelled out or left to the default, keeps the whole-database dump and no marker.

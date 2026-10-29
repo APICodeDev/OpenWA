@@ -244,13 +244,15 @@ EOF
 # pg_dump_data <connection arguments...> - the data store's dump: the whole database for the public
 # schema, else POSTGRES_SCHEMA alone (PG_DUMP_SCHEMA) behind its prelude, with the extensions the app's
 # search index uses. plpgsql always matches, so the list never fails pg_dump where the others are absent.
+# No comments: COMMENT ON EXTENSION needs the extension's owner even where CREATE EXTENSION IF NOT EXISTS
+# skipped one that exists, and the app writes no comment of its own.
 pg_dump_data() {
   if [ -z "$PG_DUMP_SCHEMA" ]; then
     pg_dump "$@"
     return
   fi
   pg_schema_prelude "$PG_DUMP_SCHEMA"
-  pg_dump -n "$PG_DUMP_SCHEMA" -e plpgsql -e pg_trgm -e unaccent "$@"
+  pg_dump -n "$PG_DUMP_SCHEMA" --no-comments -e plpgsql -e pg_trgm -e unaccent "$@"
 }
 
 # Members the finished archive MUST contain (relative tar paths). A run that cannot stage any of

@@ -274,8 +274,9 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
 /**
  * scripts/backup.sh on a database shared with another application through POSTGRES_SCHEMA, run as a role that
  * cannot read the neighbour's schema, then the load restore.sh prints for that archive, into an empty database
- * and into the database it came from, and the boot chain over the result. Contains search is on, with its
- * extensions in public and, installed by the app itself, in the app's own schema. Needs pg_dump and psql on PATH.
+ * and, as that role, into the database it came from, and the boot chain over the result. Contains search is on,
+ * with its extensions in public and, installed by the app itself, in the app's own schema. Needs pg_dump and psql
+ * on PATH.
  */
 const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${tool}`]).status === 0;
 (POSTGRES_ENABLED && hasTool('pg_dump') && hasTool('psql') ? describe : describe.skip)(
@@ -305,8 +306,6 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
       await admin?.destroy();
     });
 
-    const url = (database: string): string =>
-      `postgres://${superuser.username}:${superuser.password}@${host}:${port}/${database}`;
     const boot = (role: string, database: string): Promise<DataSource> =>
       createBootDataSource({
         type: 'postgres',
@@ -352,12 +351,13 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
           await setup.query(`CREATE TABLE other_app.ledger (id int PRIMARY KEY)`);
           await setup.query(`INSERT INTO other_app.ledger VALUES (1)`);
           if (placement === 'public') {
+            // Installed, and so owned, by another role before the app starts.
             await setup.query(`CREATE EXTENSION pg_trgm`);
             await setup.query(`CREATE EXTENSION unaccent`);
-          } else {
-            // The app's own CREATE EXTENSION then lands in the first schema of its search_path.
-            await setup.query(`GRANT CREATE ON DATABASE "${source}" TO "${role}"`);
           }
+          // The role may create schemas and extensions, as the in-place load needs. With none in public yet, the
+          // app's own CREATE EXTENSION lands in the first schema of its search_path.
+          await setup.query(`GRANT CREATE ON DATABASE "${source}" TO "${role}"`);
           await setup.destroy();
 
           const app = await boot(role, source);
@@ -415,19 +415,26 @@ const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${
             .find(line => line.includes('psql --single-transaction'))
             ?.replace(/^\[restore\]\s+/, '');
           expect(load).toBeDefined();
-
-          for (const database of [target, source]) {
-            const run = spawnSync('bash', ['-c', load!], {
+          const loadAs = (user: string, password: string, database: string) =>
+            spawnSync('bash', ['-c', load!], {
               cwd: path.join(work, 'dst'),
               encoding: 'utf8',
-              env: { PATH: process.env.PATH, PG_HOST_PORT: process.env.PG_HOST_PORT, DATABASE_URL: url(database) },
+              env: {
+                PATH: process.env.PATH,
+                PG_HOST_PORT: process.env.PG_HOST_PORT,
+                DATABASE_URL: `postgres://${user}:${password}@${host}:${port}/${database}`,
+              },
             });
+
+          // Into an empty database as the superuser, and into its own database as the app's role.
+          for (const [user, password, database] of [
+            [superuser.username, superuser.password, target],
+            [role, role, source],
+          ]) {
+            const run = loadAs(user, password, database);
             // A NOTICE names what the prelude dropped with an extension it moved aside; nothing may fail.
-            expect({ database, status: run.status, errors: /ERROR/.test(run.stderr) }).toEqual({
-              database,
-              status: 0,
-              errors: false,
-            });
+            const errors = run.stderr.split('\n').filter(line => line.includes('ERROR'));
+            expect({ database, status: run.status, errors }).toEqual({ database, status: 0, errors: [] });
             const restored = await boot(role, database);
             try {
               expect(await fingerprint(restored)).toEqual(expected);
