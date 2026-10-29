@@ -129,6 +129,20 @@ class LruMap<K, V> {
   }
 }
 
+/**
+ * A chat deletion this process saw, shared by every key the chat's state can sit under. `order` is the
+ * observation order when it arrived (see {@link BaileysSessionStore.nextMessageOrder}), which is what tells
+ * a message from the deletion's own second apart: a whole-second timestamp cannot.
+ */
+interface DeletionMark {
+  at: number;
+  order: number;
+  /** The keys the mark is written under in the chat-state store. */
+  stateKeys: string[];
+  /** Set once a newer message re-created the chat. */
+  cleared: boolean;
+}
+
 /** A projected contact with the raw store key it came from, so twins can be folded deterministically. */
 interface ContactTwin {
   contact: Contact;
@@ -213,6 +227,12 @@ export class BaileysSessionStore {
    * which message field is read.
    */
   private readonly ephemeralByChat: LruMap<string, number>;
+  /**
+   * The chat deletions this process saw, under every spelling. The chat-state store writes the mark on its
+   * own queue, so a message recorded before the write lands is judged against this copy, and a mark a newer
+   * message cleared stays cleared here while the store's forget is still on its way.
+   */
+  private readonly deletionMarks: LruMap<string, DeletionMark>;
 
   /**
    * @param lidStore       optional persisted, cross-session lid->phone table that backs resolution beyond
@@ -242,6 +262,7 @@ export class BaileysSessionStore {
     this.lidToPn = new LruMap(maxEntries);
     // Double-keyed (raw + neutral JID per chat), so it needs two slots per chat to cover the same span.
     this.ephemeralByChat = new LruMap(maxEntries * 2);
+    this.deletionMarks = new LruMap(maxEntries);
   }
 
   upsertContacts(records: Partial<BaileysContact>[] = []): void {
@@ -349,7 +370,24 @@ export class BaileysSessionStore {
       this.lastInbound.delete(key);
     }
     if (keys.size && this.chatStateStore && this.sessionId) {
-      void this.markDeleted(this.chatStateStore, this.sessionId, ids, keys);
+      // Each chat folds its own twins: one event can delete several chats.
+      const twinsOf = new Map<string, Set<string>>();
+      for (const id of ids) {
+        const key = this.stateKey(id);
+        twinsOf.set(key, new Set([...(twinsOf.get(key) ?? []), ...this.chatTwins(id)]));
+      }
+      const mark: DeletionMark = {
+        at: Date.now(),
+        order: this.messageOrder,
+        stateKeys: [...twinsOf.keys()],
+        cleared: false,
+      };
+      for (const [key, twins] of twinsOf) {
+        for (const k of new Set([key, ...twins, ...[...twins].map(twin => this.stateKey(twin))])) {
+          this.deletionMarks.set(k, mark);
+        }
+      }
+      void this.markDeleted(this.chatStateStore, this.sessionId, ids, keys, twinsOf, mark.at);
     }
   }
 
@@ -363,14 +401,15 @@ export class BaileysSessionStore {
    * dated later than it happened: a message delivered in the same reconnect counts as older, and the
    * chat stays unlisted, its writes declined, until the next one.
    */
-  private async markDeleted(store: ChatStateStore, sessionId: string, ids: string[], keys: Set<string>): Promise<void> {
-    const reset = { muteEndTime: null, archived: false, pinned: false, deletedAt: Date.now() };
-    // Each chat folds its own twins: one event can delete several chats.
-    const twinsOf = new Map<string, Set<string>>();
-    for (const id of ids) {
-      const key = this.stateKey(id);
-      twinsOf.set(key, new Set([...(twinsOf.get(key) ?? []), ...this.chatTwins(id)]));
-    }
+  private async markDeleted(
+    store: ChatStateStore,
+    sessionId: string,
+    ids: string[],
+    keys: Set<string>,
+    twinsOf: Map<string, Set<string>>,
+    deletedAt: number,
+  ): Promise<void> {
+    const reset = { muteEndTime: null, archived: false, pinned: false, deletedAt };
     const marked = Promise.all(
       [...twinsOf].map(([key, twins]) =>
         store.fold(
@@ -406,7 +445,23 @@ export class BaileysSessionStore {
    * belongs to the deleted chat.
    */
   chatDeletedAt(chatId: string): number | null {
-    return this.chatState(chatId, this.chatTwins(chatId))?.deletedAt ?? null;
+    const recordIds = this.chatTwins(chatId);
+    return this.deletedAtOf(this.stateKeys(chatId, recordIds), this.chatState(chatId, recordIds)?.deletedAt);
+  }
+
+  /** The deletion the readers go by: this process's own record of it when there is one, else the persisted mark. */
+  private deletedAtOf(keys: string[], persisted: number | null | undefined): number | null {
+    const mark = this.deletionMark(keys);
+    if (mark) return mark.cleared ? null : mark.at;
+    return persisted ?? null;
+  }
+
+  private deletionMark(keys: string[]): DeletionMark | undefined {
+    for (const key of keys) {
+      const mark = this.deletionMarks.get(key);
+      if (mark) return mark;
+    }
+    return undefined;
   }
 
   /**
@@ -416,12 +471,24 @@ export class BaileysSessionStore {
    * and the lids the jid and the persisted table name: an empty index skips the scan of this session's
    * mappings, too slow to run for each of the thousands of messages a first sync records.
    */
-  private stillDeleted(jid: string, timestamp: number): boolean {
+  private stillDeleted(jid: string, timestamp: number, order?: number): boolean {
     const store = this.chatStateStore;
     const sid = this.sessionId;
     if (!store || !sid) return false;
     const key = this.stateKey(jid);
-    const rows = [key, ...this.stateTwins([jid], key, new Map())].flatMap(k => {
+    const lookup = [key, ...this.stateTwins([jid], key, new Map())];
+    const mark = this.deletionMark(lookup);
+    if (mark) {
+      if (mark.cleared) return false;
+      // A live message observed after the deletion is newer than it, also within the deletion's own second.
+      const observedAfter = order !== undefined && order > mark.order && timestamp === Math.floor(mark.at / 1000);
+      if (timestamp * 1000 <= mark.at && !observedAfter) return true;
+      mark.cleared = true;
+      // Named rather than read back: the mark may not have reached the store yet, and the forget queues behind it.
+      void store.forget(sid, [...new Set([...mark.stateKeys, ...lookup])]);
+      return false;
+    }
+    const rows = lookup.flatMap(k => {
       const value = store.get(sid, k);
       return value ? [{ k, value }] : [];
     });
@@ -504,7 +571,7 @@ export class BaileysSessionStore {
     const key = this.toEngineJid(baileysChatJid(chatId, msg.key.participant, msg.key.fromMe === true));
     const timestamp = this.toUnixSeconds(msg.messageTimestamp);
     // Recorded either way: the readers skip a message from before the deletion, and a newer one clears it.
-    this.stillDeleted(key, timestamp);
+    this.stillDeleted(key, timestamp, order);
     if (!msg.key.fromMe) {
       const inbound = this.lastInbound.get(key);
       if (
@@ -932,16 +999,14 @@ export class BaileysSessionStore {
     const rawId = c.id!;
     // Mute/archive/pin come from the persisted store when it has this chat (it survives a reconnect
     // Baileys cannot resync), else from the primary's live record. A `null` muteEndTime means unmuted.
-    const st = this.chatState(
-      rawId,
-      records.map(r => r.id!),
-      lidIndex,
-    );
+    const recordIds = records.map(r => r.id!);
+    const st = this.chatState(rawId, recordIds, lidIndex);
+    const deletedAt = this.deletedAtOf(this.stateKeys(rawId, recordIds, lidIndex), st?.deletedAt);
     // Only a message newer than the deletion re-creates the chat: a record without one is a state update,
     // and a message sent before it, delivered late, is the deleted chat's.
     const active = () =>
       Math.max(last?.timestamp ?? 0, ...records.map(r => this.toUnixSeconds(r.conversationTimestamp)));
-    if (st?.deletedAt && active() * 1000 <= st.deletedAt) return null;
+    if (deletedAt && active() * 1000 <= deletedAt) return null;
     return {
       id,
       name: c.name ?? others.find(o => o.name)?.name ?? this.resolveContactName(rawId),
@@ -1057,8 +1122,13 @@ export class BaileysSessionStore {
     const store = this.chatStateStore;
     const sid = this.sessionId;
     if (!store || !sid) return undefined;
+    return mergeTwinStates(this.stateKeys(rawId, recordIds, lidIndex).flatMap(k => store.get(sid, k) ?? []));
+  }
+
+  /** The chat's state key and the lid twins its state rows can sit under (see {@link stateTwins}). */
+  private stateKeys(rawId: string, recordIds: string[], lidIndex?: Map<string, string[]>): string[] {
     const key = this.stateKey(rawId);
-    return mergeTwinStates([key, ...this.stateTwins(recordIds, key, lidIndex)].flatMap(k => store.get(sid, k) ?? []));
+    return [key, ...this.stateTwins(recordIds, key, lidIndex)];
   }
 
   /**
