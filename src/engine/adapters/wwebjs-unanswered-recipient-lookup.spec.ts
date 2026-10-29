@@ -92,6 +92,23 @@ describe('a send whose recipient lookup did not answer', () => {
     expect(countsTowardSendBreaker(refused)).toBe(true);
   });
 
+  // Not counted, the send service logs no engine-failure line for it, so this warning is the one that has to name
+  // the session the 500 came from.
+  it('logs a warning naming the session and the chat', async () => {
+    const adapter = ready({
+      getNumberId: jest.fn().mockRejectedValue(new Error('t: t')),
+      sendMessage: jest.fn().mockRejectedValue(noLid()),
+    });
+    const warn = jest.spyOn((adapter as unknown as { logger: { warn: () => void } }).logger, 'warn');
+
+    await outcomeOf(adapter.sendTextMessage('628123456789@c.us', 'hi'));
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('did not answer'),
+      expect.objectContaining({ sessionId: 's', chatId: '628123456789@c.us', error: 't: t' }),
+    );
+  });
+
   it('does not retry a cached id that went stale when the lookup that would replace it fails', async () => {
     const getNumberId = jest
       .fn()

@@ -455,6 +455,7 @@ export class WwebjsMessaging {
   private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
     if (failure instanceof EngineNotReadyError) return failure;
     this.host.logger.warn('Could not re-resolve a recipient after "No LID for user": the lookup did not answer', {
+      sessionId: this.host.config.sessionId,
       chatId,
       error: failure instanceof Error ? failure.message : String(failure),
     });
