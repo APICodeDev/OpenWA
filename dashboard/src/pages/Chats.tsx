@@ -354,11 +354,12 @@ export function Chats() {
 
   // Each thread, by session and chat, keeps the text typed into it. Opening another one, in this session or another,
   // puts the composer's text away under the thread it was typed in and brings back the one of the thread opened;
-  // closing the room and reopening it changes nothing.
+  // closing the room and reopening it changes nothing. A layout effect, so the next room is never drawn with the text of
+  // the last one.
   const draftsRef = useRef(new Map<string, string>());
   const draftKeyRef = useRef<string | null>(null);
   const openChatId = activeChat?.id;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (openChatId === undefined) return;
     const key = readKey(selectedSessionId, openChatId);
     const previous = draftKeyRef.current;
