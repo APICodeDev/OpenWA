@@ -38,6 +38,10 @@
 #                     data dir)
 #   BOOTSTRAP_KEY_FILE  the plaintext admin key to archive (default: <data dir>/.api-key)
 #                     These paths resolve through the same layers as the databases.
+#   POSTGRES_SCHEMA   for postgres: a schema other than public is dumped alone (the database may hold
+#                     other applications' schemas), with the pg_trgm and unaccent extensions, behind a
+#                     prelude that moves an existing copy of the schema aside on load; database.schema
+#                     in the archive names it. public dumps the whole database, as before.
 #   For postgres: DATABASE_URL, or DATABASE_HOST/PORT/USERNAME/PASSWORD/NAME
 #                     DATABASE_URL is read by this script only (the app uses the DATABASE_* keys)
 #                     and wins over them when set. It is passed to pg_dump as an argument, which
@@ -213,6 +217,42 @@ backup_sqlite() {
   fi
 }
 
+# The SQL a schema-scoped dump starts with. Loaded into a database that already holds the schema (the one
+# the dump came from), it moves that schema aside as <schema>_pre_restore_<time>, and drops pg_trgm and
+# unaccent when they moved with it, so the dump can create them in the schema again; in an empty database
+# it does nothing. The name was checked with openwa_pg_schema_valid, so it needs no quoting here.
+pg_schema_prelude() {
+  cat <<EOF
+-- Added by backup.sh: this dump holds schema $1 only. An existing $1 is moved aside before it loads.
+DO \$openwa\$
+DECLARE
+  aside text := left('$1', 36) || '_pre_restore_' || to_char(clock_timestamp(), 'YYYYMMDDHH24MISS');
+  ext text;
+BEGIN
+  IF to_regnamespace('$1') IS NOT NULL THEN
+    EXECUTE format('ALTER SCHEMA %I RENAME TO %I', '$1', aside);
+    FOR ext IN SELECT extname FROM pg_extension
+      WHERE extname IN ('pg_trgm', 'unaccent') AND extnamespace = to_regnamespace(aside) LOOP
+      EXECUTE format('DROP EXTENSION %I CASCADE', ext);
+    END LOOP;
+  END IF;
+END
+\$openwa\$;
+EOF
+}
+
+# pg_dump_data <connection arguments...> - the data store's dump: the whole database for the public
+# schema, else POSTGRES_SCHEMA alone (PG_DUMP_SCHEMA) behind its prelude, with the extensions the app's
+# search index uses. plpgsql always matches, so the list never fails pg_dump where the others are absent.
+pg_dump_data() {
+  if [ -z "$PG_DUMP_SCHEMA" ]; then
+    pg_dump "$@"
+    return
+  fi
+  pg_schema_prelude "$PG_DUMP_SCHEMA"
+  pg_dump -n "$PG_DUMP_SCHEMA" -e plpgsql -e pg_trgm -e unaccent "$@"
+}
+
 # Members the finished archive MUST contain (relative tar paths). A run that cannot stage any of
 # them has already failed hard above; the post-archive min-content check below is the last gate
 # against shipping an archive that would "restore" into a fresh-empty install.
@@ -226,6 +266,19 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   if ! command -v pg_dump >/dev/null 2>&1; then
     log "ERROR: DATABASE_TYPE=postgres but pg_dump is not installed"
     exit 1
+  fi
+  # The app keeps its tables, ledger and search_path in POSTGRES_SCHEMA. A schema other than public may
+  # share its database with other applications, whose schemas this role need not be able to read, so it
+  # is dumped alone, and database.schema names it for restore.sh. public keeps the whole-database dump.
+  PG_SCHEMA="$(openwa_resolve POSTGRES_SCHEMA public)"
+  PG_DUMP_SCHEMA=""
+  if [ "$PG_SCHEMA" != public ]; then
+    if ! openwa_pg_schema_valid "$PG_SCHEMA"; then
+      log "ERROR: POSTGRES_SCHEMA=$PG_SCHEMA is not a schema name the app accepts: a lower-case letter or underscore,"
+      log "       then lower-case letters, digits or underscores, at most 63 characters, not starting with pg_"
+      exit 1
+    fi
+    PG_DUMP_SCHEMA="$PG_SCHEMA"
   fi
   # libpq defaults to sslmode=prefer, which falls back to plaintext and accepts any certificate, so
   # the dump sent the database password past the TLS check the app makes. Apply the app's check:
@@ -265,7 +318,7 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
   fi
   DATABASE_URL_RESOLVED="$(openwa_resolve DATABASE_URL '')"
   if [ -n "$DATABASE_URL_RESOLVED" ]; then
-    pg_dump "$DATABASE_URL_RESOLVED" >"$STAGE/database.sql"
+    pg_dump_data "$DATABASE_URL_RESOLVED" >"$STAGE/database.sql"
   else
     # Same layered resolution as the paths above: a dashboard-provisioned Postgres keeps its
     # connection details in <data dir>/.env.generated, never in the operator's shell. Each is
@@ -276,9 +329,13 @@ if [ "$DATABASE_TYPE" = "postgres" ]; then
     PG_PORT="$(openwa_resolve DATABASE_PORT 5432)"
     PG_USER="$(openwa_resolve DATABASE_USERNAME openwa)"
     PG_NAME="$(openwa_resolve DATABASE_NAME openwa)"
-    PGPASSWORD="$PG_PASSWORD" pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_NAME" >"$STAGE/database.sql"
+    PGPASSWORD="$PG_PASSWORD" pg_dump_data -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_NAME" >"$STAGE/database.sql"
   fi
   REQUIRED_MEMBERS+=("./database.sql")
+  if [ -n "$PG_DUMP_SCHEMA" ]; then
+    printf '%s\n' "$PG_DUMP_SCHEMA" >"$STAGE/database.schema"
+    REQUIRED_MEMBERS+=("./database.schema")
+  fi
 else
   log "Backing up data store ($DATA_DB)"
   backup_sqlite "$DATA_DB" "$STAGE/openwa.sqlite"

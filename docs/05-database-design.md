@@ -125,6 +125,9 @@ POSTGRES_SCHEMA=public   # Default behavior (historical)
 - The dashboard built-in database (`POSTGRES_BUILTIN=true`) always uses `public`
 - External/managed PostgreSQL: run `CREATE SCHEMA <name>;` once before first startup
 - SQLite ignores this setting
+- `scripts/backup.sh` dumps a schema other than `public` alone, with the `pg_trgm` and `unaccent` extensions, so a
+  database shared with other applications is neither read nor restored past it; see
+  [11 - Runbook: Restore from Backup](./11-operational-runbooks.md#runbook-restore-from-backup) for loading such a dump
 
 **Validation:**
 

@@ -358,6 +358,19 @@ while IFS= read -r entry; do
 done < <(tar -tzf "$ARCHIVE")
 tar -xzf "$ARCHIVE" -C "$STAGE"
 
+# backup.sh names the schema of a dump that holds one PostgreSQL schema only (POSTGRES_SCHEMA other than
+# public) in database.schema, and that dump loads differently: into the database the app uses, never in
+# place of it. An archive without the file holds the whole database and restores as it always has. The
+# name goes into the printed SQL, so one the app would refuse stops the restore before anything is written.
+PG_DUMP_SCHEMA=""
+if [ -f "$STAGE/database.sql" ] && [ -f "$STAGE/database.schema" ]; then
+  PG_DUMP_SCHEMA="$(tr -d '\r\n' <"$STAGE/database.schema")"
+  if ! openwa_pg_schema_valid "$PG_DUMP_SCHEMA"; then
+    log "ERROR: the archive's database.schema does not name a PostgreSQL schema the app accepts: $PG_DUMP_SCHEMA"
+    exit 1
+  fi
+fi
+
 # Targets resolve exactly like the app: an explicit environment value, then ./.env, then the
 # dashboard's .env.generated, else the app's ./data defaults under OPENWA_DATA_DIR. They may
 # legitimately live outside it, where the environment or ./.env says so (see archive_target). The
@@ -649,9 +662,17 @@ fi
 
 if [ -f "$STAGE/database.sql" ]; then
   cp "$STAGE/database.sql" "$DATA_DIR/database.sql"
-  log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
-  log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
-  log "server, with DATABASE_URL set to your own URL for that database:"
+  if [ -n "$PG_DUMP_SCHEMA" ]; then
+    log "Postgres dump of schema $PG_DUMP_SCHEMA (POSTGRES_SCHEMA) present. It holds that schema only: load it into"
+    log "the database the app uses, without renaming or recreating it, as a role that may create schemas and"
+    log "extensions there. Other schemas in that database are left alone, and a schema $PG_DUMP_SCHEMA already in it"
+    log "is first moved aside as ${PG_DUMP_SCHEMA}_pre_restore_<time>. One transaction: a load that fails changes"
+    log "nothing. With DATABASE_URL set to your own URL for that database:"
+  else
+    log "Postgres dump present: load it into an EMPTY database, as docs/11-operational-runbooks.md"
+    log "(Restore from Backup, step 3) shows for the built-in openwa-postgres container. For an external"
+    log "server, with DATABASE_URL set to your own URL for that database:"
+  fi
   # psql defaults to sslmode=prefer, which falls back to plaintext and takes any certificate, so the
   # printed command asks for the TLS mode the app uses. The restore is already done: a TLS line the
   # scripts cannot parse leaves the check on rather than stopping it.
@@ -668,7 +689,7 @@ if [ -f "$STAGE/database.sql" ]; then
       fi
     fi
   fi
-  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
+  log "  sed '/^SET transaction_timeout = 0;\$/d' $DATA_DIR/database.sql | ${PSQL_SSL}psql --single-transaction -v ON_ERROR_STOP=1 \"\$DATABASE_URL\""
   if [ -n "$PSQL_UNREAD" ]; then
     log "($PSQL_UNREAD could not be read from the configuration, so the command takes the stricter setting)"
   fi

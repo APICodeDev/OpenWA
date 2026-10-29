@@ -97,6 +97,11 @@
 #       it, through .., a link or a link that does not resolve, or inside or around a directory refilled
 #       from the archive) before it copies anything, and restores there when the environment or ./.env
 #       sets that key; a default reached through the operator's link is still followed
+#   (av) a PostgreSQL POSTGRES_SCHEMA other than public, from the environment, ./.env or .env.generated, is
+#       dumped alone with its search extensions behind a prelude, for the DATABASE_URL branch too, and named in
+#       database.schema; public keeps the whole-database dump; a name the app refuses stops the backup before
+#       pg_dump; restore prints the schema load only for a marked archive, in one transaction either way, and
+#       refuses a marker naming an invalid schema
 #
 # Usage: ./scripts/smoke-test-backup-restore.sh
 # Requires: bash, tar, node (restore.sh path resolution). sqlite3 is optional (see (c) and (k)).
@@ -1960,7 +1965,7 @@ restore_ah() {
   printf '%b' "${1:-}" >"$AH/dst/.env"
   OUT_AH="$(cd "$AH/dst" && env "${@:2}" "$RESTORE" "$(ls "$AH"/out/openwa-backup-*.tar.gz)" 2>&1)" ||
     fail "(ah) the restore failed: $OUT_AH"
-  printf '%s' "$(sed -n 's/.*database\.sql | \(.*\)psql -v ON_ERROR_STOP=1.*/\1/p' <<<"$OUT_AH")"
+  printf '%s' "$(sed -n 's/.*database\.sql | \(.*\)psql --single-transaction -v ON_ERROR_STOP=1.*/\1/p' <<<"$OUT_AH")"
   if grep -q "verify-full needs the server's CA: set PGSSLROOTCERT" <<<"$OUT_AH"; then printf '+ca'; fi
   if grep -q 'could not be read from the configuration' <<<"$OUT_AH"; then printf '+unread'; fi
   if grep -q '\[config\] ERROR' <<<"$OUT_AH"; then printf '+error'; fi
@@ -2893,6 +2898,110 @@ if [ "$(cat "$AT/victim/precious.txt")" != "at-precious" ]; then
   fail "(au) a refused restore wrote through a link the archive planted"
 fi
 pass "(au) a file written after the trees cannot land on a directory the archive's configuration names"
+
+echo ""
+echo "==> (av) a PostgreSQL schema other than public is dumped alone, and restore loads it into its database"
+# A POSTGRES_SCHEMA database may hold other applications' schemas, which the app's role need not be able to
+# read: pg_dump over the whole database then failed the backup, or archived and later restored theirs too.
+# The shim records pg_dump's arguments; the PostgreSQL-gated spec loads a real dump.
+AV="$WORK/av"
+mkdir -p "$AV/data" "$AV/bin"
+make_fixture "$AV/data/main.sqlite" "av-main"
+cat >"$AV/bin/pg_dump" <<EOF
+#!/bin/sh
+printf '%s|' "\$@" >"$AV/pg_dump-args"
+echo '-- dump'
+EOF
+chmod +x "$AV/bin/pg_dump"
+# backup_av <.env content> <.env.generated content> [VAR=value...]: run a backup, leaving pg_dump's arguments in
+# $AV/pg_dump-args and the archive in $AV/out; prints the exit status.
+backup_av() {
+  printf '%b' "$1" >"$AV/.env"
+  printf '%b' "$2" >"$AV/data/.env.generated"
+  rm -rf "$AV/out" "$AV/pg_dump-args"
+  set +e
+  OUT_AV="$(cd "$AV" && env "${@:3}" PATH="$AV/bin:$PATH" BACKUP_DIR="$AV/out" "$BACKUP" 2>&1)"
+  local rc=$?
+  set -e
+  printf '%s' "$rc"
+}
+AV_PG='DATABASE_TYPE=postgres\nDATABASE_HOST=db\nDATABASE_USERNAME=app\nDATABASE_NAME=shared\n'
+AV_SCOPED="-n|openwa_s|-e|plpgsql|-e|pg_trgm|-e|unaccent|-h|db|-p|5432|-U|app|shared|"
+for AV_FROM in env dotenv generated; do
+  case "$AV_FROM" in
+    env) rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s)" ;;
+    dotenv) rc="$(backup_av 'POSTGRES_SCHEMA=openwa_s\n' "$AV_PG")" ;;
+    generated) rc="$(backup_av '' "${AV_PG}POSTGRES_SCHEMA=openwa_s\n")" ;;
+  esac
+  [ "$rc" -eq 0 ] || fail "(av) the backup with POSTGRES_SCHEMA from $AV_FROM failed: $OUT_AV"
+  if [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "$AV_SCOPED" ]; then
+    fail "(av) POSTGRES_SCHEMA from $AV_FROM did not scope the dump: $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+done
+ARCHIVE_AV="$AV/scoped.tar.gz"
+cp "$(ls "$AV"/out/openwa-backup-*.tar.gz)" "$ARCHIVE_AV"
+if [ "$(tar -xzOf "$ARCHIVE_AV" ./database.schema)" != openwa_s ]; then
+  fail "(av) the archive does not name the dumped schema in database.schema"
+fi
+AV_SQL="$(tar -xzOf "$ARCHIVE_AV" ./database.sql)"
+if ! grep -q "ALTER SCHEMA %I RENAME TO %I', 'openwa_s'" <<<"$AV_SQL" || [ "$(tail -n 1 <<<"$AV_SQL")" != '-- dump' ]; then
+  fail "(av) the schema dump does not start with the prelude that moves the schema aside: $AV_SQL"
+fi
+# The DATABASE_URL branch is scoped the same way.
+rc="$(backup_av '' "$AV_PG" POSTGRES_SCHEMA=openwa_s DATABASE_URL=postgres://app@db/shared)"
+if [ "$rc" -ne 0 ] ||
+  [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-n|openwa_s|-e|plpgsql|-e|pg_trgm|-e|unaccent|postgres://app@db/shared|" ]; then
+  fail "(av) DATABASE_URL did not get the scoped dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+fi
+# public, spelled out or left to the default, keeps the whole-database dump and no marker.
+for AV_PUBLIC in 'POSTGRES_SCHEMA=public\n' 'POSTGRES_SCHEMA=\n' ''; do
+  rc="$(backup_av '' "${AV_PG}${AV_PUBLIC}")"
+  if [ "$rc" -ne 0 ] || [ "$(cat "$AV/pg_dump-args" 2>/dev/null || true)" != "-h|db|-p|5432|-U|app|shared|" ] ||
+    tar -tzf "$(ls "$AV"/out/openwa-backup-*.tar.gz)" | grep -qx './database.schema'; then
+    fail "(av) a public schema ('$AV_PUBLIC') did not keep the whole-database dump (rc $rc): $(cat "$AV/pg_dump-args" 2>&1)"
+  fi
+done
+ARCHIVE_AV_WHOLE="$AV/whole.tar.gz"
+cp "$(ls "$AV"/out/openwa-backup-*.tar.gz)" "$ARCHIVE_AV_WHOLE"
+# A name the app refuses, which pg_dump would fold or read as a pattern, and a line the scripts cannot parse,
+# stop the backup before pg_dump starts.
+for AV_BAD in 'POSTGRES_SCHEMA=OpenWA\n' 'POSTGRES_SCHEMA=openwa?\n' 'POSTGRES_SCHEMA=pg_openwa\n' \
+  'POSTGRES_SCHEMA="openwa_s" # note\n'; do
+  rc="$(backup_av '' "${AV_PG}${AV_BAD}")"
+  if [ "$rc" -eq 0 ] || [ -e "$AV/pg_dump-args" ] || ls "$AV"/out/openwa-backup-* >/dev/null 2>&1; then
+    fail "(av) POSTGRES_SCHEMA line '$AV_BAD' reached pg_dump or produced an archive (rc $rc): $OUT_AV"
+  fi
+done
+# restore.sh prints the in-place load for a marked archive and today's empty-database load for one without the
+# marker, both in one transaction.
+restore_av() {
+  rm -rf "$AV/dst" && mkdir -p "$AV/dst"
+  OUT_AV="$(cd "$AV/dst" && "$RESTORE" "$1" 2>&1)" || fail "(av) the restore of $1 failed: $OUT_AV"
+}
+restore_av "$ARCHIVE_AV"
+if ! grep -q 'dump of schema openwa_s (POSTGRES_SCHEMA) present' <<<"$OUT_AV" ||
+  grep -q 'EMPTY database' <<<"$OUT_AV" || ! grep -q 'psql --single-transaction -v ON_ERROR_STOP=1' <<<"$OUT_AV"; then
+  fail "(av) restore did not print the schema load for a marked archive: $OUT_AV"
+fi
+restore_av "$ARCHIVE_AV_WHOLE"
+if ! grep -q 'load it into an EMPTY database' <<<"$OUT_AV" || grep -q 'dump of schema' <<<"$OUT_AV" ||
+  ! grep -q 'psql --single-transaction -v ON_ERROR_STOP=1' <<<"$OUT_AV"; then
+  fail "(av) restore did not keep the whole-database load for an unmarked archive: $OUT_AV"
+fi
+# A marker naming a schema the app refuses stops the restore before anything is written.
+rm -rf "$AV/stage" && mkdir -p "$AV/stage"
+tar -xzf "$ARCHIVE_AV" -C "$AV/stage"
+printf 'x; DROP TABLE y\n' >"$AV/stage/database.schema"
+tar -czf "$AV/badmarker.tar.gz" -C "$AV/stage" .
+rm -rf "$AV/dst" && mkdir -p "$AV/dst"
+set +e
+OUT_AV="$(cd "$AV/dst" && "$RESTORE" "$AV/badmarker.tar.gz" 2>&1)"
+rc=$?
+set -e
+if [ "$rc" -eq 0 ] || [ -e "$AV/dst/data/main.sqlite" ] || ! grep -q "database.schema does not name" <<<"$OUT_AV"; then
+  fail "(av) a marker naming an invalid schema did not stop the restore (rc $rc): $OUT_AV"
+fi
+pass "(av) a non-public POSTGRES_SCHEMA is dumped alone with its extensions and restored into its own database"
 
 echo ""
 echo "All smoke tests passed!"

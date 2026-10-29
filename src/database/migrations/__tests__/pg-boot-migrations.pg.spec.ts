@@ -1,7 +1,9 @@
 /* istanbul ignore file -- PG-gated: only runs under DATABASE_TYPE=postgres (test-postgres CI job);
    skipped in the default test job, so its lines would be unread and skew the global coverage gate. */
 import 'reflect-metadata';
-import { readFileSync } from 'fs';
+import { execFileSync, spawnSync } from 'child_process';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import * as path from 'path';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
@@ -268,3 +270,195 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
     }
   }, 120_000);
 });
+
+/**
+ * scripts/backup.sh on a database shared with another application through POSTGRES_SCHEMA, run as a role that
+ * cannot read the neighbour's schema, then the load restore.sh prints for that archive, into an empty database
+ * and into the database it came from, and the boot chain over the result. Contains search is on, with its
+ * extensions in public and, installed by the app itself, in the app's own schema. Needs pg_dump and psql on PATH.
+ */
+const hasTool = (tool: string): boolean => spawnSync('sh', ['-c', `command -v ${tool}`]).status === 0;
+(POSTGRES_ENABLED && hasTool('pg_dump') && hasTool('psql') ? describe : describe.skip)(
+  'backup.sh and restore.sh on a schema of a shared database',
+  () => {
+    const repo = path.join(__dirname, '..', '..', '..', '..');
+    const host = process.env.DATABASE_HOST || 'localhost';
+    const port = Number(process.env.DATABASE_PORT || 5432);
+    const superuser = {
+      username: process.env.DATABASE_USERNAME || 'openwa',
+      password: process.env.DATABASE_PASSWORD || 'openwa',
+    };
+    const schema = 'shared_app';
+    let admin: DataSource;
+
+    beforeAll(async () => {
+      admin = await new DataSource({
+        type: 'postgres',
+        host,
+        port,
+        ...superuser,
+        database: process.env.DATABASE_NAME || 'openwa',
+      }).initialize();
+    });
+
+    afterAll(async () => {
+      await admin?.destroy();
+    });
+
+    const url = (database: string): string =>
+      `postgres://${superuser.username}:${superuser.password}@${host}:${port}/${database}`;
+    const boot = (role: string, database: string): Promise<DataSource> =>
+      createBootDataSource({
+        type: 'postgres',
+        schema,
+        host,
+        port,
+        username: role,
+        password: role,
+        database,
+        migrations: [path.join(__dirname, '..', '*{.ts,.js}')],
+        migrationsRun: true,
+        extra: { statement_timeout: 30000, connectionTimeoutMillis: 10000 },
+      });
+    /** What a restore has to bring back. */
+    const fingerprint = async (ds: DataSource): Promise<unknown> => {
+      const [row] = await ds.query<unknown[]>(
+        `SELECT (SELECT count(*)::int FROM migrations) AS ledger,
+                (SELECT count(*)::int FROM pg_constraint WHERE contype = 'f' AND connamespace = to_regnamespace($1)) AS fks,
+                (SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('idx_messages_body_trgm')) AS trigram,
+                (SELECT count(*)::int FROM messages WHERE body_ts @@ plainto_tsquery('simple', 'searchable')) AS hits,
+                (SELECT count(*)::int FROM messages WHERE openwa_unaccent(body) LIKE '%earchab%') AS contains`,
+        [schema],
+      );
+      return row;
+    };
+
+    it.each(['public', 'app'])(
+      'with the search extensions in the %s schema: backs up, and loads into an empty and into its own database',
+      async placement => {
+        const role = `shared_role_${process.pid}_${placement}`;
+        const source = `shared_src_${process.pid}_${placement}`;
+        const target = `shared_dst_${process.pid}_${placement}`;
+        const work = mkdtempSync(path.join(tmpdir(), 'openwa-schema-backup-'));
+        const scoped = async (database: string): Promise<DataSource> =>
+          new DataSource({ type: 'postgres', host, port, ...superuser, database }).initialize();
+        try {
+          await admin.query(`CREATE ROLE "${role}" LOGIN PASSWORD '${role}'`);
+          await admin.query(`CREATE DATABASE "${source}"`);
+          await admin.query(`CREATE DATABASE "${target}"`);
+          const setup = await scoped(source);
+          await setup.query(`CREATE SCHEMA "${schema}" AUTHORIZATION "${role}"`);
+          await setup.query(`CREATE SCHEMA other_app`);
+          await setup.query(`CREATE TABLE other_app.ledger (id int PRIMARY KEY)`);
+          await setup.query(`INSERT INTO other_app.ledger VALUES (1)`);
+          if (placement === 'public') {
+            await setup.query(`CREATE EXTENSION pg_trgm`);
+            await setup.query(`CREATE EXTENSION unaccent`);
+          } else {
+            // The app's own CREATE EXTENSION then lands in the first schema of its search_path.
+            await setup.query(`GRANT CREATE ON DATABASE "${source}" TO "${role}"`);
+          }
+          await setup.destroy();
+
+          const app = await boot(role, source);
+          await app.query(
+            `INSERT INTO sessions (id, name, status, config) VALUES ('s-1', 'one', 'disconnected', '{}')`,
+          );
+          await app.query(
+            `INSERT INTO messages (id, "sessionId", "waMessageId", "chatId", "from", "to", body, type, direction, status)
+             VALUES ('m-1', 's-1', 'wa-1', 'c@c.us', 'c@c.us', 'me@c.us', 'searchable words', 'text', 'incoming', 'read')`,
+          );
+          const provider = new BuiltInFtsProvider(app, new ConfigService({ search: { containsEnabled: true } }));
+          await provider.buildContainsIndex();
+          provider.onModuleDestroy();
+          const [{ home }] = await app.query<Array<{ home: string }>>(
+            `SELECT extnamespace::regnamespace::text AS home FROM pg_extension WHERE extname = 'pg_trgm'`,
+          );
+          expect(home).toBe(placement === 'public' ? 'public' : schema);
+          const expected = await fingerprint(app);
+          expect(expected).toMatchObject({ trigram: true, hits: 1, contains: 1 });
+          await app.destroy();
+
+          mkdirSync(path.join(work, 'src', 'data'), { recursive: true });
+          mkdirSync(path.join(work, 'dst'));
+          // An empty file is an empty SQLite database, for both sqlite3 .backup and the copy without it.
+          writeFileSync(path.join(work, 'src', 'data', 'main.sqlite'), '');
+          const backup = spawnSync('bash', [path.join(repo, 'scripts', 'backup.sh')], {
+            cwd: path.join(work, 'src'),
+            encoding: 'utf8',
+            env: {
+              PATH: process.env.PATH,
+              HOME: work,
+              PG_HOST_PORT: process.env.PG_HOST_PORT,
+              BACKUP_DIR: path.join(work, 'out'),
+              DATABASE_TYPE: 'postgres',
+              POSTGRES_SCHEMA: schema,
+              DATABASE_HOST: host,
+              DATABASE_PORT: String(port),
+              DATABASE_USERNAME: role,
+              DATABASE_PASSWORD: role,
+              DATABASE_NAME: source,
+            },
+          });
+          expect(backup.stderr + backup.stdout).toContain('Backup complete');
+          const [archive] = readdirSync(path.join(work, 'out')).map(name => path.join(work, 'out', name));
+          const dump = execFileSync('tar', ['-xzOf', archive, './database.sql'], { encoding: 'utf8' });
+          expect(dump).not.toContain('other_app');
+
+          const restore = spawnSync('bash', [path.join(repo, 'scripts', 'restore.sh'), archive], {
+            cwd: path.join(work, 'dst'),
+            encoding: 'utf8',
+            env: { PATH: process.env.PATH, HOME: work },
+          });
+          const load = restore.stdout
+            .split('\n')
+            .find(line => line.includes('psql --single-transaction'))
+            ?.replace(/^\[restore\]\s+/, '');
+          expect(load).toBeDefined();
+
+          for (const database of [target, source]) {
+            const run = spawnSync('bash', ['-c', load!], {
+              cwd: path.join(work, 'dst'),
+              encoding: 'utf8',
+              env: { PATH: process.env.PATH, PG_HOST_PORT: process.env.PG_HOST_PORT, DATABASE_URL: url(database) },
+            });
+            // A NOTICE names what the prelude dropped with an extension it moved aside; nothing may fail.
+            expect({ database, status: run.status, errors: /ERROR/.test(run.stderr) }).toEqual({
+              database,
+              status: 0,
+              errors: false,
+            });
+            const restored = await boot(role, database);
+            try {
+              expect(await fingerprint(restored)).toEqual(expected);
+            } finally {
+              await restored.destroy();
+            }
+          }
+          const after = await scoped(source);
+          const [{ rows }] = await after.query<Array<{ rows: number }>>(
+            `SELECT count(*)::int AS rows FROM other_app.ledger`,
+          );
+          const aside = await after.query<unknown[]>(
+            `SELECT nspname FROM pg_namespace WHERE nspname LIKE '${schema}_pre_restore_%'`,
+          );
+          await after.destroy();
+          expect(rows).toBe(1);
+          expect(aside).toHaveLength(1);
+          const empty = await scoped(target);
+          const [{ neighbour }] = await empty.query<Array<{ neighbour: string | null }>>(
+            `SELECT to_regnamespace('other_app')::text AS neighbour`,
+          );
+          await empty.destroy();
+          expect(neighbour).toBeNull();
+        } finally {
+          rmSync(work, { recursive: true, force: true });
+          await admin.query(`DROP DATABASE IF EXISTS "${source}" WITH (FORCE)`);
+          await admin.query(`DROP DATABASE IF EXISTS "${target}" WITH (FORCE)`);
+          await admin.query(`DROP ROLE IF EXISTS "${role}"`);
+        }
+      },
+      180_000,
+    );
+  },
+);

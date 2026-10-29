@@ -1002,7 +1002,9 @@ git checkout "v${TARGET_VERSION}"
 #    so SQLite cannot replay them into the restored file.
 echo "📥 Restoring database..."
 if [ -f "$BACKUP_DIR/database.sql" ]; then
-    # PostgreSQL: load the dump into an empty database. Replayed over the upgraded tables, its CREATE
+    # PostgreSQL: load the dump into an empty database, in one transaction so a load that fails leaves
+    # nothing behind (a dump with database.schema beside it holds one schema: load that one as
+    # 11 - Runbook: Restore from Backup, step 3 says). Replayed over the upgraded tables, its CREATE
     # statements fail and its rows mix with theirs. This is the built-in PostgreSQL (the compose
     # `postgres` service, or the openwa-postgres container Dashboard > Infrastructure created, which
     # carries no compose labels, so step 1 left it running). docker start covers a leftover or
@@ -1025,7 +1027,7 @@ if [ -f "$BACKUP_DIR/database.sql" ]; then
       -c "ALTER DATABASE \"$POSTGRES_DB\" RENAME TO \"${POSTGRES_DB}_pre_restore_$(date +%Y%m%d%H%M%S)\"" \
       -c "CREATE DATABASE \"$POSTGRES_DB\" OWNER \"$POSTGRES_USER\""'
     sed '/^SET transaction_timeout = 0;$/d' "$BACKUP_DIR/database.sql" |
-      docker exec -i openwa-postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+      docker exec -i openwa-postgres sh -c 'psql --single-transaction -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 else
     # SQLite
     rm -f ./data/openwa.sqlite-{wal,shm,journal}
