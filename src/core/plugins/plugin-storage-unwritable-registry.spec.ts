@@ -40,18 +40,32 @@ describe('PluginStorageService with a registry it cannot write', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('throws on an operator write and keeps the entry as it was', () => {
+  it('throws on a write that must be stored and keeps the entry as it was', () => {
     fs.chmodSync(pluginsRoot, 0o500);
     const before = { ...storage.getPluginEntry('p1') };
+    const mustPersist = { mustPersist: true };
 
-    expect(() => storage.setPluginConfig('p1', { apiKey: 'rotated' })).toThrow(PluginRegistryWriteError);
+    expect(() => storage.setPluginConfig('p1', { apiKey: 'rotated' }, mustPersist)).toThrow(PluginRegistryWriteError);
     expect(() => storage.setPluginEnabledByOperator('p1', false)).toThrow(PluginRegistryWriteError);
-    expect(() => storage.setPluginSessions('p1', ['*'])).toThrow(PluginRegistryWriteError);
-    expect(() => storage.setPluginSessionConfig('p1', { s1: { apiKey: 'x' } })).toThrow(PluginRegistryWriteError);
+    expect(() => storage.setPluginSessions('p1', ['*'], mustPersist)).toThrow(PluginRegistryWriteError);
+    expect(() => storage.setPluginSessionConfig('p1', { s1: { apiKey: 'x' } }, mustPersist)).toThrow(
+      PluginRegistryWriteError,
+    );
     expect(() => storage.deletePluginEntry('p1')).toThrow(PluginRegistryWriteError);
 
     expect(storage.getPluginEntry('p1')).toEqual(before);
     expect(storage.getPluginEntry('p1')).not.toHaveProperty('activeSessions', ['*']);
+  });
+
+  it('applies a best-effort write in memory, so a later successful write stores it', () => {
+    fs.chmodSync(pluginsRoot, 0o500);
+
+    expect(() => storage.setPluginSessions('p1', ['s2'])).not.toThrow();
+    expect(storage.getPluginSessions('p1')).toEqual(['s2']);
+
+    fs.chmodSync(pluginsRoot, 0o700);
+    storage.setPluginStatus('p1', PluginStatus.ERROR);
+    expect(new PluginStorageService(configService).getPluginSessions('p1')).toEqual(['s2']);
   });
 
   it('keeps a runtime status write best-effort', () => {

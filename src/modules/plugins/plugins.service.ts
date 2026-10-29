@@ -238,7 +238,7 @@ export class PluginsService {
     // is fenced with @RequireUnscopedKey, so only an unrestricted key can reach this — a scoped key
     // must never be allowed to delete another tenant's activation by sending [] or its own session.
     try {
-      this.pluginLoader.setPluginSessions(id, sessions);
+      this.pluginLoader.setPluginSessions(id, sessions, { mustPersist: true });
     } catch (error) {
       if (error instanceof PluginRegistryWriteError) throw new InternalServerErrorException(error.message);
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
@@ -259,7 +259,7 @@ export class PluginsService {
       const merged = restoreSecretConfig(config, plugin.config, plugin.manifest.configSchema, {
         mergedOverStored: true,
       });
-      this.pluginLoader.updatePluginConfig(id, merged);
+      this.pluginLoader.updatePluginConfig(id, merged, { mustPersist: true });
       return { success: true, message: `Plugin ${id} configuration updated` };
     } catch (error) {
       return {
@@ -296,7 +296,7 @@ export class PluginsService {
         restorableConfig(existing, config, plugin.manifest, plugin.config),
         plugin.manifest.configSchema,
       );
-      this.pluginLoader.setPluginSessionConfig(id, sessionId, merged);
+      this.pluginLoader.setPluginSessionConfig(id, sessionId, merged, { mustPersist: true });
       return { success: true, message: `Plugin ${id} configuration for session ${sessionId} updated` };
     } catch (error) {
       return {

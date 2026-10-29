@@ -33,7 +33,7 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 const ENCODED_KEY_PREFIX = 'key-';
 
 /**
- * Thrown by an operator-facing registry write that could not reach the disk. The change is not applied: the
+ * Thrown by a registry write that had to reach the disk and could not. The change is not applied: the
  * in-memory entry is put back, so a restart cannot undo what the caller was told had been stored.
  */
 export class PluginRegistryWriteError extends Error {
@@ -42,6 +42,16 @@ export class PluginRegistryWriteError extends Error {
     super(`The plugin registry could not be written${code ? ` (${code})` : ''}; the change was not applied`);
     this.name = 'PluginRegistryWriteError';
   }
+}
+
+/**
+ * Whether a registry write must reach the disk. An operator's change through the plugin API must: one that
+ * cannot be stored is refused. Every other write is best-effort (the entry changes, a disk fault is logged),
+ * because its caller keeps a runtime state that must apply now: the load path, runtime status, and the
+ * integration instance projection, which boot reconciliation rebuilds from the database anyway.
+ */
+export interface RegistryWriteOptions {
+  mustPersist?: boolean;
 }
 
 /**
@@ -156,10 +166,19 @@ export class PluginStorageService {
   }
 
   /**
-   * Apply an operator's change to an entry and write it, or put the entry back and throw
-   * PluginRegistryWriteError when the registry cannot be written.
+   * Apply a change to an entry and write it. With `mustPersist` a registry that cannot be written puts the entry
+   * back and throws PluginRegistryWriteError; without it the change stays and the write is best-effort.
    */
-  private commitEntryChange(entry: PluginRegistryEntry, change: Partial<PluginRegistryEntry>): void {
+  private commitEntryChange(
+    entry: PluginRegistryEntry,
+    change: Partial<PluginRegistryEntry>,
+    { mustPersist = false }: RegistryWriteOptions = {},
+  ): void {
+    if (!mustPersist) {
+      Object.assign(entry, change, { updatedAt: new Date() });
+      this.saveRegistry();
+      return;
+    }
     const keys = [...Object.keys(change), 'updatedAt'] as (keyof PluginRegistryEntry)[];
     const previous = Object.fromEntries(keys.map(key => [key, entry[key]])) as Partial<PluginRegistryEntry>;
     Object.assign(entry, change, { updatedAt: new Date() });
@@ -230,7 +249,7 @@ export class PluginStorageService {
    */
   setPluginEnabledByOperator(pluginId: string, enabled: boolean): void {
     const entry = this.registry.get(pluginId);
-    if (entry) this.commitEntryChange(entry, { enabledByOperator: enabled });
+    if (entry) this.commitEntryChange(entry, { enabledByOperator: enabled }, { mustPersist: true });
   }
 
   // ============================================================================
@@ -242,10 +261,10 @@ export class PluginStorageService {
     return entry?.config ?? null;
   }
 
-  /** Throws PluginRegistryWriteError when the config cannot be stored. */
-  setPluginConfig(pluginId: string, config: Record<string, unknown>): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the config cannot be stored. */
+  setPluginConfig(pluginId: string, config: Record<string, unknown>, opts?: RegistryWriteOptions): void {
     const entry = this.registry.get(pluginId);
-    if (entry) this.commitEntryChange(entry, { config });
+    if (entry) this.commitEntryChange(entry, { config }, opts);
   }
 
   getPluginSessions(pluginId: string): string[] | null {
@@ -253,10 +272,10 @@ export class PluginStorageService {
     return entry?.activeSessions ?? null;
   }
 
-  /** Throws PluginRegistryWriteError when the activation cannot be stored. */
-  setPluginSessions(pluginId: string, sessions: string[]): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the activation cannot be stored. */
+  setPluginSessions(pluginId: string, sessions: string[], opts?: RegistryWriteOptions): void {
     const entry = this.registry.get(pluginId);
-    if (entry) this.commitEntryChange(entry, { activeSessions: sessions });
+    if (entry) this.commitEntryChange(entry, { activeSessions: sessions }, opts);
   }
 
   getPluginSessionConfig(pluginId: string): Record<string, Record<string, unknown>> | null {
@@ -264,10 +283,14 @@ export class PluginStorageService {
     return entry?.sessionConfig ?? null;
   }
 
-  /** Throws PluginRegistryWriteError when the per-session config cannot be stored. */
-  setPluginSessionConfig(pluginId: string, sessionConfig: Record<string, Record<string, unknown>>): void {
+  /** With `mustPersist`, throws PluginRegistryWriteError when the per-session config cannot be stored. */
+  setPluginSessionConfig(
+    pluginId: string,
+    sessionConfig: Record<string, Record<string, unknown>>,
+    opts?: RegistryWriteOptions,
+  ): void {
     const entry = this.registry.get(pluginId);
-    if (entry) this.commitEntryChange(entry, { sessionConfig });
+    if (entry) this.commitEntryChange(entry, { sessionConfig }, opts);
   }
 
   // ============================================================================
