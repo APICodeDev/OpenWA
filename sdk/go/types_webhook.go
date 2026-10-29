@@ -207,10 +207,11 @@ type WebhookDeliveryFailure struct {
 	LastError      string `json:"lastError"`
 	// CreatedAt is the ISO timestamp of when the failure was first recorded.
 	CreatedAt string `json:"createdAt"`
-	// Replayable is true when the row still holds the event data and can be
-	// replayed with RedriveDeliveryFailures: a terminal row (Attempts > 0)
+	// Replayable is true when the row still holds the event data and its
+	// webhook still exists in the same session: a terminal row (Attempts > 0)
 	// recorded while the gateway's WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS is
-	// above 0, until that window passes.
+	// above 0, until that window passes. RedriveDeliveryFailures replays it
+	// while that webhook is active and subscribed to the event.
 	Replayable bool `json:"replayable"`
 }
 

@@ -1067,9 +1067,10 @@ export interface WebhookDeliveryFailure {
   /** ISO timestamp of when the row was recorded. */
   createdAt: string;
   /**
-   * True when the row still holds the event data and can be replayed with
-   * {@link WebhooksResource.redriveDeliveryFailures}: a terminal row (`attempts > 0`) recorded while the
-   * gateway's `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` is above 0, until that window passes.
+   * True when the row still holds the event data and its webhook still exists in the same session: a terminal
+   * row (`attempts > 0`) recorded while the gateway's `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` is above 0, until
+   * that window passes. {@link WebhooksResource.redriveDeliveryFailures} replays it while that webhook is active
+   * and subscribed to the event.
    */
   replayable: boolean;
 }

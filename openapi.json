@@ -19970,7 +19970,7 @@
           },
           "replayable": {
             "type": "boolean",
-            "description": "True when the row still holds the event data and can be replayed with `POST /webhooks/delivery-failures/redrive`. Only terminal rows (attempts > 0) recorded while `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` > 0 are, until that window passes.",
+            "description": "True when the row still holds the event data and its webhook still exists in the same session. Only terminal rows (attempts > 0) recorded while `WEBHOOK_FAILURE_PAYLOAD_RETENTION_HOURS` > 0 hold it, until that window passes. `POST /webhooks/delivery-failures/redrive` replays such a row while its webhook is active and subscribed to the event, so a row of a disabled or unsubscribed webhook stays replayable for when the webhook is switched back.",
             "example": false
           }
         },
