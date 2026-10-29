@@ -527,3 +527,31 @@ test('a page subscribe sent while an earlier send of it is in flight ends its ga
   }
   assert.deepEqual(outcomes, expected);
 });
+
+// The gateway answers a retry only once its key read returns, which a failing store can delay well past the page's own
+// send of it, so the page's join is reported when it lands, not when the retry's answer finally does.
+test('a page join while the retry of it is still unanswered is reported at the join', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+    rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+
+  result.current.subscribe('*', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'INTERNAL_ERROR' });
+  rtl.act(() => mock.timers.tick(1_000));
+  const retry = subscribeFrames(socket).at(-1);
+  result.current.subscribe('*', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'subscribed', sessionId: '*', events: SESSION_FEED });
+  const atJoin = result.current.rejoins;
+  answer(retry, { type: 'error', code: 'INTERNAL_ERROR' });
+  const sent = subscribeFrames(socket).length;
+  rtl.act(() => mock.timers.tick(60_000));
+  assert.deepEqual(
+    { atJoin, afterRetryAnswer: result.current.rejoins, sentAfter: subscribeFrames(socket).length - sent },
+    { atJoin: 1, afterRetryAnswer: 1, sentAfter: 0 },
+  );
+});
