@@ -684,6 +684,7 @@
       "updateFailed": "فشل تحديث الويب هوك: {{message}}",
       "testOk": "نجح اختبار الويب هوك! الحالة: {{status}}",
       "testFailed": "فشل اختبار الويب هوك: {{message}}",
+      "testStatus": "ردّ المستقبِل بـ HTTP {{status}}",
       "testError": "فشل اختبار الويب هوك: {{message}}"
     },
     "actions": {

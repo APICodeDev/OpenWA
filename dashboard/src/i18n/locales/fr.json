@@ -665,6 +665,7 @@
       "updateFailed": "Échec de la mise à jour du webhook : {{message}}",
       "testOk": "Test du webhook réussi ! Statut : {{status}}",
       "testFailed": "Test du webhook échoué : {{message}}",
+      "testStatus": "le destinataire a répondu HTTP {{status}}",
       "testError": "Impossible de tester le webhook : {{message}}"
     },
     "actions": {

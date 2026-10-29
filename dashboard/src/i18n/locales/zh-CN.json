@@ -659,6 +659,7 @@
       "updateFailed": "更新 Webhook 失败：{{message}}",
       "testOk": "Webhook 测试成功！状态：{{status}}",
       "testFailed": "Webhook 测试失败：{{message}}",
+      "testStatus": "接收端返回 HTTP {{status}}",
       "testError": "测试 Webhook 失败：{{message}}"
     },
     "actions": {

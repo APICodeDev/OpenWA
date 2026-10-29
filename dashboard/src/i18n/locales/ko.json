@@ -659,6 +659,7 @@
       "updateFailed": "웹훅 업데이트 실패: {{message}}",
       "testOk": "웹훅 테스트 성공! 상태: {{status}}",
       "testFailed": "웹훅 테스트 실패: {{message}}",
+      "testStatus": "수신 측이 HTTP {{status}}(으)로 응답했습니다",
       "testError": "웹훅 테스트 중 오류 발생: {{message}}"
     },
     "actions": {

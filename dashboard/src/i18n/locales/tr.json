@@ -659,6 +659,7 @@
       "updateFailed": "Webhook güncellenemedi: {{message}}",
       "testOk": "Webhook testi başarılı! Durum: {{status}}",
       "testFailed": "Webhook testi başarısız: {{message}}",
+      "testStatus": "alıcı HTTP {{status}} ile yanıt verdi",
       "testError": "Webhook test edilemedi: {{message}}"
     },
     "actions": {

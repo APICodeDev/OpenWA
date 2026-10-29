@@ -659,6 +659,7 @@
       "updateFailed": "वेबहुक अपडेट करने में विफल: {{message}}",
       "testOk": "वेबहुक परीक्षण सफल! स्थिति: {{status}}",
       "testFailed": "वेबहुक परीक्षण विफल: {{message}}",
+      "testStatus": "प्राप्तकर्ता ने HTTP {{status}} लौटाया",
       "testError": "वेबहुक का परीक्षण करने में विफल: {{message}}"
     },
     "actions": {

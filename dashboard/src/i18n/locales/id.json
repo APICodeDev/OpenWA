@@ -659,6 +659,7 @@
       "updateFailed": "Gagal memperbarui webhook: {{message}}",
       "testOk": "Tes webhook berhasil! Status: {{status}}",
       "testFailed": "Tes webhook gagal: {{message}}",
+      "testStatus": "penerima menjawab HTTP {{status}}",
       "testError": "Gagal menguji webhook: {{message}}"
     },
     "actions": {

@@ -672,6 +672,7 @@
       "updateFailed": "עדכון ה-Webhook נכשל: {{message}}",
       "testOk": "בדיקת ה-Webhook הצליחה! סטטוס: {{status}}",
       "testFailed": "בדיקת ה-Webhook נכשלה: {{message}}",
+      "testStatus": "המקבל השיב HTTP {{status}}",
       "testError": "בדיקת ה-Webhook נכשלה: {{message}}"
     },
     "actions": {
