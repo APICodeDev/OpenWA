@@ -103,12 +103,14 @@ export const RECIPIENT_LOOKUP_503 =
  * `EngineThrottledError` (429) and `EngineTransportError` (408), both 503, from `mapSendRefusal`: on Baileys a
  * send, reaction, delete, pin, edit or status post awaits several queries before it relays the message, and
  * WhatsApp turns a throttled or timed out one away with that code. They differ in what they prove: a throttle
- * sent nothing, so the idempotency key is freed; a timeout proves nothing, so the key stays taken.
+ * sent nothing, so the idempotency key is freed; a timeout proves nothing, so the key stays taken. A connection
+ * that closed before the message was written (`EngineNotSentError`) sent nothing either.
  */
 const SEND_REFUSAL_503 =
   'On Baileys, also when WhatsApp rate-limits the request (code 429: nothing was sent, and a keyed send frees ' +
-  'its `Idempotency-Key`) or times out a query it awaits (code 408: the outcome is not proven, and a keyed ' +
-  'send keeps its `Idempotency-Key` taken).';
+  'its `Idempotency-Key`), times out a query it awaits (code 408: the outcome is not proven, and a keyed ' +
+  'send keeps its `Idempotency-Key` taken), or the connection closes before the message is written (nothing ' +
+  'was sent, and a keyed send frees its `Idempotency-Key`).';
 
 /**
  * Both texts, for every route that reaches the Baileys send path. `presence/subscribe` shares the recipient
@@ -117,13 +119,14 @@ const SEND_REFUSAL_503 =
 export const SEND_503 = `${RECIPIENT_LOOKUP_503} ${SEND_REFUSAL_503}`;
 
 /**
- * The same two refusals on a Baileys status post. It has no recipient to look up and takes no idempotency key,
+ * The same refusals on a Baileys status post. It has no recipient to look up and takes no idempotency key,
  * so the text names the post only.
  */
 export const STATUS_POST_503 =
   'On Baileys, WhatsApp can answer the post with a 503: it rate-limited the request (code 429: nothing was ' +
   'posted) or timed out a query the post awaits (code 408: the outcome is not proven, so the post may have ' +
-  'been published).';
+  'been published). The post also answers 503 when the connection closes before it is written (nothing was ' +
+  'posted).';
 
 /** `MessageNotFoundError` (404): outside the adapter's lookup window, or revoked. */
 export const MESSAGE_NOT_FOUND_404 =

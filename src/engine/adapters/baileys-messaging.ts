@@ -274,16 +274,30 @@ export async function resolveMediaBuffer(
   return { data: Buffer.from(media.data, 'base64'), mimetype: media.mimetype };
 }
 
+/** Baileys' DisconnectReason.connectionClosed, read without loading the library. */
+const CONNECTION_CLOSED = 428;
+
 /**
  * Give a WhatsApp throttle or timeout answer (WA code 429 or 408) its retryable 503 instead of letting
  * the raw Boom surface as a 500. `sendMessage` awaits several IQs before it relays the message (group
  * roster, devices, sessions) and nothing after the relay awaits a result, so a numeric code here is a
- * query WhatsApp turned away: a 429 provably sent nothing. Every other failure is returned untouched.
+ * query WhatsApp turned away: a 429 provably sent nothing.
+ *
+ * A connection that closed under the send is the other provable case, as long as the message stanza
+ * stays the last thing a send awaits (baileys-send-stanza-last.spec.ts pins that against the library):
+ * Baileys refuses a write on a socket that is not open with `Boom('Connection Closed', 428)` before
+ * encoding anything, and a query still pending when the WebSocket closes rejects with the bare close
+ * code. Either way nothing reached WhatsApp, so it is EngineNotSentError, which a retry may repeat.
+ * Every other failure is returned untouched: a write the socket itself failed may have left.
  */
 export function mapSendRefusal(error: unknown): unknown {
   const code = refusedStatusCode(error);
   if (code === 429) return new EngineThrottledError('WhatsApp rate-limited the send (code 429)');
   if (code === 408) return new EngineTransportError('WhatsApp timed out a query the send depends on (code 408)');
+  const boom = error as { isBoom?: unknown; output?: { statusCode?: unknown } } | null;
+  if (typeof error === 'number' || (boom?.isBoom === true && boom.output?.statusCode === CONNECTION_CLOSED)) {
+    return new EngineNotSentError('The WhatsApp connection closed before the message was sent');
+  }
   return error;
 }
 
