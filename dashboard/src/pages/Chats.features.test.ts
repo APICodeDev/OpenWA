@@ -962,6 +962,36 @@ test('while a contact is looked up the panel takes no other pick, and the contac
   await within(container.querySelector('.room-header') as HTMLElement).findByText('Lia');
 });
 
+// A chat opened once a lookup answers commits outside any user event, so effects that run after its commit can land a
+// task later, after the browser drew the room and after a send bound to that render could run. The composer swaps in
+// the opened chat's draft before then: the room is never drawn with the text typed in the chat before it.
+test('a chat opened after a lookup is drawn with its own draft, not the text typed in the chat before it', async () => {
+  const { screen, fireEvent, waitFor, within } = rtl;
+  listExtra = true;
+  lidPhones[LID_CHAT.id] = CONTACT.number;
+  const { container } = renderPage();
+  await screen.findByText('Lia');
+  fireEvent.click(within(container.querySelector('.chats-sidebar') as HTMLElement).getByText('Alice'));
+  await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+  const composerSelector = 'input[placeholder="Type a message..."]';
+  fireEvent.change(container.querySelector(composerSelector) as HTMLInputElement, { target: { value: 'for alice' } });
+
+  // A mutation callback runs as a microtask, so it reads the page as the commit that drew Lia's room left it.
+  let drawnWith: string | null | undefined;
+  const observer = new MutationObserver(() => {
+    if (drawnWith !== undefined || !container.querySelector('.room-header')?.textContent?.includes('Lia')) return;
+    drawnWith = container.querySelector<HTMLInputElement>(composerSelector)?.value ?? null;
+  });
+  observer.observe(container, { childList: true, subtree: true, characterData: true });
+  try {
+    await pickContact(container, 'Bob');
+    await waitFor(() => assert.notEqual(drawnWith, undefined, 'the chat did not open'));
+  } finally {
+    observer.disconnect();
+  }
+  assert.equal(drawnWith, '', 'the room was drawn with the draft of the chat open before it');
+});
+
 // ── A phone number inside a sentence is placed in a left-to-right isolate: its plus sign and spaces are neutral to
 // the bidi algorithm, so in a right-to-left sentence the digit groups would be shown in reverse order. ──
 
