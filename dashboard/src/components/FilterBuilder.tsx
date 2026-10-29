@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X } from 'lucide-react';
 import {
@@ -78,6 +78,9 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   const { t } = useTranslation();
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const blurTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(blurTimer.current), []);
 
   const suggestions = useMemo(() => {
     const query = text.trim().toLowerCase();
@@ -96,6 +99,8 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   const add = (jid: string) => {
     if (jid && !value.includes(jid)) onChange([...value, jid]);
     setText('');
+    // A suggestion picked with the keyboard holds focus and is about to leave the list; keep focus in the field.
+    inputRef.current?.focus();
   };
   const addTyped = () => {
     const jid = normalizeToJid(text);
@@ -103,7 +108,16 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
   };
 
   return (
-    <div className="chips-input">
+    <div
+      className="chips-input"
+      // The list closes only when focus leaves the whole widget: Tab from the field lands on the first suggestion,
+      // which a close on the field's own blur would remove from under the keyboard.
+      onFocus={() => clearTimeout(blurTimer.current)}
+      onBlur={e => {
+        if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+        blurTimer.current = setTimeout(() => setOpen(false), 120);
+      }}
+    >
       <div className="chips-row">
         {value.map(jid => (
           <span key={jid} className="chip" title={jid}>
@@ -120,12 +134,12 @@ function ContactChipsInput({ value, onChange, chats }: ContactChipsInputProps) {
           </span>
         ))}
         <input
+          ref={inputRef}
           className="chips-text"
           value={text}
           placeholder={t('webhooks.filters.contactPlaceholder')}
           onChange={e => setText(e.target.value)}
           onFocus={() => setOpen(true)}
-          onBlur={() => setTimeout(() => setOpen(false), 120)}
           onKeyDown={e => {
             if (e.key === 'Enter') {
               e.preventDefault();
