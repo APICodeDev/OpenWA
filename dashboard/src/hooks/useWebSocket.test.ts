@@ -477,3 +477,53 @@ test('a retry still in flight when its session is left is reported as a rejoin o
   answer(again, { type: 'subscribed', sessionId: 's1', events: SESSION_FEED });
   assert.equal(result.current.rejoins, 1, 'a retry left in flight was not remembered');
 });
+
+// The page can send a subscribe again while an earlier send of it is still being checked: the gateway awaits the key
+// read, which a failing store can make slow, and Chats sends '*' again on every session switch. Whichever answer comes
+// first, the gap the failed send leaves is reported once, when the room is joined, and nothing is sent again for it.
+test('a page subscribe sent while an earlier send of it is in flight ends its gap in either answer order', () => {
+  const outcomes: Record<string, unknown> = {};
+  const expected: Record<string, unknown> = {};
+  for (const earlier of ['a retry', 'a first send']) {
+    for (const order of ['the failure first', 'the join first']) {
+      holdConnect();
+      const { result, unmount } = rtl.renderHook(() => useWebSocket());
+      const socket = lastSocket();
+      assert.ok(socket, 'expected the hook to open a socket');
+      rtl.act(() => socket.receive('connect'));
+      mock.timers.enable({ apis: ['setTimeout'] });
+      const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+        rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+      const failed = (frame: Frame | undefined) => answer(frame, { type: 'error', code: 'INTERNAL_ERROR' });
+      const joined = (frame: Frame | undefined) =>
+        answer(frame, { type: 'subscribed', sessionId: frame?.sessionId, events: frame?.events });
+
+      result.current.subscribe('*', SESSION_FEED);
+      if (earlier === 'a retry') {
+        failed(subscribeFrames(socket).at(-1));
+        rtl.act(() => mock.timers.tick(1_000));
+      }
+      const inFlight = subscribeFrames(socket).at(-1);
+      result.current.subscribe('*', SESSION_FEED);
+      const page = subscribeFrames(socket).at(-1);
+      if (order === 'the failure first') {
+        failed(inFlight);
+        joined(page);
+      } else {
+        joined(page);
+        failed(inFlight);
+      }
+      const sent = subscribeFrames(socket).length;
+      const atJoin = result.current.rejoins;
+      rtl.act(() => mock.timers.tick(60_000));
+      for (const frame of subscribeFrames(socket).slice(sent)) joined(frame);
+      const name = `${earlier} in flight, ${order}`;
+      outcomes[name] = { atJoin, sentAfter: subscribeFrames(socket).length - sent, rejoins: result.current.rejoins };
+      expected[name] = { atJoin: 1, sentAfter: 0, rejoins: 1 };
+      mock.timers.reset();
+      unmount();
+      resetSocketDouble();
+    }
+  }
+  assert.deepEqual(outcomes, expected);
+});

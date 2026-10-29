@@ -181,7 +181,8 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   // a joined subscribe starts the pauses over. Once they have run out the connection counts as failed, so the page
   // shows its banner and retry. Every other refusal is final. Answers are matched to subscribes by the requestId the
   // gateway echoes, and a waiting retry is kept per session and events.
-  const pendingSubscribes = useRef(new Map<string, Subscription & { retried: boolean }>());
+  // `retried`: the send ends a gap, so its join is reported. `joinedLater`: a later send of it has joined.
+  const pendingSubscribes = useRef(new Map<string, Subscription & { retried: boolean; joinedLater?: boolean }>());
   // The subscribes waiting for the next round, and those of the round being sent.
   const retryQueue = useRef(new Map<string, Subscription>());
   const retryDue = useRef(new Map<string, Subscription>());
@@ -210,11 +211,12 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     if (!socketRef.current?.connected) return;
     const requestId = `sub-${++lastRequestId.current}`;
     const key = subscriptionKey({ sessionId, events: eventsList });
-    // A page subscribe in place of a waiting or dropped retry ends the same gap.
+    // A page subscribe in place of a waiting, dropped or in-flight retry ends the same gap.
     const replacesRetry = [retryQueue.current, retryDue.current, retryGaps.current]
       .map(m => m.delete(key))
       .includes(true);
-    const endsGap = retried || replacesRetry;
+    const inFlight = [...pendingSubscribes.current.values()].some(p => p.retried && subscriptionKey(p) === key);
+    const endsGap = retried || replacesRetry || inFlight;
     if (endsGap) rejoinNoted.current = false;
     pendingSubscribes.current.set(requestId, { sessionId, events: eventsList, retried: endsGap });
     socketRef.current.emit('message', {
@@ -289,15 +291,31 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       const pending = requestId === undefined ? undefined : pendingSubscribes.current.get(requestId);
       if (!frame || requestId === undefined || !pending) return;
       pendingSubscribes.current.delete(requestId);
+      const noteRejoin = () => {
+        rejoinNoted.current = true;
+        setRejoins(count => count + 1);
+      };
+      // The other sends of this subscription still being checked.
+      const key = subscriptionKey(pending);
+      const others = [...pendingSubscribes.current].filter(([, other]) => subscriptionKey(other) === key);
       if (frame.type === 'subscribed') {
         retryRound.current = 0;
-        if (pending.retried && !rejoinNoted.current) {
-          rejoinNoted.current = true;
-          setRejoins(count => count + 1);
+        // Once this join is reported they decide nothing more; otherwise a failure of one is a gap this join ended.
+        for (const [id, other] of others) {
+          if (pending.retried) pendingSubscribes.current.delete(id);
+          else other.joinedLater = true;
         }
+        if (pending.retried && !rejoinNoted.current) noteRejoin();
       }
       if (frame.type !== 'error' || (frame.code !== 'INTERNAL_ERROR' && frame.code !== 'RATE_LIMITED')) return;
-      retryQueue.current.set(subscriptionKey(pending), pending);
+      if (pending.joinedLater) return noteRejoin();
+      // Another send of it is still out: its join ends this gap, and its failure is retried.
+      if (others.length > 0) {
+        for (const [, other] of others) other.retried = true;
+        rejoinNoted.current = false;
+        return;
+      }
+      retryQueue.current.set(key, pending);
       scheduleRetry();
     },
     [scheduleRetry],
