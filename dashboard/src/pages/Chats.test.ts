@@ -2515,6 +2515,9 @@ test("a search hit in another session opens that session's chat, not the one the
   }
 });
 
+// The notice a hit gives when no listed chat is its chat under any spelling.
+const CHAT_NOT_LISTED = 'The chat of this message is not in the list';
+
 // Search reads stored messages while the list comes from the engine, so a hit's chat can be missing.
 test("a search hit whose chat the other session's list lacks does not open it later on its own", async () => {
   const { screen, fireEvent, within, act, waitFor } = rtl;
@@ -2526,6 +2529,7 @@ test("a search hit whose chat the other session's list lacks does not open it la
     await screen.findByText('Alice');
     await clickSearchHit(container);
     await waitFor(() => assert.equal(selectedSessionId(container), SESSION_2.id));
+    await screen.findByText(CHAT_NOT_LISTED);
     await flush();
 
     fireEvent.click(await screen.findByText('Carol'));
@@ -2682,10 +2686,30 @@ for (const variant of ['the same session', 'another session', 'a privacy-id chat
           'the open chat did not scroll to the message',
         ),
       );
+      assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a hit that opened its chat said it is missing');
     } finally {
       Element.prototype.scrollIntoView = original;
       twoSessions = false;
     }
+  });
+}
+
+// A hit whose chat the list holds under no spelling, not even as a privacy-id chat of the same phone, opens nothing
+// and says why, rather than leaving the click without an answer.
+for (const variant of ['a phone id', 'a phone no privacy-id chat resolves to'] as const) {
+  test(`a search hit whose chat the list lacks under every spelling says so and opens nothing (${variant})`, async () => {
+    const { screen } = rtl;
+    if (variant === 'a phone no privacy-id chat resolves to') {
+      chatsResponder = () => Promise.resolve(jsonResponse([{ ...CHAT, id: '262813461250099@lid' }, CHAT_2]));
+      lidPhones['262813461250099@lid'] = '15550001111';
+    }
+    searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION.id, chatId: '15550005555@c.us' }];
+    const { container } = renderChats();
+    await screen.findByText('Carol');
+    await clickSearchHit(container);
+    await screen.findByText(CHAT_NOT_LISTED);
+    await flush();
+    assert.equal(container.querySelector('.room-header') === null, true, 'a chat opened for the hit');
   });
 }
 

@@ -224,7 +224,8 @@
       "delete": "فشل حذف الرسالة",
       "clickButton": "فشل النقر على الزر",
       "fileTooLarge": "الملف كبير جدًا (الحد الأقصى 18 ميغابايت)",
-      "searchHitSessionNotReady": "جلسة هذه الرسالة غير متصلة"
+      "searchHitSessionNotReady": "جلسة هذه الرسالة غير متصلة",
+      "searchHitChatNotListed": "محادثة هذه الرسالة ليست في القائمة"
     },
     "loadMessagesError": "تعذّر تحميل الرسائل. تحقّق من سجلّات الخادم.",
     "messageStatus": {

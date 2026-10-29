@@ -203,7 +203,8 @@
       "delete": "Gagal menghapus pesan",
       "clickButton": "Gagal menekan tombol",
       "fileTooLarge": "Berkas terlalu besar (maks 18 MB)",
-      "searchHitSessionNotReady": "Sesi dari pesan ini tidak terhubung"
+      "searchHitSessionNotReady": "Sesi dari pesan ini tidak terhubung",
+      "searchHitChatNotListed": "Obrolan dari pesan ini tidak ada di daftar"
     },
     "loadMessagesError": "Gagal memuat pesan. Periksa log server.",
     "messageStatus": {

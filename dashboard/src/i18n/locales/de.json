@@ -203,7 +203,8 @@
       "delete": "Nachricht konnte nicht gelöscht werden",
       "clickButton": "Schaltfläche konnte nicht angeklickt werden",
       "fileTooLarge": "Die Datei ist zu groß (max. 18 MB)",
-      "searchHitSessionNotReady": "Die Sitzung dieser Nachricht ist nicht verbunden"
+      "searchHitSessionNotReady": "Die Sitzung dieser Nachricht ist nicht verbunden",
+      "searchHitChatNotListed": "Der Chat dieser Nachricht ist nicht in der Liste"
     },
     "loadMessagesError": "Nachrichten konnten nicht geladen werden. Prüfe die Serverprotokolle.",
     "messageStatus": {

@@ -203,7 +203,8 @@
       "delete": "刪除訊息失敗",
       "clickButton": "點擊按鈕失敗",
       "fileTooLarge": "檔案過大（最大 18 MB）",
-      "searchHitSessionNotReady": "此訊息所屬的工作階段未連線"
+      "searchHitSessionNotReady": "此訊息所屬的工作階段未連線",
+      "searchHitChatNotListed": "此訊息所屬的聊天不在清單中"
     },
     "loadMessagesError": "無法載入訊息。請檢查伺服器日誌。",
     "messageStatus": {

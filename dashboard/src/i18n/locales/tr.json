@@ -203,7 +203,8 @@
       "delete": "Mesaj silinemedi",
       "clickButton": "Düğmeye tıklanamadı",
       "fileTooLarge": "Dosya çok büyük (maks 18 MB)",
-      "searchHitSessionNotReady": "Bu mesajın oturumu bağlı değil"
+      "searchHitSessionNotReady": "Bu mesajın oturumu bağlı değil",
+      "searchHitChatNotListed": "Bu mesajın sohbeti listede yok"
     },
     "loadMessagesError": "Mesajlar yüklenemedi. Sunucu kayıtlarını kontrol edin.",
     "messageStatus": {

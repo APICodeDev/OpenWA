@@ -1362,9 +1362,15 @@ export function Chats() {
   );
 
   // Opens a hit's chat and keeps the hit under the id the list holds the chat by, which is what the scroll below and
-  // the effect that drops a hit the user left compare the open chat with.
+  // the effect that drops a hit the user left compare the open chat with. A hit with no listed chat is dropped with a
+  // notice, so the click is not left without an answer.
   const openHitChat = useCallback(
-    (pending: { sessionId: string; waMessageId: string }, chat: Chat) => {
+    (pending: { sessionId: string; waMessageId: string }, chat: Chat | undefined) => {
+      if (!chat) {
+        pendingHitRef.current = null;
+        showWarningToast(t('chats.errors.searchHitChatNotListed'));
+        return;
+      }
       if (chat.kind === 'channel') {
         // Channels render their own read-only list on the Channels tab, not via activeChat — the
         // hit's message-highlight is intentionally dropped here since that pane has no per-message scroll target.
@@ -1385,7 +1391,7 @@ export function Chats() {
       // The chat may be the open one under another spelling, where nothing else changes.
       setHitSeq(n => n + 1);
     },
-    [switchTab],
+    [switchTab, showWarningToast, t],
   );
 
   const handleSearchHit = useCallback(
@@ -1425,8 +1431,7 @@ export function Chats() {
       const chat = await findHitChat(hit.chatId);
       // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one.
       if (pendingHitRef.current !== pending || activeChatIdRef.current !== openBefore) return;
-      if (chat) openHitChat(pending, chat);
-      else pendingHitRef.current = null;
+      openHitChat(pending, chat);
     },
     [selectedSessionId, sessions, readSessions, showLoadError, showWarningToast, t, findHitChat, openHitChat],
   );
@@ -1450,8 +1455,7 @@ export function Chats() {
     const openBefore = activeChatIdRef.current;
     void findHitChat(pending.chatId).then(chat => {
       if (pendingHitRef.current !== resolving || activeChatIdRef.current !== openBefore) return;
-      if (chat) openHitChat(pending, chat);
-      else pendingHitRef.current = null;
+      openHitChat(pending, chat);
     });
   }, [chats, loadingChats, activeChat, selectedSessionId, findHitChat, openHitChat]);
 

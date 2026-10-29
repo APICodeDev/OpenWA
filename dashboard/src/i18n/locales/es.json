@@ -208,7 +208,8 @@
       "delete": "Error al eliminar el mensaje",
       "clickButton": "Error al pulsar el botón",
       "fileTooLarge": "El archivo es demasiado grande (máx. 18 MB)",
-      "searchHitSessionNotReady": "La sesión de este mensaje no está conectada"
+      "searchHitSessionNotReady": "La sesión de este mensaje no está conectada",
+      "searchHitChatNotListed": "El chat de este mensaje no está en la lista"
     },
     "loadMessagesError": "No se pudieron cargar los mensajes. Revisa los registros del servidor.",
     "messageStatus": {
