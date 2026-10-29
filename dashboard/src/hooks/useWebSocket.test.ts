@@ -453,3 +453,27 @@ test('a retry dropped by leaving its session is reported as a rejoin once the pa
   joined(subscribeFrames(socket).at(-1));
   assert.equal(result.current.rejoins, 1);
 });
+
+test('a retry still in flight when its session is left is reported as a rejoin once the page subscribes it again', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+    rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+
+  result.current.subscribe('s1', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'INTERNAL_ERROR' });
+  rtl.act(() => mock.timers.tick(1_000));
+  const retry = subscribeFrames(socket).at(-1);
+  assert.equal(subscribeFrames(socket).length, 2, 'the retry did not go out');
+  result.current.unsubscribe('s1');
+  // The gateway cancels a subscribe an unsubscribe overtakes; a late answer of it changes nothing.
+  answer(retry, { type: 'error', code: 'SUBSCRIPTION_CANCELLED' });
+  result.current.subscribe('s1', SESSION_FEED);
+  const again = subscribeFrames(socket).at(-1);
+  answer(again, { type: 'subscribed', sessionId: 's1', events: SESSION_FEED });
+  assert.equal(result.current.rejoins, 1, 'a retry left in flight was not remembered');
+});
