@@ -29,6 +29,16 @@
   --chat-tick-read: #1f8fc4;
   --chat-icon: #54656f;
   --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.13);
+  /* A group sender's name on the incoming bubble (ChatThread picks one per sender): each hue clears 4.5:1 there, so
+     the dark set below lightens every one of them. */
+  --chat-sender-1: #d03c6b;
+  --chat-sender-2: #7756ff;
+  --chat-sender-3: #097cb5;
+  --chat-sender-4: #188556;
+  --chat-sender-5: #b06000;
+  --chat-sender-6: #c0392b;
+  --chat-sender-7: #0e7c86;
+  --chat-sender-8: #8e44ad;
 
   width: 100%;
   height: 100vh;
@@ -59,6 +69,14 @@
   --chat-tick-read: #53bdeb;
   --chat-icon: #aebac1;
   --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+  --chat-sender-1: #dc7093;
+  --chat-sender-2: #987eff;
+  --chat-sender-3: #0c9be2;
+  --chat-sender-4: #1ea76b;
+  --chat-sender-5: #dd7900;
+  --chat-sender-6: #dd7469;
+  --chat-sender-7: #12a2b0;
+  --chat-sender-8: #b57dcc;
 }
 
 /* System-dark twin: the default 'system' theme removes data-theme entirely, so the explicit rule above
@@ -86,6 +104,14 @@
     --chat-tick-read: #53bdeb;
     --chat-icon: #aebac1;
     --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
+    --chat-sender-1: #dc7093;
+    --chat-sender-2: #987eff;
+    --chat-sender-3: #0c9be2;
+    --chat-sender-4: #1ea76b;
+    --chat-sender-5: #dd7900;
+    --chat-sender-6: #dd7469;
+    --chat-sender-7: #12a2b0;
+    --chat-sender-8: #b57dcc;
   }
 }
 

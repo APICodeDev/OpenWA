@@ -71,6 +71,9 @@ const CHAT_TEXT_ON: Array<[string, string[]]> = [
   // bubble has its own.
   ['--chat-link', ['--chat-bubble-in']],
   ['--chat-link-out', ['--chat-bubble-out']],
+  // A group sender's name heads an incoming bubble in one of eight colours. One hex for both themes measured 3.92:1 at
+  // worst on the light bubble and 2.44:1 on the dark one.
+  ...Array.from({ length: 8 }, (_, i): [string, string[]] => [`--chat-sender-${i + 1}`, ['--chat-bubble-in']]),
 ];
 const CHAT_ANCHORS = [
   '.chats-page {',
@@ -89,6 +92,13 @@ for (const anchor of CHAT_ANCHORS) {
     }
   });
 }
+
+test('a group sender is named in the eight palette colours measured above, not in a hex of its own', () => {
+  const thread = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'components/chats/ChatThread.tsx'), 'utf8');
+  assert.match(thread, /const SENDER_COLORS = 8;/);
+  assert.match(thread, /return `var\(--chat-sender-\$\{\(Math\.abs\(hash\) % SENDER_COLORS\) \+ 1\}\)`;/);
+  assert.match(thread, /<div className="message-sender" style=\{\{ color: senderColor\(/);
+});
 
 const chatRule = (selector: string): string => {
   const css = CHATS_CSS.replace(/\/\*[\s\S]*?\*\//g, '');
