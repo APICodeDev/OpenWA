@@ -751,7 +751,7 @@ report which.
 On Baileys, a session that never linked (no companion identity, and no unreadable credentials the
 engine moved aside, whose device may still be linked) has nothing to unlink: it is torn down locally
 the same way, `phone` is cleared, no `session_logged_out` audit row is written, and the route returns
-`409`. Use `stop` or `delete` for a session that is not linked; retrying the logout cannot change that.
+`409`. Start the session to link a device, or delete it; retrying the logout cannot change that.
 
 With `AUTO_START_SESSIONS=true`, auto-start selects sessions whose `phone` is non-null. Both a `200`
 and a `502` logout clear `phone`, and a WhatsApp-initiated unlink reported by a running engine clears
@@ -792,7 +792,7 @@ Returned via `transformSession`; status becomes `disconnected` and `phone` is cl
 auto-start does not resurrect the session). Recorded in the audit log as `session_logged_out`,
 distinguishing an intentional unlink from a plain stop.
 
-**Errors:** `400` session is not started (no engine to send through; the row is left untouched) · `401` · `403` · `404` not found · `409` Baileys: the session never linked, so there is nothing to unlink (stopped locally; `phone` cleared, no success audit; use `stop` or `delete`) · `502` `SESSION_LOGOUT_INCOMPLETE` — session stopped locally but the logout operation did not complete (retryable; `phone` cleared, no success audit)
+**Errors:** `400` session is not started (no engine to send through; the row is left untouched) · `401` · `403` · `404` not found · `409` Baileys: the session never linked, so there is nothing to unlink (stopped locally; `phone` cleared, no success audit; `start` it to link a device, or `delete` it) · `502` `SESSION_LOGOUT_INCOMPLETE` — session stopped locally but the logout operation did not complete (retryable; `phone` cleared, no success audit)
 
 #### POST /api/sessions/:sessionId/force-kill
 

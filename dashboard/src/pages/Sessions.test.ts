@@ -2255,12 +2255,12 @@ for (const [label, body, shown] of [
 }
 
 // A session that never linked has nothing to unlink: the gateway stops it and answers 409 with what to do instead
-// (stop or delete it), which a retry of the unlink cannot change. That answer is shown, not a bare failure.
+// (start or delete it), which a retry of the unlink cannot change. That answer is shown, not a bare failure.
 test('an unlink of a session that never linked shows the reason the gateway gives', async () => {
   const { screen, fireEvent, within } = rtl;
   resetFetchCalls();
   const message =
-    'This session was never linked to WhatsApp, so there is nothing to unlink. Stop or delete it instead.';
+    'This session was never linked to WhatsApp, so there is nothing to unlink. It was stopped; start it to link a device, or delete it.';
   logoutFailure = { status: 409, body: { statusCode: 409, message, error: 'Conflict' } };
   renderSessions();
 
