@@ -121,6 +121,14 @@ const fallbackMime: Record<(typeof messageTypes)[number], string> = {
 // Batch statuses that stop the progress polling (mirrors the backend BatchStatus enum).
 const TERMINAL_BATCH_STATUSES: readonly BatchStatus[] = ['completed', 'cancelled', 'failed'];
 
+// The digits of a typed number for the number check, or null past the longest phone number (E.164, 15 digits). A space
+// is number formatting, so two numbers pasted with one between them read as one run, which is no number to look up.
+const PHONE_DIGITS_MAX = 15;
+const phoneDigits = (text: string): string | null => {
+  const digits = normalizePhoneText(text).replace(/[^0-9]/g, '');
+  return digits.length > PHONE_DIGITS_MAX ? null : digits;
+};
+
 export function MessageTester() {
   const { t } = useTranslation();
   useDocumentTitle(t('messageTester.title'));
@@ -508,9 +516,10 @@ export function MessageTester() {
       // Bulk carries its own recipient list, so the shared selector's target is not resolved there.
       let chatId = targetId;
       if (messageType !== 'bulk' && recipientType !== 'group') {
-        const resolved = await contactApi.checkNumber(session, normalizePhoneText(targetId).replace(/[^0-9]/g, ''));
+        const digits = phoneDigits(targetId);
+        const resolved = digits === null ? null : await contactApi.checkNumber(session, digits);
         assertCurrent();
-        if (!resolved.exists || !resolved.whatsappId) {
+        if (!resolved?.exists || !resolved.whatsappId) {
           setResponse({
             success: false,
             timestamp: new Date().toISOString(),
@@ -590,10 +599,9 @@ export function MessageTester() {
             // through the same check-number flow as the main recipient.
             let toChatId = forwardTo.trim();
             if (!toChatId.includes('@')) {
-              const resolvedTo = await contactApi.checkNumber(
-                session,
-                normalizePhoneText(toChatId).replace(/[^0-9]/g, ''),
-              );
+              const digits = phoneDigits(toChatId);
+              if (digits === null) throw new Error(t('messageTester.notOnWhatsApp'));
+              const resolvedTo = await contactApi.checkNumber(session, digits);
               assertCurrent();
               if (!resolvedTo.exists || !resolvedTo.whatsappId) throw new Error(t('messageTester.notOnWhatsApp'));
               toChatId = resolvedTo.whatsappId;
