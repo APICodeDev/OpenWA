@@ -17885,6 +17885,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "The body changes config while the plugin is not loaded. Nothing is written; a body without config still applies enabled and sessionScope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "tags": [

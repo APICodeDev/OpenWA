@@ -7077,7 +7077,7 @@ Update an instance (secret masked in the response). Any subset of:
 
 **Response** `200` — the updated `InstanceView`.
 
-**Errors:** `400` validation · `401` · `403` key role < ADMIN, or the new `sessionScope` outside the key's `allowedSessions` (`null` included) · `404` unknown instance, or one outside the key's scope
+**Errors:** `400` validation · `401` · `403` key role < ADMIN, or the new `sessionScope` outside the key's `allowedSessions` (`null` included) · `404` unknown instance, or one outside the key's scope · `409` the body changes `config` while the plugin is not loaded; nothing is written, and a body without `config` still applies `enabled` and `sessionScope`
 
 #### DELETE /api/integration/plugins/:pluginId/instances/:instanceId
 
