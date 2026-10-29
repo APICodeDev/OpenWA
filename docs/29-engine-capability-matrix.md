@@ -980,7 +980,13 @@ adapter boundary — none silently stubs.
   A stored message filed under the phone of a chat the persisted table maps to two or more lids, or
   received in a group from a sender it maps to two or more, is not used, since keying it to any one of
   them would be a guess: the write proceeds as for a chat with no stored message. A key that does not
-  belong to the chat is not used. A chat id not spelled the way the engine keys chats (`<id>@g.us`,
+  belong to the chat is not used. Nor is a message sent at or before WhatsApp deleted the chat (on the
+  phone, or through the API), and it does not make the chat known either: the gateway keeps a deleted
+  chat's stored messages, and a write keyed to one names a message the phone no longer holds, while
+  Baileys applies the write locally and the deleted chat would be listed again. Such a chat is not
+  listed, and the four writes and a `sendSeen` without message ids resolve `false`, until a newer
+  message re-creates it. A deletion synced on a reconnect is dated when it arrives, so a message
+  delivered in the same reconnect counts as older. A chat id not spelled the way the engine keys chats (`<id>@g.us`,
   `<lid>@lid` or a phone jid, lowercase, with no device suffix), such as `120363@G.US` or a bare
   number, is served only by a message in memory: without one, the four writes and a `sendSeen` without
   message ids resolve `false`. With no usable message, clear and delete resolve `false`, and archive
