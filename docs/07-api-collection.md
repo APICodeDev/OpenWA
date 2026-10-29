@@ -32,7 +32,7 @@ Sessions · Messages · Webhooks · Groups · Contacts · Chats · Labels · Cha
 
 All examples assume `BASE` and `API_KEY` are exported (see 07.1). Paths are prefixed with `/api`.
 
-The `:sessionId` path segment is always the session **UUID** returned by `POST /api/sessions` — never the session name. Session routes (07.3) use `:id` for that same UUID; everywhere else `:id` is a different resource's id — a template, webhook, API key or plugin — and never a session. Export the session UUID once alongside the other variables:
+The `:sessionId` path segment is always the session **UUID** returned by `POST /api/sessions`, never the session name. The session routes in 07.3 use the same `:sessionId`; `:id` elsewhere is always another resource's id (a template, webhook, API key or plugin), never a session. Export the session UUID once alongside the other variables:
 
 ```bash
 export SESSION_ID=8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a
