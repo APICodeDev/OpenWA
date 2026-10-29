@@ -204,7 +204,7 @@
       "clickButton": "点击按钮失败",
       "fileTooLarge": "文件过大（最大 18 MB）",
       "searchHitSessionNotReady": "此消息所属的会话未连接",
-      "searchHitChatNotListed": "此消息所属的聊天不在列表中"
+      "searchHitChatNotListed": "在列表中找不到此消息所属的聊天"
     },
     "loadMessagesError": "无法加载消息。请检查服务器日志。",
     "messageStatus": {

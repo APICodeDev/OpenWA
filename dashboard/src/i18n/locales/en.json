@@ -204,7 +204,7 @@
       "clickButton": "Failed to click button",
       "fileTooLarge": "File is too large (max 18 MB)",
       "searchHitSessionNotReady": "The session of this message is not connected",
-      "searchHitChatNotListed": "The chat of this message is not in the list"
+      "searchHitChatNotListed": "The chat of this message could not be found in the list"
     },
     "loadMessagesError": "Couldn't load messages. Check the server logs.",
     "messageStatus": {

@@ -2515,8 +2515,9 @@ test("a search hit in another session opens that session's chat, not the one the
   }
 });
 
-// The notice a hit gives when no listed chat is its chat under any spelling.
-const CHAT_NOT_LISTED = 'The chat of this message is not in the list';
+// The notice a hit gives when no listed chat is found to be its chat. Only the newest privacy-id chats are asked for
+// their phone, so it says the chat was not found rather than that the list lacks it.
+const CHAT_NOT_LISTED = 'The chat of this message could not be found in the list';
 
 // Search reads stored messages while the list comes from the engine, so a hit's chat can be missing.
 test("a search hit whose chat the other session's list lacks does not open it later on its own", async () => {

@@ -204,7 +204,7 @@
       "clickButton": "Gagal menekan tombol",
       "fileTooLarge": "Berkas terlalu besar (maks 18 MB)",
       "searchHitSessionNotReady": "Sesi dari pesan ini tidak terhubung",
-      "searchHitChatNotListed": "Obrolan dari pesan ini tidak ada di daftar"
+      "searchHitChatNotListed": "Obrolan dari pesan ini tidak dapat ditemukan di daftar"
     },
     "loadMessagesError": "Gagal memuat pesan. Periksa log server.",
     "messageStatus": {

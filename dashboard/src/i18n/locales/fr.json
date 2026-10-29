@@ -209,7 +209,7 @@
       "clickButton": "Échec du clic sur le bouton",
       "fileTooLarge": "Le fichier est trop volumineux (max 18 Mo)",
       "searchHitSessionNotReady": "La session de ce message n'est pas connectée",
-      "searchHitChatNotListed": "La discussion de ce message n'est pas dans la liste"
+      "searchHitChatNotListed": "La discussion de ce message est introuvable dans la liste"
     },
     "loadMessagesError": "Impossible de charger les messages. Vérifiez les journaux du serveur.",
     "messageStatus": {

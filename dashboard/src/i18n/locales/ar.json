@@ -225,7 +225,7 @@
       "clickButton": "فشل النقر على الزر",
       "fileTooLarge": "الملف كبير جدًا (الحد الأقصى 18 ميغابايت)",
       "searchHitSessionNotReady": "جلسة هذه الرسالة غير متصلة",
-      "searchHitChatNotListed": "محادثة هذه الرسالة ليست في القائمة"
+      "searchHitChatNotListed": "تعذّر العثور على محادثة هذه الرسالة في القائمة"
     },
     "loadMessagesError": "تعذّر تحميل الرسائل. تحقّق من سجلّات الخادم.",
     "messageStatus": {

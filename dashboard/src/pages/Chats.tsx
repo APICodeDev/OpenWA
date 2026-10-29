@@ -1362,8 +1362,9 @@ export function Chats() {
   );
 
   // Opens a hit's chat and keeps the hit under the id the list holds the chat by, which is what the scroll below and
-  // the effect that drops a hit the user left compare the open chat with. A hit with no listed chat is dropped with a
-  // notice, so the click is not left without an answer.
+  // the effect that drops a hit the user left compare the open chat with. A hit whose chat is not found in the list (only
+  // the newest LID_CHATS_SEARCHED privacy-id chats are asked for their phone) is dropped with a notice, so the click is
+  // not left without an answer.
   const openHitChat = useCallback(
     (pending: { sessionId: string; waMessageId: string }, chat: Chat | undefined) => {
       if (!chat) {

@@ -204,7 +204,7 @@
       "clickButton": "Düğmeye tıklanamadı",
       "fileTooLarge": "Dosya çok büyük (maks 18 MB)",
       "searchHitSessionNotReady": "Bu mesajın oturumu bağlı değil",
-      "searchHitChatNotListed": "Bu mesajın sohbeti listede yok"
+      "searchHitChatNotListed": "Bu mesajın sohbeti listede bulunamadı"
     },
     "loadMessagesError": "Mesajlar yüklenemedi. Sunucu kayıtlarını kontrol edin.",
     "messageStatus": {

@@ -215,7 +215,7 @@
       "clickButton": "לחיצה על הכפתור נכשלה",
       "fileTooLarge": "הקובץ גדול מדי (מקסימום 18 MB)",
       "searchHitSessionNotReady": "הסשן של הודעה זו אינו מחובר",
-      "searchHitChatNotListed": "השיחה של הודעה זו אינה ברשימה"
+      "searchHitChatNotListed": "לא ניתן למצוא את השיחה של הודעה זו ברשימה"
     },
     "loadMessagesError": "לא ניתן לטעון את ההודעות. בדקו את יומני השרת.",
     "messageStatus": {
