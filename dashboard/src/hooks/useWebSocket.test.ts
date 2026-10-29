@@ -269,3 +269,90 @@ test('a waiting retry of one subscription outlasts a new subscribe of other even
   rtl.act(() => mock.timers.tick(600_000));
   assert.equal(subscribeFrames(socket).length, 4, 'a retry of a session left went out');
 });
+
+// The gateway meters every frame of a key, across all of its sockets, at 120 at once and then 60 a second. A frame
+// over that is answered RATE_LIMITED, dropped and the socket kept: it joined nothing, like INTERNAL_ERROR.
+test('a subscribe answered RATE_LIMITED is sent again after a pause, a retried one too', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  result.current.subscribe('s1', SESSION_FEED);
+  const slowDown = (frame: Frame | undefined) =>
+    socket.receive('message', {
+      type: 'error',
+      code: 'RATE_LIMITED',
+      message: 'slow down',
+      requestId: frame?.requestId,
+    });
+  rtl.act(() => slowDown(subscribeFrames(socket).at(-1)));
+  rtl.act(() => mock.timers.tick(1_000));
+  assert.equal(subscribeFrames(socket).length, 2, 'a subscribe answered RATE_LIMITED was not sent again');
+
+  rtl.act(() => slowDown(subscribeFrames(socket).at(-1)));
+  rtl.act(() => mock.timers.tick(2_000));
+  assert.equal(subscribeFrames(socket).length, 3, 'a retry answered RATE_LIMITED was not sent again');
+  const latest = subscribeFrames(socket).at(-1);
+  rtl.act(() =>
+    socket.receive('message', {
+      type: 'subscribed',
+      sessionId: 's1',
+      events: SESSION_FEED,
+      requestId: latest?.requestId,
+    }),
+  );
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, 3);
+  assert.equal(result.current.connectionFailed, false);
+});
+
+// Sent again all at once, the subscribes of a scoped key with a hundred sessions would go over that budget themselves.
+test('subscribes sent again go out a batch a second, and one failing again waits for the next round', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+
+  const ids = Array.from({ length: 100 }, (_, n) => `s${n}`);
+  for (const id of ids) result.current.subscribe(id, SESSION_FEED);
+  const unreadable = (frames: Frame[]) => {
+    for (const frame of frames) {
+      socket.receive('message', { type: 'error', code: 'INTERNAL_ERROR', requestId: frame.requestId });
+    }
+  };
+  rtl.act(() => unreadable(subscribeFrames(socket)));
+  const resent = () => subscribeFrames(socket).slice(ids.length);
+
+  rtl.act(() => mock.timers.tick(1_000));
+  assert.equal(resent().length, 30, `${resent().length} subscribes went out at once`);
+  // The first batch fails again while the rest of the round is still going out.
+  const firstBatch = resent();
+  rtl.act(() => unreadable(firstBatch));
+  for (const total of [60, 90, 100]) {
+    rtl.act(() => mock.timers.tick(1_000));
+    assert.equal(resent().length, total);
+  }
+  assert.deepEqual(
+    resent()
+      .map(frame => frame.sessionId)
+      .sort(),
+    [...ids].sort(),
+    'the round did not send each waiting subscribe once',
+  );
+
+  // The next round follows the round's last batch by the next pause.
+  rtl.act(() => mock.timers.tick(1_999));
+  assert.equal(resent().length, 100, 'a subscribe that failed again went out before the next pause');
+  rtl.act(() => mock.timers.tick(1));
+  assert.deepEqual(
+    resent()
+      .slice(100)
+      .map(frame => frame.sessionId),
+    firstBatch.map(frame => frame.sessionId),
+  );
+});
