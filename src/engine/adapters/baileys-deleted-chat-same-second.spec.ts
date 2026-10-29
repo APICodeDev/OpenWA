@@ -6,6 +6,7 @@ import {
   type ChatStateStore,
   type ChatStateValue,
 } from './baileys-chat-state-store.service';
+import type { LidMappingStore } from '../identity/lid-mapping-store.service';
 
 /**
  * In-memory ChatStateStore. With `foldDelayMs` a fold lands after the caller returns, as the real store's
@@ -148,4 +149,96 @@ describe('Baileys chat deleted and then sent to within the same second', () => {
     expect(store.listChats()).toEqual([]);
     expect(store.chatDeletedAt(PHONE)).toBe(DELETED_AT_MS);
   });
+});
+
+/**
+ * Baileys merges the deletions of one buffered window, such as several chats deleted at once on the phone or
+ * a catch-up after a reconnect, into one chats.delete event. A message re-creates only its own chat of it.
+ */
+describe('Baileys chats deleted together by one chats.delete event', () => {
+  const SID = 'sess-1';
+  const PHONE = '628111@s.whatsapp.net';
+  const LID = '484848@lid';
+  const OTHER = '628222@s.whatsapp.net';
+  const DELETED_AT_MS = 1_800_000_000_400;
+  const LATER_MS = DELETED_AT_MS + 10_000;
+  const settle = (): Promise<unknown> => new Promise(resolve => setTimeout(resolve, 30));
+  const message = (jid: string, id: string, atMs: number): WAMessage => ({
+    key: { remoteJid: jid, fromMe: false, id },
+    messageTimestamp: Math.floor(atMs / 1000),
+    message: { conversation: id },
+  });
+
+  function deletedTogether(ids: string[], lidStore?: LidMappingStore) {
+    const chatState = new FakeChatStateStore();
+    const store = new BaileysSessionStore(lidStore, SID, chatState);
+    store.upsertChats(ids.map(id => ({ id, conversationTimestamp: 1_799_990_000 })));
+    jest.spyOn(Date, 'now').mockReturnValue(DELETED_AT_MS);
+    store.removeChats(ids);
+    return { store, chatState };
+  }
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it('keeps the other chat deleted when a message re-creates one, also after a restart', async () => {
+    const { store, chatState } = deletedTogether([PHONE, OTHER]);
+    await settle();
+
+    store.recordMessage(message(PHONE, '3EB0REPLY', LATER_MS), 'text');
+    // A state update from before the deletion, without a message, does not list the other chat again.
+    store.upsertChats([{ id: OTHER, conversationTimestamp: 1_799_990_000 }]);
+    await settle();
+
+    expect(store.chatDeletedAt(PHONE)).toBeNull();
+    expect(store.listChats().map(chat => chat.id)).toEqual(['628111@c.us']);
+    expect(store.chatDeletedAt(OTHER)).toBe(DELETED_AT_MS);
+    expect(chatState.get(SID, OTHER)?.deletedAt).toBe(DELETED_AT_MS);
+    expect(new BaileysSessionStore(undefined, SID, chatState).chatDeletedAt(OTHER)).toBe(DELETED_AT_MS);
+  });
+
+  // The lid table can list the lid under the phone before the lid itself resolves, so the event names the
+  // chat under two state keys whose spellings meet.
+  it.each([
+    ['the phone first', [PHONE, LID]],
+    ['the lid first', [LID, PHONE]],
+  ])('re-creates a chat named by both its lid and its phone under both, with %s', async (_label, ids) => {
+    const lidStore: LidMappingStore = {
+      getCached: () => undefined,
+      resolveLid: () => null,
+      lidsForPhone: phone => (phone === '628111' ? ['484848'] : []),
+      remember: () => Promise.resolve(true),
+    };
+    const { store, chatState } = deletedTogether(ids, lidStore);
+    await settle();
+    expect(store.chatDeletedAt(LID)).toBe(DELETED_AT_MS);
+
+    store.recordMessage(message(PHONE, '3EB0REPLY', LATER_MS), 'text');
+    await settle();
+
+    expect(store.chatDeletedAt(PHONE)).toBeNull();
+    expect(store.chatDeletedAt(LID)).toBeNull();
+    expect(chatState.rows.size).toBe(0);
+  });
+
+  it.each([
+    ['its lid', LID],
+    ['its phone', PHONE],
+  ])(
+    're-creates only the chat whose lid mapping arrived after the event, from a message under %s',
+    async (_label, jid) => {
+      const { store, chatState } = deletedTogether([LID, PHONE, OTHER]);
+      await settle();
+      store.addLidMappings([{ lid: LID, pn: PHONE }]);
+
+      store.recordMessage(message(jid, '3EB0REPLY', LATER_MS), 'text');
+      store.upsertChats([{ id: OTHER, conversationTimestamp: 1_799_990_000 }]);
+      await settle();
+
+      expect(store.chatDeletedAt(LID)).toBeNull();
+      expect(store.chatDeletedAt('628111@c.us')).toBeNull();
+      expect(store.listChats().map(chat => chat.id)).not.toContain('628222@c.us');
+      expect(store.chatDeletedAt(OTHER)).toBe(DELETED_AT_MS);
+      expect(chatState.get(SID, OTHER)?.deletedAt).toBe(DELETED_AT_MS);
+    },
+  );
 });

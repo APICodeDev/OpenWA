@@ -376,18 +376,20 @@ export class BaileysSessionStore {
         const key = this.stateKey(id);
         twinsOf.set(key, new Set([...(twinsOf.get(key) ?? []), ...this.chatTwins(id)]));
       }
-      const mark: DeletionMark = {
-        at: Date.now(),
-        order: this.messageOrder,
-        stateKeys: [...twinsOf.keys()],
-        cleared: false,
-      };
+      const at = Date.now();
+      // One mark per chat, so a message re-creating one chat of the event leaves the others deleted. Entries
+      // whose spellings meet are one chat, named by its lid and its phone before the two resolve alike.
+      const marks = new Map<string, DeletionMark>();
       for (const [key, twins] of twinsOf) {
-        for (const k of new Set([key, ...twins, ...[...twins].map(twin => this.stateKey(twin))])) {
-          this.deletionMarks.set(k, mark);
-        }
+        const spellings = new Set([key, ...twins, ...[...twins].map(twin => this.stateKey(twin))]);
+        const met = new Set([...spellings].flatMap(k => marks.get(k) ?? []));
+        const stateKeys = [key, ...[...met].flatMap(m => m.stateKeys)];
+        const mark: DeletionMark = { at, order: this.messageOrder, stateKeys, cleared: false };
+        for (const [k, m] of marks) if (met.has(m)) spellings.add(k);
+        for (const k of spellings) marks.set(k, mark);
       }
-      void this.markDeleted(this.chatStateStore, this.sessionId, ids, keys, twinsOf, mark.at);
+      for (const [k, mark] of marks) this.deletionMarks.set(k, mark);
+      void this.markDeleted(this.chatStateStore, this.sessionId, ids, keys, twinsOf, at);
     }
   }
 
