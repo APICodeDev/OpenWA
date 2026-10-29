@@ -2714,6 +2714,61 @@ for (const variant of ['a phone id', 'a phone no privacy-id chat resolves to'] a
   });
 }
 
+// Only a list that landed for the hit's session can say it lacks the chat. A hit clicked while its session's list is
+// still loading waits for it and opens its chat once it lands, as a hit in another session does; a hit whose session's
+// list failed to load is dropped quietly, since the failure banner already answers and the chat may well be there.
+test('a search hit clicked while its session list loads opens its chat once the list lands', async () => {
+  const { screen, waitFor, within } = rtl;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => (release = resolve));
+  chatsResponder = () => gate.then(() => jsonResponse([CHAT, CHAT_2]));
+  searchHits = [{ ...THIRD_SESSION_HIT, sessionId: SESSION.id, chatId: CHAT.id }];
+  const original = Element.prototype.scrollIntoView;
+  Element.prototype.scrollIntoView = () => {};
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    assert.equal(screen.queryByText('Carol') === null, true, 'the list landed before the click');
+    await clickSearchHit(container);
+    await flush();
+    assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a list still loading was said to lack the chat');
+    release();
+    await waitFor(() => assert.ok(container.querySelector('.room-header'), "the hit's chat did not open"));
+    await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+    assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'the chat that opened was said to be missing');
+  } finally {
+    release();
+    Element.prototype.scrollIntoView = original;
+  }
+});
+
+for (const variant of ['the same session', 'another session'] as const) {
+  test(`a search hit whose session list failed to load is not said to lack its chat (${variant})`, async () => {
+    const { screen, waitFor } = rtl;
+    if (variant === 'another session') twoSessions = true;
+    const failing = variant === 'another session' ? SESSION_2.id : SESSION.id;
+    chatsResponder = sessionId =>
+      Promise.resolve(
+        sessionId === failing ? jsonResponse({ message: 'Bad Gateway' }, 502) : jsonResponse([CHAT, CHAT_2]),
+      );
+    searchHits = [{ ...THIRD_SESSION_HIT, sessionId: failing, chatId: CHAT.id }];
+    try {
+      const { container } = renderChats();
+      if (variant === 'another session') await screen.findByText('Carol');
+      else await screen.findByText(/Failed to load chats/);
+      await clickSearchHit(container);
+      await waitFor(() => assert.equal(selectedSessionId(container), failing));
+      await screen.findByText(/Failed to load chats/);
+      await flush();
+      await flush();
+      assert.equal(screen.queryByText(CHAT_NOT_LISTED) === null, true, 'a list that failed was said to lack the chat');
+      assert.equal(container.querySelector('.room-header') === null, true, 'a chat opened for the hit');
+    } finally {
+      twoSessions = false;
+    }
+  });
+}
+
 test('changing the UI language keeps the selected session and the open chat', async () => {
   const { screen, fireEvent, within, waitFor, act } = rtl;
   const { default: i18n } = await import('../i18n/index.ts');

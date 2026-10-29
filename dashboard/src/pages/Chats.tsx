@@ -1415,11 +1415,19 @@ export function Chats() {
         }
       }
       const sameSession = hit.sessionId === selectedSessionId;
+      // Only a list that landed for the hit's session can say whether it holds the chat. One still loading, or still
+      // the previous session's, leaves the hit to the effect below, which resolves it once the list lands.
+      const listReady = sameSession && !loadingChats && listedSessionRef.current === hit.sessionId;
+      // A list that failed to load says nothing about the chat, and its banner already answers the click.
+      if (listReady && chatsFailure !== null) {
+        pendingHitRef.current = null;
+        return;
+      }
       const pending = {
         sessionId: hit.sessionId,
         chatId: hit.chatId,
         waMessageId: hit.waMessageId,
-        resolving: sameSession,
+        resolving: listReady,
       };
       pendingHitRef.current = pending;
       setHitSeq(n => n + 1);
@@ -1428,13 +1436,25 @@ export function Chats() {
         setSelectedSessionId(hit.sessionId);
         return;
       }
+      if (!listReady) return;
       const openBefore = activeChatIdRef.current;
       const chat = await findHitChat(hit.chatId);
       // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one.
       if (pendingHitRef.current !== pending || activeChatIdRef.current !== openBefore) return;
       openHitChat(pending, chat);
     },
-    [selectedSessionId, sessions, readSessions, showLoadError, showWarningToast, t, findHitChat, openHitChat],
+    [
+      selectedSessionId,
+      sessions,
+      loadingChats,
+      chatsFailure,
+      readSessions,
+      showLoadError,
+      showWarningToast,
+      t,
+      findHitChat,
+      openHitChat,
+    ],
   );
 
   // After a session switch the chats list reloads — pick up the pending chat once it appears.
@@ -1451,6 +1471,11 @@ export function Chats() {
     }
     if (loadingChats || listedSessionRef.current !== pending.sessionId || activeChat?.id === pending.chatId) return;
     if (pending.resolving) return;
+    // The session's list failed to load: its banner answers, and the chat cannot be said to be missing from it.
+    if (chatsFailure !== null) {
+      pendingHitRef.current = null;
+      return;
+    }
     const resolving = { ...pending, resolving: true };
     pendingHitRef.current = resolving;
     const openBefore = activeChatIdRef.current;
@@ -1458,7 +1483,7 @@ export function Chats() {
       if (pendingHitRef.current !== resolving || activeChatIdRef.current !== openBefore) return;
       openHitChat(pending, chat);
     });
-  }, [chats, loadingChats, activeChat, selectedSessionId, findHitChat, openHitChat]);
+  }, [chats, loadingChats, chatsFailure, activeChat, selectedSessionId, findHitChat, openHitChat]);
 
   // Best-effort scroll to the hit message. Runs as a layout effect (after useChatScrollPosition's
   // own restore on the same commit) so it overrides the bottom/saved jump with no visible flash.
