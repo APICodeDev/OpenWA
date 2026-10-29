@@ -839,7 +839,9 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'second fix' }]]);
+        expect(updatesAfterInsert()).toEqual([
+          [{ ...where, type: Not('revoked'), body: Or(Not('second fix'), IsNull()) }, { body: 'second fix' }],
+        ]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(SESSION_ID, 'message.edited', expect.anything());
       });
 
@@ -965,7 +967,9 @@ describe('MessageProjector (inbound projection)', () => {
         releaseHook();
         await drain();
 
-        expect(updatesAfterInsert()).toEqual([[{ ...where, type: Not('revoked') }, { body: 'genuine edit' }]]);
+        expect(updatesAfterInsert()).toEqual([
+          [{ ...where, type: Not('revoked'), body: Or(Not('genuine edit'), IsNull()) }, { body: 'genuine edit' }],
+        ]);
       });
 
       it('keeps a reaction from another chat out of the message while its row is not written', async () => {
@@ -1219,7 +1223,10 @@ describe('MessageProjector (inbound projection)', () => {
         { ...guarded, body: Or(Not('late'), IsNull()) },
         { body: 'late' },
       );
-      expect(messageRepository.update).toHaveBeenCalledWith(guarded, { body: 'later' });
+      expect(messageRepository.update).toHaveBeenCalledWith(
+        { ...guarded, body: Or(Not('later'), IsNull()) },
+        { body: 'later' },
+      );
     });
 
     // The table holds one row per id, which may be another chat's message. The engines refuse a REST call
@@ -1285,7 +1292,10 @@ describe('MessageProjector (inbound projection)', () => {
           fromMe: true,
         });
 
-        expect(messageRepository.update).toHaveBeenCalledWith({ ...where, type: Not('revoked') }, { body: 'edited' });
+        expect(messageRepository.update).toHaveBeenCalledWith(
+          { ...where, type: Not('revoked'), body: Or(Not('edited'), IsNull()) },
+          { body: 'edited' },
+        );
       });
     });
 
@@ -1548,7 +1558,9 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([
+          [{ ...whereS, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
+        ]);
         expect(webhookService.dispatch).toHaveBeenCalledWith(
           SESSION_ID,
           'message.sent',
@@ -1586,7 +1598,9 @@ describe('MessageProjector (inbound projection)', () => {
         releaseA();
         await flush();
 
-        expect(updatesAfterS()).toEqual([[{ ...whereS, type: Not('revoked') }, { body: 'fixed' }]]);
+        expect(updatesAfterS()).toEqual([
+          [{ ...whereS, type: Not('revoked'), body: Or(Not('fixed'), IsNull()) }, { body: 'fixed' }],
+        ]);
       });
 
       it('stores reactions that arrived before the row, without announcing them again', async () => {

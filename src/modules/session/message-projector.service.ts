@@ -2,7 +2,7 @@ import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.
 import { Injectable, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Not } from 'typeorm';
+import { Repository, In, IsNull, Not, Or } from 'typeorm';
 import { QueryDeepPartialEntity } from 'typeorm';
 import { Session } from './entities/session.entity';
 import { Message, MessageDirection, MessageStatus } from '../message/entities/message.entity';
@@ -319,6 +319,7 @@ export class MessageProjector {
       this.logger,
       (sessionId, waMessageId) => this.noteMarkedEdited(sessionId, waMessageId),
       this.lidMappingStore ? jid => this.lidMappingStore!.findPhoneForLid(jid) : undefined,
+      (sessionId, waMessageId) => this.announceChangedRow(sessionId, waMessageId),
     );
     this.engines.onRetire((id, engine) => {
       for (const t of this.tickets.get(id) ?? []) if (t.engine === engine) t.drop();
@@ -1063,17 +1064,42 @@ export class MessageProjector {
     if (pending.revoked) return this.revokeRow(id, waMessageId, !insertedCleared);
     try {
       // Never onto a revoked row, as the edit paths: a message delivered deleted, or deleted before it, stays cleared.
+      // Compared in the write: a row inserted with the edit already applied is not changed again here.
+      let textChanged = false;
       if (pending.editedBody !== undefined) {
-        await this.messageRepository.update(
-          { sessionId: id, waMessageId, type: Not('revoked') },
+        const result = await this.messageRepository.update(
+          { sessionId: id, waMessageId, type: Not('revoked'), body: Or(Not(pending.editedBody), IsNull()) },
           { body: pending.editedBody },
         );
+        textChanged = Boolean(result?.affected);
       }
       if (pending.reactions) await this.storeReactions(id, waMessageId, pending.reactions);
       // The marker an edit of a stored row leaves, written last so a lost metadata race costs it alone.
       if (pending.edited) await this.mutationProjector.markMessageEdited(id, waMessageId);
+      if (textChanged) await this.announceChangedRow(id, waMessageId);
     } catch (err) {
       this.logger.error(`Failed to apply changes to message ${waMessageId}`, String(err));
+    }
+  }
+
+  /**
+   * Hand a stored row whose text an edit changed to `message:persisted` again, as {@link revokeRow} does for a
+   * cleared one, so a plugin keeping a copy keyed by the row id follows the edit. Re-read, so the payload carries
+   * the edited marker. Never rejects.
+   */
+  private async announceChangedRow(sessionId: string, waMessageId: string): Promise<void> {
+    try {
+      const row = await this.messageRepository.findOne({ where: { sessionId, waMessageId } });
+      if (!row) return;
+      void this.hookManager
+        .execute('message:persisted', { sessionId, message: row }, { sessionId, source: 'SessionService' })
+        .catch(() => undefined);
+    } catch (err) {
+      this.logger.warn('Failed to read an edited message for message:persisted', {
+        sessionId,
+        messageId: waMessageId,
+        error: String(err),
+      });
     }
   }
 

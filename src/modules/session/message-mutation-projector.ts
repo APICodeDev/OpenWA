@@ -26,6 +26,8 @@ export class MessageMutationProjector {
     // Told of each row the marker below lands on.
     private readonly onMarkedEdited: (sessionId: string, waMessageId: string) => void = () => undefined,
     private readonly resolveLid?: (jid: string) => Promise<string | null>,
+    // Told of each row whose text an edit changed, once its marker is written. Must not reject.
+    private readonly onTextChanged: (sessionId: string, waMessageId: string) => Promise<void> = () => Promise.resolve(),
   ) {}
 
   /**
@@ -162,7 +164,10 @@ export class MessageMutationProjector {
         { sessionId: id, waMessageId: message.messageId, type: Not('revoked'), body: Or(Not(message.body), IsNull()) },
         { body: message.body },
       );
-      if (result.affected) await this.markMessageEdited(id, message.messageId);
+      if (result.affected) {
+        await this.markMessageEdited(id, message.messageId);
+        await this.onTextChanged(id, message.messageId);
+      }
     } catch (err) {
       this.logger.error(`Failed to update edited message: ${message.messageId}`, String(err));
     }
@@ -207,8 +212,14 @@ export class MessageMutationProjector {
             });
             return;
           }
-          await this.messageRepository.update({ sessionId, waMessageId: messageId, type: Not('revoked') }, { body });
+          // Compared in the write, as applyMessageEdit does: the engine's own echo of this edit reaches the row
+          // too, and only the writer that changed the text reports it.
+          const result = await this.messageRepository.update(
+            { sessionId, waMessageId: messageId, type: Not('revoked'), body: Or(Not(body), IsNull()) },
+            { body },
+          );
           await this.markMessageEdited(sessionId, messageId);
+          if (result?.affected) await this.onTextChanged(sessionId, messageId);
         } catch (err) {
           this.logger.warn(`Failed to update stored body of edited message ${messageId}`, { error: String(err) });
         } finally {
