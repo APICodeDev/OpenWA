@@ -1053,7 +1053,10 @@ export function Chats() {
     },
     [relistSessions],
   );
-  const handleServerError = useCallback((frame: { code: string }) => setSessionFeedError(frame.code), []);
+  // Only the '*' refusal is kept: frames handled before a render keep the last, and another error must not hide it.
+  const handleServerError = useCallback((frame: { code: string }) => {
+    if (frame.code === 'FORBIDDEN_SESSION') setSessionFeedError(frame.code);
+  }, []);
 
   // The events object must be referentially stable: useWebSocket re-registers its socket handler
   // on every identity change, so an inline literal would tear down and re-attach per render.

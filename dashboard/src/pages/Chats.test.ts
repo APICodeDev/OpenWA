@@ -4096,6 +4096,34 @@ test("after a reconnect whose subscribes all fail, every feed of a scoped key is
   await flush();
 });
 
+// The '*' refusal is answered once and never again, so the fallback must not be lost to another error frame the page
+// handles in the same batch, here the open session's message subscribe whose key could not be read.
+test('a refused wildcard answered together with another error still falls back to each listed session', async () => {
+  const { waitFor, act } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === '*');
+    const messages = subscribeFrames().find(frame => isMessageFeed(frame) && frame.sessionId === SESSION.id);
+    assert.ok(wildcard && messages);
+    act(() => {
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' });
+      answerSubscribe(messages, KEY_UNREADABLE);
+    });
+    assert.deepEqual(
+      subscribeFrames()
+        .filter(frame => isSessionFeed(frame) && frame.sessionId !== '*')
+        .map(frame => frame.sessionId)
+        .sort(),
+      [SESSION.id, SESSION_2.id].sort(),
+    );
+  } finally {
+    twoSessions = false;
+  }
+});
+
 // A failed read of the sessions is not "no connected sessions", which tells the operator to go connect one.
 test('a failed session list says so and offers the read again, not the no-sessions guidance', async () => {
   const { screen, fireEvent, within } = rtl;
