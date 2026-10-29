@@ -214,11 +214,13 @@ curl -X POST 'http://localhost:2785/api/infra/import-data' \
 > `skippedTables` lists optional tables absent from an older schema; the import tolerates them.
 
 > [!NOTE]
-> **Timestamps travel as UTC.** Every stamp in the archive is ISO 8601 with an explicit `Z`, and both
-> dialects store it as the same instant, so an archive moves between SQLite and PostgreSQL in either
-> direction without shifting and a repeated restore is a no-op. On PostgreSQL that is the connection's
-> UTC pin ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)), not a
-> property of the host: a gateway restoring under `TZ=Asia/Jakarta` writes the same rows as one on UTC.
+> **Timestamps travel as UTC.** Every stamp in the archive is UTC. A PostgreSQL-made archive writes each
+> as ISO 8601 with an explicit `Z`; a SQLite-made one keeps SQLite's own text for the created and updated
+> columns (`YYYY-MM-DD HH:MM:SS`, sometimes with `.SSS`, no zone, still UTC) and ISO 8601 with `Z` for
+> the others. Both dialects store either form as the same instant, so an archive moves between SQLite
+> and PostgreSQL in either direction without shifting and a repeated restore is a no-op. On PostgreSQL
+> that is the connection's UTC pin ([05 - Database Design](./05-database-design.md#timestamps-on-postgresql-are-utc)),
+> not a property of the host: a gateway restoring under `TZ=Asia/Jakarta` writes the same rows as one on UTC.
 > An archive taken by 0.23.5 or earlier from a PostgreSQL gateway that ran off UTC carries that host's
 > offset in its `DEFAULT now()` stamps, and one more offset in every stamp for each restore the table
 > had been through; read the 0.23.6 upgrade notes in `CHANGELOG.md` before restoring one.
