@@ -416,12 +416,19 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       this.logger.warn(`${table} holds rows the messages table no longer has; re-indexing every message`);
       await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
     }
-    // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches).
+    // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches). It is built
+    // only once the HTTP listener is up, while a table rebuild at boot (synchronize) drops its triggers with
+    // the old table and sessions start writing before the listener: an edit, a delete or a rowid reused
+    // after one then leaves entries for text the table no longer holds, which neither the orphan check nor
+    // the count sees. Without all three triggers the index is unknown, and it is emptied like one whose
+    // count is off.
     if (batched) {
-      const [counts] = await this.dataSource.query<Array<{ messages: number; indexed: number }>>(
-        `SELECT (SELECT count(*) FROM "messages") AS messages, (SELECT count(*) FROM "${docsize}") AS indexed`,
+      const [counts] = await this.dataSource.query<Array<{ messages: number; indexed: number; triggers: number }>>(
+        `SELECT (SELECT count(*) FROM "messages") AS messages, (SELECT count(*) FROM "${docsize}") AS indexed,
+           (SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'messages'
+             AND name IN ('${table}_ai', '${table}_ad', '${table}_au')) AS triggers`,
       );
-      if (Number(counts.messages) !== Number(counts.indexed)) {
+      if (Number(counts.messages) !== Number(counts.indexed) || Number(counts.triggers) !== 3) {
         await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
       }
     } else {

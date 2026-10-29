@@ -295,6 +295,26 @@ describe('BuiltInFtsProvider trigram index build (sqlite)', () => {
     expect((await provider.search({ q: 'receipt 2401', match: 'contains' })).total).toBe(0);
   });
 
+  it('rebuilds an index whose triggers a table rebuild dropped, which missed the rows written since', async () => {
+    await new BuiltInFtsProvider(ds, containsOn).buildContainsIndex();
+    // A rebuild of `messages` (synchronize) drops its triggers, and sessions write before the next build.
+    for (const trigger of ['ai', 'ad', 'au']) await ds.query(`DROP TRIGGER messages_trgm_${trigger}`);
+    const repo = ds.getRepository(Message);
+    await repo.update({ chatId: 'c2' }, { body: 'Thanks, I will pay the receipt today' });
+    // The newest row goes and the next one takes its rowid, so neither count moves.
+    await repo.delete({ chatId: 'c4' });
+    await repo.insert(row('s1', 'c5', 'Parcel left at the warehouse', MessageDirection.INCOMING, 50));
+    const provider = new BuiltInFtsProvider(ds, containsOn);
+
+    await provider.buildContainsIndex();
+
+    await expect(integrityCheck()).resolves.toBeDefined();
+    expect((await provider.search({ q: 'receip', match: 'contains' })).hits.map(h => h.chatId)).toEqual(['c2']);
+    expect((await provider.search({ q: 'invoice', match: 'contains' })).hits.map(h => h.chatId)).toEqual(['c1']);
+    expect((await provider.search({ q: 'discount', match: 'contains' })).total).toBe(0);
+    expect((await provider.search({ q: 'warehouse', match: 'contains' })).hits.map(h => h.chatId)).toEqual(['c5']);
+  });
+
   describe('while another transaction holds the shared connection', () => {
     let provider: BuiltInFtsProvider;
 
