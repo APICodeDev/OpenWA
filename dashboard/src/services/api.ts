@@ -316,6 +316,11 @@ export interface ChatMessage {
   status: 'pending' | 'sent' | 'delivered' | 'read' | 'failed';
   timestamp?: number;
   createdAt: string;
+  /**
+   * Storage key of the archived media copy. Null once retention deleted it, even where an older gateway left
+   * `metadata.media.archived` set. Absent on live socket payloads and engine history.
+   */
+  mediaPath?: string | null;
   metadata?: {
     poll?: { name: string; options: string[]; allowMultipleAnswers: boolean };
     media?: {

@@ -607,7 +607,8 @@ function ChatThread({
               // `archived` marks a copy MESSAGE_INLINE_MEDIA=archive moved off the row once the archive
               // store held it: the bubble rendered inline before, so it previews inline still, fetched
               // lazily from the same route. Documents keep the button (there is nothing to preview),
-              // and so does a plain over-budget marker, see ArchivedMediaPreview for why.
+              // and so does a plain over-budget marker, see ArchivedMediaPreview for why. So does a marker
+              // with no `mediaPath`: retention deleted the archived copy, and the fetch would only 404.
               const previewKind: ArchivedMediaKind | null =
                 msg.type === 'image' || msg.type === 'sticker'
                   ? 'image'
@@ -617,7 +618,7 @@ function ChatThread({
                       ? 'audio'
                       : null;
               const waMessageId = msg.waMessageId;
-              if (mediaInfo.archived && previewKind && sessionId && waMessageId) {
+              if (mediaInfo.archived && msg.mediaPath && previewKind && sessionId && waMessageId) {
                 return (
                   <ArchivedMediaPreview
                     key={`${sessionId}:${activeChat.id}:${waMessageId}`}

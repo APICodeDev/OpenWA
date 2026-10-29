@@ -223,6 +223,7 @@ test('archive-only media previews inline from the media route; a plain omitted m
     waMessageId: `wamid.${id}`,
     body: '',
     type,
+    mediaPath: archived ? `chat-media/${id}` : null,
     metadata: { media: { mimetype: 'image/jpeg', filename: `${id}.jpg`, omitted: true, sizeBytes: 10, archived } },
   });
   const fetched: string[] = [];
@@ -258,6 +259,59 @@ test('archive-only media previews inline from the media route; a plain omitted m
   }
 });
 
+test('an archived marker whose stored copy retention deleted keeps the download button and fetches nothing', async () => {
+  // Retention deletes the archived copy and clears `mediaPath`, while a row an older gateway purged keeps `archived`.
+  // A fetch for such a bubble could only 404, spending the media route's per-minute budget the live previews share.
+  const media = (
+    id: string,
+    type: ChatMessageView['type'],
+    mimetype: string,
+    mediaPath: string | null,
+  ): ChatMessageView => ({
+    ...PROMPT,
+    id,
+    waMessageId: `wamid.${id}`,
+    body: '',
+    type,
+    mediaPath,
+    metadata: { media: { mimetype, filename: `${id}.bin`, omitted: true, sizeBytes: 10, archived: true } },
+  });
+  const fetched: string[] = [];
+  const fetchOriginal = globalThis.fetch;
+  const createOriginal = URL.createObjectURL;
+  const revokeOriginal = URL.revokeObjectURL;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    fetched.push(String(input));
+    return new Response(new Blob(['x'], { type: 'image/jpeg' }), { status: 200 });
+  }) as typeof fetch;
+  URL.createObjectURL = () => 'blob:archived';
+  URL.revokeObjectURL = () => {};
+  try {
+    const { container } = renderThread('viewer', [
+      media('purged-image', 'image', 'image/jpeg', null),
+      media('purged-voice', 'voice', 'audio/ogg; codecs=opus', null),
+      media('kept', 'image', 'image/jpeg', 'chat-media/kept'),
+    ]);
+    await rtl.waitFor(() => {
+      assert.ok(container.querySelector('[data-wa-message-id="wamid.kept"] img.chat-image-media'), 'no preview');
+    });
+    await rtl.act(() => new Promise(resolve => setTimeout(resolve, 0)));
+    assert.deepEqual(
+      fetched.map(url => url.split('/').slice(-2).join('/')),
+      ['wamid.kept/media'],
+      'a bubble with no stored copy was fetched',
+    );
+    for (const id of ['purged-image', 'purged-voice']) {
+      const button = container.querySelector(`[data-wa-message-id="wamid.${id}"] button.message-media-omitted`);
+      assert.ok(button, `${id} lost its download button`);
+    }
+  } finally {
+    globalThis.fetch = fetchOriginal;
+    URL.createObjectURL = createOriginal;
+    URL.revokeObjectURL = revokeOriginal;
+  }
+});
+
 test('an archived image is observed against the thread scroller and saved under its own name, or one unique to its message', async () => {
   // ArchivedMediaPreview is covered on its own; this pins what the thread hands it. The scroll container
   // as observer root keeps the lazy-load lead from being clipped to the container's own box, the stored
@@ -268,6 +322,7 @@ test('an archived image is observed against the thread scroller and saved under 
     waMessageId: `wamid.${id}`,
     body: '',
     type: 'image',
+    mediaPath: `chat-media/${id}`,
     metadata: { media: { mimetype: 'image/jpeg', filename, omitted: true, sizeBytes: 10, archived: true } },
   });
   const roots: unknown[] = [];
@@ -413,6 +468,7 @@ test('an archived sticker previews as an image and an archived voice note as aud
     waMessageId: `wamid.${id}`,
     body: '',
     type,
+    mediaPath: `chat-media/${id}`,
     metadata: { media: { mimetype, filename: `${id}.bin`, omitted: true, sizeBytes: 10, archived: true } },
   });
   const fetchOriginal = globalThis.fetch;
