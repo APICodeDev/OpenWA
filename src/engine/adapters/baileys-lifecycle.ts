@@ -339,6 +339,26 @@ export class BaileysLifecycle {
     if (this.intentionalClose) {
       return;
     }
+    // A pairing-code request writes creds.me before the code is entered, and only a completed pairing
+    // writes creds.account. Baileys logs in whenever creds.me is set, so a code that was never entered
+    // would turn every later connect into a login for a device that does not exist, and no QR could follow.
+    if (state.creds.me && !state.creds.account) {
+      this.host.logger.warn('Discarding a pairing code that was never entered; the session shows a new QR', {
+        sessionId: this.host.config.sessionId,
+      });
+      delete state.creds.me;
+      delete state.creds.pairingCode;
+      // Dropped in memory either way: a failed save only means the next connect drops it again.
+      await saveCreds().catch(err =>
+        this.host.logger.warn('Could not save the credentials after discarding an unfinished pairing', {
+          sessionId: this.host.config.sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+      if (this.intentionalClose) {
+        return;
+      }
+    }
     const version = await this.versionResolver.resolve(b, {
       dispatcher: this.fetchDispatcher(),
       signal: this.teardown.signal,
