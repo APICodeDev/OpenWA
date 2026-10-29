@@ -43,6 +43,17 @@ describe('liveness of a ready page after a reload', () => {
     jest.setSystemTime(Date.now() + ms);
   };
   const delayed = <T>(value: T, ms: number): Promise<T> => new Promise(resolve => setTimeout(() => resolve(value), ms));
+  /** Probe at the watchdog's cadence: every 60 s, each probe given its 15 s deadline. */
+  const watchdogAnswers = async (adapter: WhatsAppWebJsAdapter, ticks: number): Promise<boolean[]> => {
+    const answers: boolean[] = [];
+    for (let tick = 0; tick < ticks; tick++) {
+      await jest.advanceTimersByTimeAsync(60_000 - 15_000);
+      const probe = adapter.probeLiveness();
+      await jest.advanceTimersByTimeAsync(15_000);
+      answers.push(await probe);
+    }
+    return answers;
+  };
 
   beforeEach(() => {
     jest.useFakeTimers();
@@ -144,15 +155,45 @@ describe('liveness of a ready page after a reload', () => {
     reload(client);
     client.emit('ready');
 
-    const answers: boolean[] = [];
-    for (let tick = 0; tick < 5; tick++) {
-      await jest.advanceTimersByTimeAsync(60_000 - 15_000);
-      const probe = adapter.probeLiveness();
-      await jest.advanceTimersByTimeAsync(15_000);
-      answers.push(await probe);
-    }
+    await expect(watchdogAnswers(adapter, 5)).resolves.toEqual([true, true, true, true, true]);
+  });
 
-    expect(answers).toEqual([true, true, true, true, true]);
+  // The same loaded host after a reload that never re-injected: every helpers read answers no, or fails, but only
+  // after the budget. Such an answer is still about the page now loaded, so it counts toward the cap on the next
+  // probe and the watchdog sees the page dead, twice in a row, once the cap has passed (ticks 4 to 6 of 60 s).
+  it.each([
+    ['answers no', () => delayed(false, 5_000)],
+    [
+      'fails',
+      () => new Promise((_, reject) => setTimeout(() => reject(new Error('Execution context was destroyed.')), 5_000)),
+    ],
+  ])('recycles a reload that never re-injected when every helpers read %s late', async (_label, read) => {
+    const { adapter, client } = wire();
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, 7_000));
+    client.pupPage.evaluate.mockImplementation(read);
+    reload(client);
+
+    const answers = await watchdogAnswers(adapter, 6);
+
+    expect(answers).toEqual([true, true, true, false, false, false]);
+    expect(client.pupPage.evaluate).toHaveBeenCalledTimes(6);
+  });
+
+  // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the
+  // watchdog's count, or two dead answers in a row never occur.
+  it('recycles a reload that never re-injected when its helpers read is late only on some probes', async () => {
+    const { adapter, client } = wire();
+    let slow = true;
+    client.getState.mockImplementation(() => delayed(WAState.CONNECTED, slow ? 7_000 : 1_000));
+    client.pupPage.evaluate.mockImplementation(() => {
+      slow = !slow;
+      return delayed(false, 5_000);
+    });
+    reload(client);
+
+    const answers = await watchdogAnswers(adapter, 8);
+
+    expect(answers.slice(3)).toEqual([false, false, false, false, false]);
   });
 
   // A yes that arrives after the deadline is the same proof an in-budget yes gives, so it verifies the reload and
