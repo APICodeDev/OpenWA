@@ -1636,6 +1636,31 @@ describe('InfraDataController.import/export preserves every data-DB table', () =
     expect((await lidRepo.findOneByOrFail({ lid: '111' })).isReported).toBe(false);
   });
 
+  // The mark of a deleted chat outlives a restart because the stored messages it guards do, and a
+  // restore brings both back.
+  it('restores the deletion mark of a chat state, and reads an archive taken without one as none', async () => {
+    await seedSession('s1');
+    const repo = ds.getRepository(ChatState);
+    await repo.save([
+      repo.create({ sessionId: 's1', chatId: '628111@s.whatsapp.net', deletedAt: 1790000000000 }),
+      repo.create({ sessionId: 's1', chatId: '120363@g.us', pinned: true }),
+    ]);
+
+    const dump = await controller.exportData();
+    await repo.clear();
+    const res = await controller.importData({ tables: dump.tables });
+
+    expect(res.warnings).toEqual([]);
+    expect(await repo.findOneByOrFail({ chatId: '628111@s.whatsapp.net' })).toMatchObject({ deletedAt: 1790000000000 });
+    expect(await repo.findOneByOrFail({ chatId: '120363@g.us' })).toMatchObject({ pinned: true, deletedAt: null });
+
+    const states = (dump.tables as unknown as { chatStates: { deletedAt?: number | null }[] }).chatStates;
+    for (const state of states) delete state.deletedAt;
+    const legacy = await controller.importData({ tables: dump.tables });
+    expect(legacy.warnings).toEqual([]);
+    expect((await repo.findOneByOrFail({ chatId: '628111@s.whatsapp.net' })).deletedAt).toBeNull();
+  });
+
   // Restoring ONTO the instance that produced the archive is the rollback flow, and it is the one the
   // outbox broke. The table carries no FK to sessions, so the sessions DELETE never reached it, and
   // UNIQUE(webhookId, idempotencyKey) then collided on every row until the all-or-nothing gate rolled
