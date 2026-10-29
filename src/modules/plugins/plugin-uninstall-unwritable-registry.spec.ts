@@ -1,29 +1,66 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import AdmZip from 'adm-zip';
 import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
+import { InternalServerErrorException } from '@nestjs/common';
 import { PluginLoaderService } from '../../core/plugins/plugin-loader.service';
 import { PluginStorageService } from '../../core/plugins/plugin-storage.service';
 import { HookManager } from '../../core/hooks';
-import { PluginInstance, PluginStatus, PluginType } from '../../core/plugins/plugin.interfaces';
+import { PluginRegistryEntry } from '../../core/plugins/plugin.interfaces';
 import type { AuditService } from '../audit/audit.service';
 import { AuditAction } from '../audit/entities/audit-log.entity';
 import { PluginsController } from './plugins.controller';
 import { PluginsService } from './plugins.service';
 
-// The registry entry is the last thing an uninstall removes. When registry.json cannot take that write, the plugin
-// is already unloaded and its package deleted, so the answer and the audit trail must say it was uninstalled, and
-// the entry left behind must stay removable by repeating the call.
-describe('Uninstall when registry.json cannot be written after the package is removed', () => {
+const manifest = { id: 'p1', name: 'P1', version: '1.0.0', type: 'extension', main: 'index.js' };
+function pkg(): Buffer {
+  const zip = new AdmZip();
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest)));
+  zip.addFile('index.js', Buffer.from('module.exports = class {};'));
+  return zip.toBuffer();
+}
+
+/** What an uninstall must not leave for a reinstall of the id to inherit, or for a restart to restore. */
+const operatorSettings = (entry: PluginRegistryEntry | undefined) => ({
+  config: entry?.config,
+  activeSessions: entry?.activeSessions,
+  sessionConfig: entry?.sessionConfig,
+  enabledByOperator: entry?.enabledByOperator,
+});
+const emptied = { config: {}, activeSessions: undefined, sessionConfig: undefined, enabledByOperator: false };
+
+// An uninstall empties the plugin's registry entry before it removes anything and drops the entry last. A registry
+// that cannot take the first write refuses the uninstall with nothing changed. One that fails only the last write
+// leaves an emptied entry: the answer and the audit trail say the plugin was uninstalled, and neither a reinstall of
+// the id nor a restart gets the old config, session activation or enable decision back.
+describe('Uninstall when registry.json cannot be written', () => {
   let tmp: string;
   let registryRoot: string;
   let packageDir: string;
   let configService: ConfigService;
-  let storage: PluginStorageService;
-  let loader: PluginLoaderService;
-  let logInfo: jest.Mock;
-  let controller: PluginsController;
+  let onRelease: () => void;
+
+  /** One gateway process over the same directories; a second call is a restart. */
+  const boot = () => {
+    const storage = new PluginStorageService(configService);
+    const port = {
+      unregister: jest.fn(),
+      releaseTakeovers: jest.fn(() => {
+        onRelease();
+        return Promise.resolve();
+      }),
+    };
+    const loader = new PluginLoaderService(configService, new HookManager(), storage, {
+      get: jest.fn().mockReturnValue(port),
+    } as unknown as ModuleRef);
+    const service = new PluginsService(loader, configService);
+    const logInfo = jest.fn().mockResolvedValue(null);
+    const controller = new PluginsController(service, { logInfo } as unknown as AuditService);
+    return { storage, loader, service, controller, logInfo };
+  };
+  let gateway: ReturnType<typeof boot>;
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-uninstall-unwritable-'));
@@ -31,40 +68,17 @@ describe('Uninstall when registry.json cannot be written after the package is re
     // PLUGINS_DIR outside the data directory: the package tree stays writable when the data volume does not.
     const packagesRoot = path.join(tmp, 'packages');
     fs.mkdirSync(packagesRoot, { recursive: true });
+    packageDir = path.join(packagesRoot, 'p1');
     const values: Record<string, unknown> = { dataDir: path.join(tmp, 'data'), 'plugins.dir': packagesRoot };
     configService = { get: jest.fn((key: string) => values[key]) } as unknown as ConfigService;
-    storage = new PluginStorageService(configService);
-    storage.setPluginEntry({
-      id: 'p1',
-      type: PluginType.EXTENSION,
-      name: 'P1',
-      version: '1.0.0',
-      status: PluginStatus.INSTALLED,
-      config: {},
-      builtIn: false,
-      installedAt: new Date(),
-      updatedAt: new Date(),
-    });
-    const port = { unregister: jest.fn(), releaseTakeovers: jest.fn().mockResolvedValue(undefined) };
-    loader = new PluginLoaderService(configService, new HookManager(), storage, {
-      get: jest.fn().mockReturnValue(port),
-    } as unknown as ModuleRef);
-    packageDir = path.join(packagesRoot, 'p1');
-    fs.mkdirSync(packageDir);
-    fs.writeFileSync(path.join(packageDir, 'manifest.json'), '{}');
-    const plugin = {
-      manifest: { id: 'p1', name: 'P1', version: '1.0.0', type: PluginType.EXTENSION, main: 'index.js' },
-      status: PluginStatus.INSTALLED,
-      config: {},
-      instance: {},
-      builtIn: false,
-      packageDir,
-    } as PluginInstance;
-    (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.set('p1', plugin);
-    logInfo = jest.fn().mockResolvedValue(null);
-    controller = new PluginsController(new PluginsService(loader, configService), {
-      logInfo,
-    } as unknown as AuditService);
+    onRelease = () => undefined;
+    gateway = boot();
+    gateway.service.install({ buffer: pkg() });
+    const mustPersist = { mustPersist: true };
+    gateway.storage.setPluginConfig('p1', { token: 'old-secret' }, mustPersist);
+    gateway.storage.setPluginSessions('p1', ['s1'], mustPersist);
+    gateway.storage.setPluginSessionConfig('p1', { s1: { token: 'tenant-secret' } }, mustPersist);
+    gateway.storage.setPluginEnabledByOperator('p1', true);
   });
 
   afterEach(() => {
@@ -72,33 +86,76 @@ describe('Uninstall when registry.json cannot be written after the package is re
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  const onDisk = () => new PluginStorageService(configService);
+  const onDisk = () => new PluginStorageService(configService).getPluginEntry('p1');
 
-  it('answers the uninstall as done, audits it, and keeps the entry until a repeat can store its removal', async () => {
+  it('refuses the uninstall before removing anything when the registry cannot be written from the start', async () => {
     // The data volume's plugin directory stops accepting writes (an ownership change).
     fs.chmodSync(registryRoot, 0o500);
 
-    const result = await controller.uninstall('p1');
+    await expect(gateway.controller.uninstall('p1')).rejects.toThrow(InternalServerErrorException);
 
-    expect(loader.getPlugin('p1')).toBeUndefined();
+    expect(gateway.loader.getPlugin('p1')).toBeDefined();
+    expect(fs.existsSync(packageDir)).toBe(true);
+    expect(onDisk()?.config).toEqual({ token: 'old-secret' });
+    expect(onDisk()?.enabledByOperator).toBe(true);
+    expect(gateway.logInfo).not.toHaveBeenCalled();
+  });
+
+  it('answers done when only the final delete fails, and a reinstall in the same process starts fresh', async () => {
+    // The registry stops accepting writes while the plugin is being removed.
+    onRelease = () => fs.chmodSync(registryRoot, 0o500);
+
+    const result = await gateway.controller.uninstall('p1');
+
+    expect(gateway.loader.getPlugin('p1')).toBeUndefined();
     expect(fs.existsSync(packageDir)).toBe(false);
     expect(result.success).toBe(true);
-    expect(result.message).toMatch(/uninstalled/);
-    expect(result.message).toMatch(/registry/);
-    expect(result.message).not.toMatch(/not applied/);
-    expect(logInfo).toHaveBeenCalledWith(AuditAction.PLUGIN_UNINSTALLED, {
+    expect(result.message).toMatch(/keeps its entry, emptied of config, sessions and the enable decision/);
+    expect(gateway.logInfo).toHaveBeenCalledWith(AuditAction.PLUGIN_UNINSTALLED, {
       sessionId: undefined,
       metadata: { pluginId: 'p1' },
     });
-    // The entry stays in memory and on disk alike, so the repeat below and one after a restart both find it.
-    expect(storage.getPluginEntry('p1')).toBeDefined();
-    expect(onDisk().getPluginEntry('p1')).toBeDefined();
+    expect(operatorSettings(gateway.storage.getPluginEntry('p1'))).toEqual(emptied);
+    expect(operatorSettings(onDisk())).toEqual(emptied);
 
     fs.chmodSync(registryRoot, 0o700);
-    const repeat = await controller.uninstall('p1');
+    onRelease = () => undefined;
+    gateway.service.install({ buffer: pkg() });
 
-    expect(repeat).toEqual({ success: true, message: 'Plugin p1 uninstalled successfully' });
-    expect(storage.getPluginEntry('p1')).toBeUndefined();
-    expect(onDisk().getPluginEntry('p1')).toBeUndefined();
+    expect(operatorSettings(gateway.storage.getPluginEntry('p1'))).toEqual(emptied);
+    expect(operatorSettings(onDisk())).toEqual(emptied);
+  });
+
+  it('leaves nothing for a restart to re-enable or hand to a reinstall', async () => {
+    onRelease = () => fs.chmodSync(registryRoot, 0o500);
+    await gateway.controller.uninstall('p1');
+    onRelease = () => undefined;
+
+    const restarted = boot();
+    restarted.loader.onModuleInit();
+
+    expect(restarted.loader.getPlugin('p1')).toBeUndefined();
+    // What the boot restore reads to decide whether to enable a loaded plugin.
+    expect(operatorSettings(restarted.loader.getRegistryEntry('p1'))).toEqual(emptied);
+
+    fs.chmodSync(registryRoot, 0o700);
+    restarted.service.install({ buffer: pkg() });
+
+    expect(operatorSettings(restarted.storage.getPluginEntry('p1'))).toEqual(emptied);
+    expect(operatorSettings(onDisk())).toEqual(emptied);
+  });
+
+  it('removes the leftover entry when the uninstall is repeated with a writable registry', async () => {
+    onRelease = () => fs.chmodSync(registryRoot, 0o500);
+    await gateway.controller.uninstall('p1');
+    onRelease = () => undefined;
+    fs.chmodSync(registryRoot, 0o700);
+
+    await expect(gateway.controller.uninstall('p1')).resolves.toEqual({
+      success: true,
+      message: 'Plugin p1 uninstalled successfully',
+    });
+    expect(gateway.storage.getPluginEntry('p1')).toBeUndefined();
+    expect(onDisk()).toBeUndefined();
   });
 });

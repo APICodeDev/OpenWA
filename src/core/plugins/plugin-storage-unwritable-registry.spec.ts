@@ -52,6 +52,7 @@ describe('PluginStorageService with a registry it cannot write', () => {
       PluginRegistryWriteError,
     );
     expect(() => storage.deletePluginEntry('p1')).toThrow(PluginRegistryWriteError);
+    expect(() => storage.clearOperatorSettings('p1', mustPersist)).toThrow(PluginRegistryWriteError);
 
     expect(storage.getPluginEntry('p1')).toEqual(before);
     expect(storage.getPluginEntry('p1')).not.toHaveProperty('activeSessions', ['*']);

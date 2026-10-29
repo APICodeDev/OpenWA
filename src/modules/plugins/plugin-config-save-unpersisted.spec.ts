@@ -171,20 +171,14 @@ describe('PluginsService plugin changes when registry.json cannot be written', (
     expect(storage.getPluginEntry('p1')?.enabledByOperator).toBe(true);
   });
 
-  it('reports an uninstall done whose registry entry it cannot drop, keeping the entry for a repeat', async () => {
+  it('refuses an uninstall it cannot store before removing anything', async () => {
     plugin.builtIn = false;
     storage.getPluginEntry('p1')!.builtIn = false;
-    // Its files are gone already (an earlier attempt removed them), so only the registry write is left.
-    fs.chmodSync(pluginsRoot, 0o700);
-    fs.rmSync(path.join(pluginsRoot, 'p1'), { recursive: true });
-    fs.chmodSync(pluginsRoot, 0o500);
 
-    const result = await service.uninstall('p1');
-
-    expect(result.success).toBe(true);
-    expect(result.message).toMatch(/registry could not be written: its entry stays/);
-    expect(loader.getPlugin('p1')).toBeUndefined();
-    expect(storage.getPluginEntry('p1')).toBeDefined();
-    expect(onDisk().getPluginEntry('p1')).toBeDefined();
+    await expect(service.uninstall('p1')).rejects.toThrow(InternalServerErrorException);
+    expect(loader.getPlugin('p1')).toBe(plugin);
+    expect(fs.existsSync(path.join(pluginsRoot, 'p1'))).toBe(true);
+    expect(storage.getPluginEntry('p1')?.config).toEqual({ apiKey: 'old' });
+    expect(onDisk().getPluginEntry('p1')?.config).toEqual({ apiKey: 'old' });
   });
 });

@@ -734,12 +734,15 @@ export class PluginsService {
         return {
           success: true,
           message:
-            `Plugin ${id} uninstalled, but the plugin registry could not be written: its entry stays, reported ` +
-            'at startup as a plugin with no code, until the uninstall is repeated with a writable registry',
+            `Plugin ${id} uninstalled, but the plugin registry could not be written: registry.json keeps its entry, ` +
+            'emptied of config, sessions and the enable decision, reported at startup as a plugin with no code ' +
+            'until the uninstall is repeated',
         };
       }
       return { success: true, message: `Plugin ${id} uninstalled successfully` };
     } catch (error) {
+      // Raised only by the write that empties the entry, before anything is removed, so nothing was applied.
+      if (error instanceof PluginRegistryWriteError) throw new InternalServerErrorException(error.message);
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
   }

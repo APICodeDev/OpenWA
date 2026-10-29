@@ -252,6 +252,22 @@ export class PluginStorageService {
     if (entry) this.commitEntryChange(entry, { enabledByOperator: enabled }, { mustPersist: true });
   }
 
+  /**
+   * Empty an entry of what the operator set (config, session activation and per-session config, the enable
+   * decision), keeping the entry. The decision is stored as false: left absent, a lingering ENABLED status would be
+   * adopted as one at the next load. With `mustPersist`, throws PluginRegistryWriteError when it cannot be stored.
+   */
+  clearOperatorSettings(pluginId: string, opts?: RegistryWriteOptions): void {
+    const entry = this.registry.get(pluginId);
+    if (entry) {
+      this.commitEntryChange(
+        entry,
+        { config: {}, activeSessions: undefined, sessionConfig: undefined, enabledByOperator: false },
+        opts,
+      );
+    }
+  }
+
   // ============================================================================
   // Config Management
   // ============================================================================

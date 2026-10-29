@@ -53,12 +53,17 @@ export class PluginUninstaller {
    * Fully remove an installed user plugin: disable + unload from the runtime, delete its directory from
    * disk, then drop its persisted registry entry (last, so a failed removal can be repeated). Built-ins (engines, bundled extensions) are
    * registered programmatically with no on-disk dir and must never be removable. `registryEntryKept` is true when
-   * everything else was removed but registry.json could not be written.
+   * everything else was removed but registry.json could not be written, leaving the emptied entry.
    */
   async uninstallPlugin(pluginId: string): Promise<{ registryEntryKept: boolean }> {
     if (this.pluginStorage.getPluginEntry(pluginId)?.builtIn) {
       throw new Error(`Cannot uninstall built-in plugin ${pluginId}`);
     }
+
+    // Stored before anything is removed, and refusing the uninstall when it cannot be: an entry the final delete
+    // fails to drop then holds nothing a reinstall of the id would inherit or a restart would enable again, and a
+    // removal that stops part-way leaves a package that boots disabled and unconfigured.
+    this.pluginStorage.clearOperatorSettings(pluginId, { mustPersist: true });
 
     // Read the package location BEFORE unloading: unloadPlugin drops the runtime record that holds
     // it, and for a plugin loaded from the legacy directory the configured root is the wrong tree —
@@ -109,9 +114,10 @@ export class PluginUninstaller {
       this.pluginStorage.deletePluginEntry(pluginId);
     } catch (error) {
       if (!(error instanceof PluginRegistryWriteError)) throw error;
-      // The plugin is gone by now, so this no longer fails the uninstall. The entry stays in memory and on
-      // disk alike: no boot prunes it (it is only reported as a plugin without code), nothing loads or
-      // restores it, and repeating the uninstall removes it once registry.json can be written.
+      // The plugin is gone by now, so this no longer fails the uninstall. The entry stays, emptied before the
+      // removal began (and again here, in memory at least, for a change that landed meanwhile): no boot prunes
+      // it (it is only reported as a plugin without code), and repeating the uninstall removes it.
+      this.pluginStorage.clearOperatorSettings(pluginId);
       registryEntryKept = true;
       this.logger.warn(`Plugin ${pluginId} uninstalled, but its registry entry could not be removed`, {
         pluginId,
