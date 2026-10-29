@@ -274,7 +274,7 @@ export interface BaileysEventsHost {
 
 /** The subset of a Baileys `messages.update` entry this adapter reads. */
 interface BaileysMessageUpdate {
-  key?: { id?: string | null; remoteJid?: string | null };
+  key?: { id?: string | null; remoteJid?: string | null; fromMe?: boolean | null };
   update?: { status?: number | null; eventResponses?: BaileysEventResponse[] | null };
 }
 
@@ -1652,7 +1652,9 @@ export class BaileysEvents {
   handleMessagesUpdate(updates: BaileysMessageUpdate[]): void {
     for (const u of updates) {
       const status = mapBaileysStatus(u.update?.status);
-      if (status && u.key?.id) {
+      // An ack is a receipt of a message the account sent. Baileys also raises a status update, keyed
+      // fromMe: false, when another device of the account reads a message it received (read-self).
+      if (status && u.key?.id && u.key.fromMe !== false) {
         // Canonicalize the update's chat exactly as the inbound mapper does, so an ack's chatId
         // matches the chatId of the message events it accompanies.
         const chatId = u.key.remoteJid ? this.host.toNeutralJid(u.key.remoteJid) : undefined;
