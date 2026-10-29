@@ -25009,12 +25009,12 @@
           },
           "base64": {
             "type": "string",
-            "description": "Base64-encoded media. Requires mimetype.",
+            "description": "Base64-encoded media.",
             "example": "/9j/4AAQSkZJRg..."
           },
           "mimetype": {
             "type": "string",
-            "description": "MIME type. Required when sending base64.",
+            "description": "MIME type. Optional: when omitted, the endpoint's default applies (image/jpeg, video/mp4, or audio/ogg; codecs=opus for a voice note).",
             "example": "image/jpeg"
           }
         }
