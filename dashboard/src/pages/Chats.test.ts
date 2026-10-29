@@ -923,6 +923,73 @@ test('a chat whose newest message has no text does not claim to have no messages
   assert.equal(row.querySelector('.no-message')?.textContent ?? null, null, 'the row reads "No messages yet"');
 });
 
+// The list draws every chat of the account, so a row is drawn again only when what it shows changes: a keystroke in
+// the composer redraws none, and a message redraws the row of its chat and moves it, nothing else. A row's time is
+// formatted from its timestamp each time the row is drawn, which is what this counts, by the row's own timestamp.
+test('typing in the composer draws no chat row again, and a message draws only the row of its chat', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  const others = Array.from({ length: 20 }, (_, n) => ({
+    ...CHAT_2,
+    id: `1555100${String(n).padStart(4, '0')}@c.us`,
+    name: `Other ${n}`,
+    timestamp: 1_650_000_200 + n,
+  }));
+  const alice = { ...CHAT, timestamp: 1_650_000_101 };
+  const carol = { ...CHAT_2, timestamp: 1_650_000_102 };
+  chatsResponder = () => Promise.resolve(jsonResponse([alice, carol, ...others]));
+  const drawn: number[] = [];
+  const original = Date.prototype.toDateString;
+  Date.prototype.toDateString = function (this: Date) {
+    drawn.push(this.getTime() / 1000);
+    return original.call(this);
+  };
+  const rowsDrawn = (timestamps: number[]) => drawn.filter(ts => timestamps.includes(ts)).length;
+  try {
+    const { container } = renderChats();
+    fireEvent.click(await screen.findByText('Alice'));
+    await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+    await flush();
+
+    drawn.length = 0;
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'h' } });
+    fireEvent.change(screen.getByPlaceholderText('Type a message...'), { target: { value: 'hi' } });
+    await flush();
+    const listed = [alice, carol, ...others].map(chat => chat.timestamp);
+    assert.equal(rowsDrawn(listed), 0, `a keystroke drew ${rowsDrawn(listed)} chat rows again`);
+
+    drawn.length = 0;
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the page to have opened a socket');
+    act(() =>
+      socket.receive('message', {
+        type: 'event',
+        timestamp: new Date(1_650_000_400_000).toISOString(),
+        payload: {
+          event: 'message.received',
+          sessionId: SESSION.id,
+          data: {
+            id: 'wamid.live.carol',
+            chatId: CHAT_2.id,
+            from: CHAT_2.id,
+            to: 'me',
+            body: 'news from carol',
+            type: 'text',
+            fromMe: false,
+            timestamp: 1_650_000_300,
+          },
+        },
+      }),
+    );
+    const names = () =>
+      Array.from(container.querySelectorAll('.chats-list .chat-item-name')).map(name => name.textContent);
+    await waitFor(() => assert.equal(names()[0], 'Carol', 'the row did not move to the top'));
+    assert.ok(rowsDrawn([1_650_000_300]) > 0, "Carol's row was not drawn with the message");
+    assert.equal(rowsDrawn(listed), 0, `the message drew ${rowsDrawn(listed)} rows of other chats again`);
+  } finally {
+    Date.prototype.toDateString = original;
+  }
+});
+
 test('a message arriving the moment the chat list commits updates the listed row without a refetch', async () => {
   const { screen, waitFor } = rtl;
   resetFetchCalls();
