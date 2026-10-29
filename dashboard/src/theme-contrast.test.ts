@@ -116,8 +116,10 @@ test('the group dialog fields draw their placeholders in the chat meta token, no
   }
 });
 
-test('the outgoing bubble draws its links in their own token', () => {
+test('the outgoing bubble draws its links in their own token, and a quote its links in the same tokens', () => {
   assert.match(chatRule('.chats-page .message-bubble.outgoing .message-text a'), /color:\s*var\(--chat-link-out\)/);
+  assert.match(chatRule('.chats-page .quote-body a'), /color:\s*var\(--chat-link\)/);
+  assert.match(chatRule('.chats-page .message-bubble.outgoing .quote-body a'), /color:\s*var\(--chat-link-out\)/);
 });
 
 // The muted lines a bubble holds are --chat-meta in an incoming one. On the dark outgoing green that token is 3.27:1,
@@ -159,6 +161,9 @@ const TEXT_FILLS: Array<[string, string[], string?]> = [
   ['--chat-accent-text', ['.chats-page .session-avatar']],
   ['--chat-meta', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
   ['--chat-meta-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
+  // A link in a quote: the outgoing blue measured 4.30:1 on the quote in both the light and the dark green.
+  ['--chat-link', ['.chats-page .message-quote-box'], '--chat-bubble-in'],
+  ['--chat-link-out', ['.chats-page .message-quote-box'], '--chat-bubble-out'],
 ];
 
 for (const anchor of CHAT_ANCHORS) {

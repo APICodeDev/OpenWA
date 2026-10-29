@@ -23,7 +23,7 @@
   --chat-accent-hover: #008f6f;
   --chat-quote-accent: #06cf9c;
   --chat-link: #0271a6;
-  --chat-link-out: #0271a6;
+  --chat-link-out: #026c9e;
   /* The WhatsApp read blue is 2.13:1 on the outgoing bubble; this one clears 3:1 for the icon there. Read
      and delivered also differ in aria-label and title, never by colour alone. */
   --chat-tick-read: #1f8fc4;
@@ -65,7 +65,7 @@
   --chat-pill-active-bg: #0a332c;
   --chat-pill-active-text: #1fbf95;
   --chat-link: #53bdeb;
-  --chat-link-out: #8fd4f4;
+  --chat-link-out: #9edaf5;
   --chat-tick-read: #53bdeb;
   --chat-icon: #aebac1;
   --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
@@ -100,7 +100,7 @@
     --chat-pill-active-bg: #0a332c;
     --chat-pill-active-text: #1fbf95;
     --chat-link: #53bdeb;
-    --chat-link-out: #8fd4f4;
+    --chat-link-out: #9edaf5;
     --chat-tick-read: #53bdeb;
     --chat-icon: #aebac1;
     --chat-shadow-bubble: 0 1px 0.5px rgba(11, 20, 26, 0.4);
@@ -2252,13 +2252,16 @@
   padding-inline-start: 1.25rem;
 }
 
-.chats-page .message-text a {
+/* A link in a quote takes the same tokens: the app's link green is 4.23:1 on a quote in a light outgoing bubble. */
+.chats-page .message-text a,
+.chats-page .quote-body a {
   color: var(--chat-link);
   text-decoration: underline;
 }
 
 /* The blue of an incoming link is 4.07:1 on the light green and 3.74:1 on the dark one. */
-.chats-page .message-bubble.outgoing .message-text a {
+.chats-page .message-bubble.outgoing .message-text a,
+.chats-page .message-bubble.outgoing .quote-body a {
   color: var(--chat-link-out);
 }
 
