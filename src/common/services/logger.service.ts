@@ -446,18 +446,7 @@ export class LoggerService implements NestLoggerService {
   }
 
   private static resolveFormat(): LogFormat {
-    if (LoggerService.logFormat) return LoggerService.logFormat;
-
-    const explicit = process.env.LOG_FORMAT?.trim().toLowerCase();
-    if (explicit === LogFormat.JSON || explicit === LogFormat.PRETTY) {
-      return explicit;
-    }
-
-    // No explicit choice: structured JSON in production (containers, log aggregators),
-    // human-readable pretty everywhere else. This mirrors NestJS's own logger, which
-    // always prints its text format — and unlike a TTY check it stays correct when
-    // stdout is piped through a dev runner (e.g. `concurrently` in `npm run dev`).
-    return process.env.NODE_ENV === 'production' ? LogFormat.JSON : LogFormat.PRETTY;
+    return LoggerService.logFormat ?? logFormatFromEnv();
   }
 
   private static colorEnabled(): boolean {
@@ -473,6 +462,23 @@ export class LoggerService implements NestLoggerService {
     const targetIndex = levels.indexOf(level);
     return targetIndex <= currentIndex;
   }
+}
+
+/**
+ * The format LOG_FORMAT selects, read per write: `json` or `pretty` in any case and padding. Anything
+ * else, unset included, is the NODE_ENV default.
+ */
+export function logFormatFromEnv(env: NodeJS.ProcessEnv = process.env): LogFormat {
+  const explicit = env.LOG_FORMAT?.trim().toLowerCase();
+  if (explicit === LogFormat.JSON || explicit === LogFormat.PRETTY) {
+    return explicit;
+  }
+
+  // No explicit choice: structured JSON in production (containers, log aggregators),
+  // human-readable pretty everywhere else. This mirrors NestJS's own logger, which
+  // always prints its text format, and unlike a TTY check it stays correct when
+  // stdout is piped through a dev runner (e.g. `concurrently` in `npm run dev`).
+  return env.NODE_ENV === 'production' ? LogFormat.JSON : LogFormat.PRETTY;
 }
 
 /**

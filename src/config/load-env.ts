@@ -1,7 +1,7 @@
 import * as dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
-import { applyLogLevelFromEnv, createLogger } from '../common/services/logger.service';
+import { applyLogLevelFromEnv, createLogger, logFormatFromEnv } from '../common/services/logger.service';
 import { writeSecretFile } from '../common/utils/secret-file';
 import { clearBlankEnv, recordOsEnvKeys, recordPinnedEnvKeys, BLANK_SHADOWED_ENV_KEYS } from './env-precedence';
 
@@ -33,6 +33,15 @@ export function loadEnvironment(): void {
     // In a finally: a first-run write that fails (a read-only data directory) still reports the lines
     // that led up to it before the error propagates.
     applyLogLevelFromEnv();
+    // Reported, not refused: a misspelt format still logs, only not in the format that was asked for.
+    const requestedFormat = process.env.LOG_FORMAT?.trim();
+    const writtenFormat: string = logFormatFromEnv();
+    if (requestedFormat && requestedFormat.toLowerCase() !== writtenFormat) {
+      lines.push({
+        level: 'warn',
+        message: `LOG_FORMAT=${JSON.stringify(requestedFormat)} is not json or pretty; writing ${writtenFormat}, the NODE_ENV default`,
+      });
+    }
     for (const { level, message } of lines) logger[level](message);
   }
 }
