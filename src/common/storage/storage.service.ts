@@ -5,6 +5,7 @@ import * as path from 'path';
 import { Readable, PassThrough } from 'stream';
 import {
   S3Client,
+  S3ClientConfig,
   ListObjectsV2Command,
   GetObjectCommand,
   PutObjectCommand,
@@ -63,6 +64,12 @@ export class StorageService implements OnModuleDestroy {
   private readonly storageType: string;
   private readonly localPath: string;
   private s3Client: S3Client | null = null;
+  /**
+   * Serves openFile. A stream holds its pooled socket until its reader has taken the whole object, so a slow
+   * HTTP client holds it for its whole download, and a stalled one until the idle timeout. On a pool of their
+   * own, a burst of downloads cannot leave the writes, deletes and listings on s3Client waiting for a socket.
+   */
+  private s3StreamClient: S3Client | null = null;
   private s3Bucket = 'openwa';
   private s3KeyRoot = DEFAULT_S3_KEY_PREFIX;
   private s3Available = false;
@@ -89,7 +96,7 @@ export class StorageService implements OnModuleDestroy {
       // valid AWS configs to a silent local fallback (#735). forcePathStyle is likewise a path-style
       // concern (MinIO/etc.); AWS S3 uses virtual-hosted addressing — so tie both to the endpoint.
       if (accessKeyId && secretAccessKey) {
-        this.s3Client = new S3Client({
+        const clientConfig: S3ClientConfig = {
           ...(endpoint ? { endpoint } : {}),
           region,
           credentials: {
@@ -98,7 +105,10 @@ export class StorageService implements OnModuleDestroy {
           },
           ...(endpoint ? { forcePathStyle: true } : {}), // Required for path-style stores (MinIO)
           requestHandler: { connectionTimeout: S3_CONNECT_TIMEOUT_MS, socketTimeout: S3_SOCKET_TIMEOUT_MS },
-        });
+        };
+        // Each client builds its own HTTP handler, and with it its own socket pool.
+        this.s3Client = new S3Client(clientConfig);
+        this.s3StreamClient = new S3Client(clientConfig);
         this.s3Bucket = process.env.S3_BUCKET || s3Config.bucket || 'openwa';
         const keyRoot = normalizeS3KeyPrefix(process.env.S3_KEY_PREFIX || s3Config.keyPrefix);
         if (!keyRoot) throw new Error('S3_KEY_PREFIX is not a safe relative key prefix');
@@ -318,7 +328,7 @@ export class StorageService implements OnModuleDestroy {
       throw new Error(`Refusing to read an unsafe storage key: ${filePath}`);
     }
     if (this.storageType === 's3' && this.s3Client && this.s3Available) {
-      return this.openS3File(filePath);
+      return this.openS3File(filePath, this.s3StreamClient);
     }
     return openLocalFile(this.localPath, filePath);
   }
@@ -532,7 +542,7 @@ export class StorageService implements OnModuleDestroy {
   }
 
   private async getS3File(filePath: string): Promise<Buffer> {
-    const { stream } = await this.openS3File(filePath);
+    const { stream } = await this.openS3File(filePath, this.s3Client);
     const chunks: Buffer[] = [];
     for await (const chunk of stream) {
       chunks.push(Buffer.from(chunk as ArrayBuffer));
@@ -540,12 +550,12 @@ export class StorageService implements OnModuleDestroy {
     return Buffer.concat(chunks);
   }
 
-  private async openS3File(filePath: string): Promise<ExportFileSource> {
-    if (!this.s3Client) throw new Error('S3 client not initialized');
+  private async openS3File(filePath: string, client: S3Client | null): Promise<ExportFileSource> {
+    if (!client) throw new Error('S3 client not initialized');
 
     let response;
     try {
-      response = await this.s3Client.send(
+      response = await client.send(
         new GetObjectCommand({
           Bucket: this.s3Bucket,
           Key: `${this.s3KeyRoot}${filePath}`,
