@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- List a whatsapp-web.js group from the metadata the page already holds when WhatsApp Web fails one of its own invariants while refreshing it (invariant 76137 for a hosted coexistence device), so one such group no longer turns `GET /api/sessions/{sessionId}/groups` and `/chats` into a permanent 500; the gateway logs which groups were served that way (#1950).
+- List a whatsapp-web.js group from the metadata the page already holds when WhatsApp Web fails one of its own invariants while refreshing it, so one such group no longer turns `GET /api/sessions/{sessionId}/groups` and `/chats` into a permanent 500 (#1950). Thanks @Bhavikg27.
 - Index a Baileys clear, delete, archive or unread by the same chat jid as its message key, so the phone applies it (#1891). Thanks @rjsebening.
 - Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
 - Send a Baileys archive or mark unread without a range for a chat the session knows but holds no message for, where it answered `success: false` (#1891). Thanks @rjsebening.
