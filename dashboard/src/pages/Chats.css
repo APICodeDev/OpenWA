@@ -2190,6 +2190,14 @@
   background: var(--chat-bubble-out);
 }
 
+/* Forced colours paint every bubble in the page colour and drop its shadow, which ran one message into the next on
+   the wallpaper: each bubble draws its edge instead. */
+@media (forced-colors: active) {
+  .chats-page .message-bubble {
+    border: 1px solid CanvasText;
+  }
+}
+
 /* The tail on the first bubble of a run, on the side the bubble comes from. */
 .chats-page .run-start .message-bubble.incoming {
   border-start-start-radius: 0;

@@ -146,3 +146,10 @@ test('the band that swaps the panes beside the expanded navigation has no lower 
   assert.doesNotMatch(band[1], /min-width/);
   assert.match(band[1], /max-width:\s*889px/);
 });
+
+test('forced colours draw an edge around every message bubble, whose fill and shadow they drop', () => {
+  // The bubbles have no border of their own: under forced colours each one was the page colour on the page colour.
+  assert.doesNotMatch(rulesFor('.chats-page .message-bubble')[0], /(?:^|;)\s*border:/);
+  const forced = [...css.matchAll(/@media \(forced-colors: active\)\s*\{([\s\S]*?)\n\}/g)].map(m => m[1]).join('\n');
+  assert.match(forced, /\.chats-page \.message-bubble\s*\{[^}]*border:\s*1px solid CanvasText/);
+});
