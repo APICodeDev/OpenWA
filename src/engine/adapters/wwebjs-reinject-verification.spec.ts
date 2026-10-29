@@ -192,8 +192,6 @@ describe('liveness of a ready page after a reload', () => {
     expect(client.pupPage.evaluate).toHaveBeenCalledTimes(6);
   });
 
-  // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the
-  // watchdog's count, or two dead answers in a row never occur.
   // A page stuck reloading that never re-injects: each late no is about a page the next reload replaces, but the
   // reloads belong to one unverified episode, so the no still counts toward its cap, as an in-budget no does.
   it('recycles a navigation loop that never re-injects when every helpers read answers no late', async () => {
@@ -222,6 +220,8 @@ describe('liveness of a ready page after a reload', () => {
     expect(answers.slice(-4)).toEqual([true, true, true, true]);
   });
 
+  // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the
+  // watchdog's count, or two dead answers in a row never occur.
   it('recycles a reload that never re-injected when its helpers read is late only on some probes', async () => {
     const { adapter, client } = wire();
     let slow = true;
