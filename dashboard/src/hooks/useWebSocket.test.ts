@@ -600,3 +600,38 @@ test('a failure handed to another send in flight is reported at its join after a
     resetSocketDouble();
   }
 });
+
+// Quick session switches in Chats can put three sends of '*' out at once. One joins and the other two fail after it:
+// the room is joined once, so what it missed is read again once, and nothing is sent again for it.
+test('one join and two later failures of three sends in flight are reported once', () => {
+  const outcomes: Record<string, unknown> = {};
+  const expected: Record<string, unknown> = {};
+  for (const [joins, failOrder] of [
+    [0, [1, 2]],
+    [1, [0, 2]],
+    [2, [0, 1]],
+  ] as const) {
+    holdConnect();
+    const { result, unmount } = rtl.renderHook(() => useWebSocket());
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the hook to open a socket');
+    rtl.act(() => socket.receive('connect'));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+      rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+
+    for (let n = 0; n < 3; n++) result.current.subscribe('*', SESSION_FEED);
+    const sends = subscribeFrames(socket);
+    answer(sends[joins], { type: 'subscribed', sessionId: '*', events: SESSION_FEED });
+    for (const n of failOrder) answer(sends[n], { type: 'error', code: 'INTERNAL_ERROR' });
+    const sent = subscribeFrames(socket).length;
+    rtl.act(() => mock.timers.tick(60_000));
+    const name = `send ${joins + 1} joins`;
+    outcomes[name] = { rejoins: result.current.rejoins, sentAfter: subscribeFrames(socket).length - sent };
+    expected[name] = { rejoins: 1, sentAfter: 0 };
+    mock.timers.reset();
+    unmount();
+    resetSocketDouble();
+  }
+  assert.deepEqual(outcomes, expected);
+});

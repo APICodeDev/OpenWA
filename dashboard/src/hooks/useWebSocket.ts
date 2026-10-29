@@ -181,7 +181,8 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   // a joined subscribe starts the pauses over. Once they have run out the connection counts as failed, so the page
   // shows its banner and retry. Every other refusal is final. Answers are matched to subscribes by the requestId the
   // gateway echoes, and a waiting retry is kept per session and events.
-  // `retried`: the send ends a gap, so its join is reported. `joinedLater`: a later send of it has joined.
+  // `retried`: the send ends a gap, so its join is reported. `joinedLater`: another send of it, sent before or after
+  // this one, joined while this one was out.
   const pendingSubscribes = useRef(new Map<string, Subscription & { retried: boolean; joinedLater?: boolean }>());
   // The subscribes waiting for the next round, and those of the round being sent.
   const retryQueue = useRef(new Map<string, Subscription>());
@@ -308,7 +309,11 @@ export function useWebSocket(events: WebSocketEvents = {}) {
         if (pending.retried && !rejoinNoted.current) noteRejoin();
       }
       if (frame.type !== 'error' || (frame.code !== 'INTERNAL_ERROR' && frame.code !== 'RATE_LIMITED')) return;
-      if (pending.joinedLater) return noteRejoin();
+      if (pending.joinedLater) {
+        // The room is joined: this report covers the other sends still out, as a reported join does.
+        for (const [id] of others) pendingSubscribes.current.delete(id);
+        return noteRejoin();
+      }
       // Another send of it is still out: its join ends this gap, and its failure is retried.
       if (others.length > 0) {
         for (const [, other] of others) other.retried = true;
