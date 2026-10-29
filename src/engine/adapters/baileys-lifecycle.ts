@@ -1058,6 +1058,14 @@ export class BaileysLifecycle {
       const b = await this.loadLib();
       const jid = sourceSock.user?.id;
       if (!jid) {
+        // No creds.me: this socket never linked, so WhatsApp lists no device to remove and the 502 that
+        // reports the unlink as incomplete would send the operator back to retry it forever. Unless the
+        // auth dir holds credentials moved aside as unreadable, whose device may well still be linked.
+        if (!(await this.keepsQuarantinedCredentials())) {
+          throw new EngineNotReadyError(
+            'This session was never linked to WhatsApp, so there is nothing to unlink. Stop or delete it instead.',
+          );
+        }
         // The companion identity is required to address the unlink; without it nothing is sent.
         throw new Error('No linked companion identity — the unlink was not sent');
       }
@@ -1092,6 +1100,19 @@ export class BaileysLifecycle {
       // sourceSock (a concurrent reconnect may have already swapped in a fresh socket).
       this.localSocketShutdown(sourceSock);
       throw err;
+    }
+  }
+
+  /**
+   * Whether the auth dir keeps credentials the auth store moved aside because creds.json could not be
+   * parsed (`corrupt-*`, see useAtomicMultiFileAuthState). The device they belong to may still be linked.
+   * A dir that cannot be listed is answered yes: nothing then proves the session never linked.
+   */
+  private async keepsQuarantinedCredentials(): Promise<boolean> {
+    try {
+      return (await fs.promises.readdir(this.host.authPath)).some(entry => entry.startsWith('corrupt-'));
+    } catch (err) {
+      return (err as NodeJS.ErrnoException | null)?.code !== 'ENOENT';
     }
   }
 
