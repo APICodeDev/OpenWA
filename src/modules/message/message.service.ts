@@ -1,6 +1,7 @@
 import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, ObjectLiteral, Repository } from 'typeorm';
+import { Readable } from 'stream';
 import { EngineRegistry } from '../../engine/engine-registry.service';
 import { MessageProjector } from '../session/message-projector.service';
 import { SendTextMessageDto, SendMediaMessageDto, SendAudioMessageDto, MessageResponseDto } from './dto';
@@ -604,12 +605,15 @@ export class MessageService implements PluginMessagePort {
     sessionId: string,
     chatId: string,
     messageId: string,
-  ): Promise<{ buffer: Buffer; mimetype: string }> {
+  ): Promise<{ stream: Readable; size?: number; mimetype: string }> {
     const chatIds = await this.resolveJidCandidates(chatId);
     const media = await this.chatMediaArchive?.getMedia(sessionId, chatIds, messageId);
     if (media && this.storageService) {
       try {
-        return { buffer: await this.storageService.getFile(media.path), mimetype: inertMimetype(media.mimetype) };
+        // Streamed, not read whole: an archived video can be as large as CHAT_MEDIA_ARCHIVE_MAX_BYTES.
+        // A missing or unreadable file rejects here, before anything is answered.
+        const { stream, size } = await this.storageService.openFile(media.path);
+        return { stream, size, mimetype: inertMimetype(media.mimetype) };
       } catch (error) {
         // The row outlived its file: the retention purge (or a concurrent delete) removed it
         // between the DB read and this read. Not a server fault — try the inline copy instead.
@@ -642,7 +646,8 @@ export class MessageService implements PluginMessagePort {
     ) {
       throw new NotFoundException('No media stored for this message');
     }
-    return { buffer: Buffer.from(inline.data, 'base64'), mimetype: inertMimetype(inline.mimetype) };
+    const bytes = Buffer.from(inline.data, 'base64');
+    return { stream: Readable.from([bytes]), size: bytes.length, mimetype: inertMimetype(inline.mimetype) };
   }
 
   /** Maximum messages a single getChatHistory call may request from the engine. */

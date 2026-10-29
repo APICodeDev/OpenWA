@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { Server } from 'http';
 import { EventEmitter } from 'events';
+import { Readable } from 'stream';
 import { MessageController } from './message.controller';
 import { MessageService } from './message.service';
 import { BulkMessageService } from './bulk-message.service';
@@ -113,7 +114,10 @@ describe('MessageController - message-time selection', () => {
  * controller passed every suite in the repo.
  */
 describe('MessageController — stored media download', () => {
-  const getChatMedia = jest.fn().mockResolvedValue({ buffer: Buffer.from('GIF89a'), mimetype: 'image/gif' });
+  // A fresh stream per call: the service hands over an opened file, which can be read once.
+  const getChatMedia = jest.fn(() =>
+    Promise.resolve({ stream: Readable.from([Buffer.from('GIF89a')]), size: 6, mimetype: 'image/gif' }),
+  );
   const controller = new MessageController(
     { getChatMedia } as unknown as MessageService,
     {} as unknown as BulkMessageService,
@@ -162,7 +166,8 @@ describe('MessageController — stored media download', () => {
     const body = await controller.getChatMedia('session-1', '628123@c.us', 'msg-1', res);
 
     expect(body).toBeInstanceOf(StreamableFile);
-    expect(body.getStream().read()).toEqual(Buffer.from('GIF89a'));
+    expect(body.getHeaders().length).toBe(6);
+    expect(Buffer.concat(await body.getStream().toArray())).toEqual(Buffer.from('GIF89a'));
   });
 });
 

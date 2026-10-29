@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { FindOperator, In, Repository } from 'typeorm';
+import { Readable } from 'stream';
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { MessageService, spendInlineMediaBudget } from './message.service';
 import { MessageSendService } from './message-send.service';
@@ -995,7 +996,14 @@ describe('MessageService', () => {
     const archived = (mimetype: string) => ({
       getMedia: jest.fn().mockResolvedValue({ path: 'chat-media/sess-1/abc.bin', mimetype }),
     });
-    const storage = (buffer = Buffer.from('BYTES')) => ({ getFile: jest.fn().mockResolvedValue(buffer) });
+    const storage = (buffer = Buffer.from('BYTES')) => ({
+      openFile: jest.fn().mockResolvedValue({ stream: Readable.from([buffer]), size: buffer.length }),
+    });
+    /** The served bytes and type, read from the stream the route pipes out. */
+    const served = async (media: Promise<{ stream: Readable; mimetype: string }>) => {
+      const { stream, mimetype } = await media;
+      return { buffer: Buffer.concat(await stream.toArray()), mimetype };
+    };
 
     const build = (archive: unknown, store: unknown): MessageService =>
       new MessageService(
@@ -1012,7 +1020,7 @@ describe('MessageService', () => {
 
     it('serves an inert image type unchanged', async () => {
       const svc = build(archived('image/jpeg'), storage());
-      await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1'))).toEqual({
         buffer: Buffer.from('BYTES'),
         mimetype: 'image/jpeg',
       });
@@ -1057,12 +1065,12 @@ describe('MessageService', () => {
       ['S3 NotFound', Object.assign(new Error('NotFound'), { name: 'NotFound' })],
       ['S3 404 metadata', Object.assign(new Error('gone'), { $metadata: { httpStatusCode: 404 } })],
     ])('404s when the row outlived its file (%s)', async (_label, err) => {
-      const svc = build(archived('image/png'), { getFile: jest.fn().mockRejectedValue(err) });
+      const svc = build(archived('image/png'), { openFile: jest.fn().mockRejectedValue(err) });
       await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).rejects.toThrow(NotFoundException);
     });
 
     it('does not swallow a genuine storage fault as a 404', async () => {
-      const svc = build(archived('image/png'), { getFile: jest.fn().mockRejectedValue(new Error('S3 500')) });
+      const svc = build(archived('image/png'), { openFile: jest.fn().mockRejectedValue(new Error('S3 500')) });
       await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).rejects.toThrow('S3 500');
     });
 
@@ -1076,7 +1084,7 @@ describe('MessageService', () => {
         inlineRow({ mimetype: 'image/jpeg', data: Buffer.from('INLINE').toString('base64') }),
       );
       const svc = build(noArchive(), storage());
-      await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1'))).toEqual({
         buffer: Buffer.from('INLINE'),
         mimetype: 'image/jpeg',
       });
@@ -1090,7 +1098,7 @@ describe('MessageService', () => {
         inlineRow({ mimetype: 'image/jpeg', data: Buffer.from('SENT').toString('base64') }),
       );
       const svc = build(noArchive(), storage());
-      await expect(svc.getChatMedia('sess-1', '628123456789@s.whatsapp.net', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', '628123456789@s.whatsapp.net', 'wa-1'))).toEqual({
         buffer: Buffer.from('SENT'),
         mimetype: 'image/jpeg',
       });
@@ -1117,7 +1125,7 @@ describe('MessageService', () => {
         inlineRow({ mimetype: 'image/png', data: Buffer.from('INLINE').toString('base64') }),
       );
       const svc = build(archived('image/png'), storage(Buffer.from('ARCHIVE-BYTES')));
-      await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1'))).toEqual({
         buffer: Buffer.from('ARCHIVE-BYTES'),
         mimetype: 'image/png',
       });
@@ -1150,9 +1158,9 @@ describe('MessageService', () => {
         inlineRow({ mimetype: 'image/jpeg', data: Buffer.from('STILL-HERE').toString('base64') }),
       );
       const svc = build(archived('image/jpeg'), {
-        getFile: jest.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' })),
+        openFile: jest.fn().mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' })),
       });
-      await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1'))).toEqual({
         buffer: Buffer.from('STILL-HERE'),
         mimetype: 'image/jpeg',
       });
@@ -1163,7 +1171,7 @@ describe('MessageService', () => {
         inlineRow({ mimetype: 'image/jpeg', data: Buffer.from('INLINE').toString('base64') }),
       );
       const svc = build(archived('image/jpeg'), undefined);
-      await expect(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1')).resolves.toEqual({
+      expect(await served(svc.getChatMedia('sess-1', 'c@c.us', 'wa-1'))).toEqual({
         buffer: Buffer.from('INLINE'),
         mimetype: 'image/jpeg',
       });

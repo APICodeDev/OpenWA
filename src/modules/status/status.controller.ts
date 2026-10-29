@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiParam, ApiResponse } from '@nestjs/swagger';
 import { StatusDeletedResponseDto, StatusListResponseDto, StatusResultDto } from './dto/status-response.dto';
 import { StatusService } from './status.service';
+import { storedFileAttachment } from '../../common/storage/storage-transfer';
 import { SendTextStatusDto } from './dto/send-text-status.dto';
 import { SendImageStatusDto, SendVideoStatusDto, SendVoiceStatusDto } from './dto/send-media-status.dto';
 import { RequireRole } from '../auth/decorators/auth.decorators';
@@ -57,17 +58,12 @@ export class StatusController {
     @Param('statusId') statusId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const { buffer, mimetype } = await this.statusService.getStatusMedia(sessionId, statusId);
+    const { mimetype, ...source } = await this.statusService.getStatusMedia(sessionId, statusId);
     // attachment + nosniff together, mirroring the chat-media route: the mimetype is already
     // reduced to an inert set by the service, and forcing a download means even a mistake there
     // cannot render as active content on the API origin. The dashboard fetches status media as a
     // blob (fetch ignores Content-Disposition), so nothing depends on inline display here.
-    res.set({
-      'Content-Type': mimetype,
-      'X-Content-Type-Options': 'nosniff',
-      'Content-Disposition': 'attachment',
-    });
-    return new StreamableFile(buffer);
+    return storedFileAttachment(res, source, mimetype);
   }
 
   @Post('send-text')
