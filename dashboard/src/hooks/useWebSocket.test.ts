@@ -555,3 +555,48 @@ test('a page join while the retry of it is still unanswered is reported at the j
     { atJoin: 1, afterRetryAnswer: 1, sentAfter: 0 },
   );
 });
+
+// A failure answered while another send of the subscription is out leaves that send to end the gap, which marks it after
+// it was sent. Its join is still reported after an earlier report, on this connection or a previous one.
+test('a failure handed to another send in flight is reported at its join after an earlier report', () => {
+  for (const reconnect of [false, true]) {
+    holdConnect();
+    const { result, unmount } = rtl.renderHook(() => useWebSocket());
+    const socket = lastSocket();
+    assert.ok(socket, 'expected the hook to open a socket');
+    rtl.act(() => socket.receive('connect'));
+    mock.timers.enable({ apis: ['setTimeout'] });
+    const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+      rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+    const failed = (frame: Frame | undefined) => answer(frame, { type: 'error', code: 'INTERNAL_ERROR' });
+    const joined = (frame: Frame | undefined) =>
+      answer(frame, { type: 'subscribed', sessionId: frame?.sessionId, events: frame?.events });
+
+    result.current.subscribe('s1', MESSAGE_FEED);
+    failed(subscribeFrames(socket).at(-1));
+    rtl.act(() => mock.timers.tick(1_000));
+    joined(subscribeFrames(socket).at(-1));
+    assert.equal(result.current.rejoins, 1, 'the retried join was not reported');
+    if (reconnect) {
+      rtl.act(() => socket.receive('disconnect', 'transport close'));
+      rtl.act(() => socket.receive('connect'));
+    }
+
+    result.current.subscribe('*', SESSION_FEED);
+    const first = subscribeFrames(socket).at(-1);
+    result.current.subscribe('*', SESSION_FEED);
+    const page = subscribeFrames(socket).at(-1);
+    failed(first);
+    joined(page);
+    const sent = subscribeFrames(socket).length;
+    rtl.act(() => mock.timers.tick(60_000));
+    assert.deepEqual(
+      { rejoins: result.current.rejoins, sentAfter: subscribeFrames(socket).length - sent },
+      { rejoins: 2, sentAfter: 0 },
+      reconnect ? 'after a reconnect' : 'on the same connection',
+    );
+    mock.timers.reset();
+    unmount();
+    resetSocketDouble();
+  }
+});
