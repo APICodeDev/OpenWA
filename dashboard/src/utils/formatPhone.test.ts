@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber } from './formatPhone.ts';
+import { parsePhoneFromJid, formatPhoneForDisplay, isolateNumber, chatTitle } from './formatPhone.ts';
 
 test('parsePhoneFromJid extracts digits from a personal @c.us JID', () => {
   assert.equal(parsePhoneFromJid('628123456789@c.us'), '628123456789');
@@ -91,4 +91,13 @@ test('isolateNumber keeps a number one left-to-right run inside a right-to-left 
   const lri = String.fromCodePoint(0x2066);
   const pdi = String.fromCodePoint(0x2069);
   assert.equal(isolateNumber('+49 170 123 4 5678'), `${lri}+49 170 123 4 5678${pdi}`);
+});
+
+test('chatTitle is the name, else the isolated number of a phone id, else the digits of any other id', () => {
+  assert.equal(chatTitle({ id: '15550001111@c.us', name: 'Alice' }), 'Alice');
+  assert.equal(chatTitle({ id: '15550001111@c.us', name: '' }), isolateNumber('+1 555 000 1111'));
+  assert.equal(chatTitle({ id: '628123456789@s.whatsapp.net' }), isolateNumber('+62 812 345 6789'));
+  // A privacy id and a group id are digits too, and no phone number.
+  assert.equal(chatTitle({ id: '262813461250071@lid', name: '' }), '262813461250071');
+  assert.equal(chatTitle({ id: '120363000000000001@g.us', name: '' }), '120363000000000001');
 });

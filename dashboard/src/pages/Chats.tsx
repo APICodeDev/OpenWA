@@ -28,7 +28,7 @@ import {
 import { useProfilePicture } from '../hooks/useProfilePicture';
 import { useProfilePictures } from '../hooks/useProfilePictures';
 import { useResolvedPhone, resolvedPhoneQuery, isResolvedPhoneHeld } from '../hooks/useResolvedPhone';
-import { formatPhoneForDisplay } from '../utils/formatPhone';
+import { chatTitle, formatPhoneForDisplay } from '../utils/formatPhone';
 import {
   sessionApi,
   messageApi,
@@ -1648,7 +1648,7 @@ export function Chats() {
       .unblock(sessionId, chat.id)
       .then(expectSuccess)
       .then(() => {
-        showSuccessToast(t('chats.rowActions.unblocked', { name: chat.name || chat.id.split('@')[0] }));
+        showSuccessToast(t('chats.rowActions.unblocked', { name: chatTitle(chat) }));
         return queryClient.invalidateQueries({ queryKey: ['contacts-blocked', sessionId] });
       })
       .catch(failWith('chats.rowActions.blockFailed'));
@@ -1689,7 +1689,7 @@ export function Chats() {
     const started = confirmAction;
     const { kind, chat } = started;
     const sessionId = selectedSessionId;
-    const name = chat.name || chat.id.split('@')[0];
+    const name = chatTitle(chat);
     setConfirmRunning(started);
     try {
       if (kind === 'leave') {
@@ -2307,11 +2307,7 @@ export function Chats() {
             </>
           }
         >
-          <p>
-            {t(CONFIRM_TEXT[confirmAction.kind].question, {
-              name: confirmAction.chat.name || confirmAction.chat.id.split('@')[0],
-            })}
-          </p>
+          <p>{t(CONFIRM_TEXT[confirmAction.kind].question, { name: chatTitle(confirmAction.chat) })}</p>
           <p className="text-muted">{t(CONFIRM_TEXT[confirmAction.kind].warning)}</p>
         </Modal>
       )}

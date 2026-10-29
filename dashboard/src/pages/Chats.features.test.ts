@@ -702,11 +702,44 @@ test('the chat list search clear button returns focus to the field it cleared', 
   assert.equal(document.activeElement === field, true, `focus is on "${focusedName()}", not on the field`);
 });
 
+// A number in a title is isolated left to right, so a right-to-left page keeps its digit groups in order.
+const isolated = (number: string) => `${String.fromCodePoint(0x2066)}${number}${String.fromCodePoint(0x2069)}`;
+
+test('an unnamed chat is titled by its number on its row, in its menu, its dialogs and its reply banner', async () => {
+  const { screen, fireEvent, waitFor } = rtl;
+  aliceNow.name = '';
+  aliceThread = [threadRow(1)];
+  const { container } = renderPage();
+  const number = isolated('+1 555 000 1111');
+  await screen.findByText(number);
+  assert.equal(container.querySelector('.chat-item-name')?.textContent, number, 'the row shows the bare digits');
+
+  fireEvent.click(screen.getByRole('button', { name: `Actions for ${number}` }));
+  fireEvent.click(screen.getByRole('button', { name: 'Mute notifications' }));
+  await waitFor(() => assert.ok(screen.getByRole('dialog', { name: `Mute "${number}"` })));
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+  fireEvent.click(screen.getByText(number));
+  await screen.findByText('message 1');
+  fireEvent.click(screen.getByRole('button', { name: 'Reply' }));
+  await waitFor(() =>
+    assert.equal(container.querySelector('.replying-to-title')?.textContent, `Replying to ${number}`),
+  );
+});
+
+test('an unnamed privacy-id chat keeps the digits of its id on its row and in its menu, never formatted', async () => {
+  const { screen } = rtl;
+  Object.assign(aliceNow, { id: '262813461250073@lid', name: '' });
+  renderPage();
+  await screen.findByText('262813461250073');
+  assert.ok(screen.getByRole('button', { name: 'Actions for 262813461250073' }));
+});
+
 test('an unnamed chat is titled by its number, formatted and isolated left to right, in the header and the panel', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   aliceNow.name = '';
   const { container } = renderPage();
-  fireEvent.click(await screen.findByText('15550001111'));
+  fireEvent.click(await screen.findByText(isolated('+1 555 000 1111')));
   const title = await waitFor(() => {
     const name = container.querySelector('.room-header .room-contact-name') as HTMLElement;
     assert.equal(name?.textContent, '+1 555 000 1111');

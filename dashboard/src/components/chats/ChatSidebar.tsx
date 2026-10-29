@@ -19,6 +19,7 @@ import type { UseQueryResult } from '@tanstack/react-query';
 import type { Channel, Chat, ContactStatusGroup, Session } from '../../services/api';
 import { useRole } from '../../hooks/useRole';
 import { CHAT_LIST_FILTERS, type ChatListFilter } from '../../utils/chatFilters';
+import { chatTitle } from '../../utils/formatPhone';
 import ChatAvatar from './ChatAvatar';
 import SessionPicker from './SessionPicker';
 import ChatRowMenu from './ChatRowMenu';
@@ -131,7 +132,7 @@ function ChatSidebar({
         <div className="chat-item-info">
           <div className="chat-item-top">
             <span className="chat-item-name" title={chat.name || chat.id}>
-              {chat.name || chat.id.split('@')[0]}
+              {chatTitle(chat)}
             </span>
             {chat.kind !== 'individual' && chat.kind !== 'unknown' && (
               <span className={`chat-kind-badge kind-${chat.kind}`}>{t(`chats.kind.${chat.kind}`)}</span>
