@@ -154,16 +154,19 @@ function ChatSidebar({
                 {chat.pinned && <Pin size={15} role="img" aria-label={t('chats.rowActions.pinnedLabel')} />}
               </span>
             )}
-            {/* A negative count is a chat marked unread (Baileys reports -1): a badge with no number. */}
+            {/* A negative count is a chat marked unread (Baileys reports -1): a badge with no number. Each badge is an
+                image, as the flags beside it are: a label on a bare span is dropped by most screen readers. */}
             {chat.unreadCount < 0 ? (
               <span
                 className="chat-unread-badge"
+                role="img"
                 title={t('chats.markedUnread')}
                 aria-label={t('chats.markedUnread')}
               />
             ) : chat.unreadCount > 0 ? (
               <span
                 className="chat-unread-badge"
+                role="img"
                 title={t('chats.unreadBadge', { count: chat.unreadCount })}
                 aria-label={t('chats.unreadBadge', { count: chat.unreadCount })}
               >
