@@ -29,6 +29,8 @@ import { buildIncomingMessageBase, mapContactFields } from './message-mapper';
 import { buildVCard } from './vcard';
 import { EngineNotSupportedError } from '../../common/errors/engine-not-supported.error';
 import { RecipientUnreachableError } from '../../common/errors/recipient-unreachable.error';
+import { EngineNotReadyError } from '../../common/errors/engine-not-ready.error';
+import { EnginePageError } from '../../common/errors/engine-page.error';
 import { type WwebjsEngineHost, requireClient, withPage } from './wwebjs-host';
 import { toCapturedPageError } from './wwebjs-lifecycle';
 
@@ -414,25 +416,48 @@ export class WwebjsMessaging {
    * is never blocked on it.
    */
   async resolveSendId(chatId: string): Promise<string> {
+    return (await this.lookupSendId(chatId)).id;
+  }
+
+  /**
+   * {@link resolveSendId} together with whether the lookup answered. A `getNumberId` that threw says nothing
+   * about the recipient: the id is then the unresolved one, and `failure` is what the lookup threw.
+   */
+  private async lookupSendId(chatId: string): Promise<{ id: string; answered: boolean; failure?: unknown }> {
     if (!chatId.endsWith('@c.us')) {
-      return chatId;
+      return { id: chatId, answered: true };
     }
     const cached = this.resolvedSendIds.get(chatId);
     if (cached) {
       if (this.unreportedLids.delete(chatId)) this.reportLid(chatId, cached);
-      return cached;
+      return { id: cached, answered: true };
     }
     try {
       const wid = await this.host.getNumberId(chatId);
       if (wid) {
         this.resolvedSendIds.set(chatId, wid);
         if (wid.endsWith('@lid')) this.reportLid(chatId, wid);
-        return wid;
+        return { id: wid, answered: true };
       }
-      return chatId;
-    } catch {
-      return chatId;
+      return { id: chatId, answered: true };
+    } catch (failure) {
+      return { id: chatId, answered: false, failure };
     }
+  }
+
+  /**
+   * The answer to a `No LID for user` send whose re-resolution did not answer. The gateway learned nothing
+   * about the recipient, so it is not reported unreachable: a reload that cut the lookup short is the
+   * retryable 409 the lookup raised, and anything else is what it was, WhatsApp Web refusing the send in the
+   * page. That is an engine error with an unproven outcome (500), so a keyed send keeps its key taken.
+   */
+  private unansweredLookup(chatId: string, sendError: Error, failure: unknown): Error {
+    if (failure instanceof EngineNotReadyError) return failure;
+    this.host.logger.warn('Could not re-resolve a recipient after "No LID for user": the lookup did not answer', {
+      chatId,
+      error: failure instanceof Error ? failure.message : String(failure),
+    });
+    return new EnginePageError({ name: sendError.name || 'Error', message: sendError.message }, sendError);
   }
 
   /**
@@ -478,6 +503,8 @@ export class WwebjsMessaging {
    * `No LID for user` is replaced with {@link RecipientUnreachableError} (400). The bare page-side
    * Error carries no status and no recipient, so letting it through produced an opaque 500 for what
    * is really a caller-visible fact the gateway already established: `getNumberId` returned null.
+   * A re-resolution that threw established nothing, so it gets no such verdict and no retry: see
+   * {@link unansweredLookup}.
    *
    * `quotedMessageId` gets the same treatment for the same reason. Opting out of `ignoreQuoteErrors`
    * makes an id the page cannot resolve throw, but it throws a bare Error, and two things follow from
@@ -515,10 +542,14 @@ export class WwebjsMessaging {
       }
       this.resolvedSendIds.delete(chatId);
       this.unreportedLids.delete(chatId);
-      const fresh = await this.resolveSendId(chatId);
+      const lookup = await this.lookupSendId(chatId);
+      const fresh = lookup.id;
       // Same gap as above, and before the comparison: a lookup that failed because the session went away
       // answers the unresolved id, which would read as an unreachable recipient.
       this.host.ensureReady();
+      if (!lookup.answered) {
+        throw this.unansweredLookup(chatId, err as Error, lookup.failure);
+      }
       if (fresh === to) {
         throw new RecipientUnreachableError(chatId);
       }
