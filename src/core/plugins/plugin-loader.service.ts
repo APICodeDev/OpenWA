@@ -493,7 +493,7 @@ export class PluginLoaderService implements OnModuleInit, OnApplicationBootstrap
     return this.pluginStorage.getPluginEntry(pluginId)?.builtIn ?? false;
   }
 
-  uninstallPlugin(pluginId: string): Promise<void> {
+  uninstallPlugin(pluginId: string): Promise<{ registryEntryKept: boolean }> {
     return this.uninstaller.uninstallPlugin(pluginId);
   }
 

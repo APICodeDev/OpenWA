@@ -617,6 +617,9 @@ running teardown, so `onDisable` runs once; an unload that joins this way gets n
 `uninstallPlugin` disables + unloads, deletes the plugin's directory and its `ctx.storage` data dir, and
 drops the registry entry last (built-ins are protected and cannot be uninstalled). A package or storage
 folder that cannot be removed fails the uninstall and leaves the entry, so the same call can be repeated.
+Once both are gone, a `registry.json` that cannot be written no longer fails it: the answer is a success
+that says the entry stayed, a restart only reports that entry as a plugin with no code (it is never loaded
+or restored), and the same call removes it once the registry is writable.
 The unload path
 dispatches `onUnload`: for a sandboxed plugin it runs in the worker between `onDisable` and terminate
 (a plain disable does NOT fire `onUnload`; disable is reversible and its cleanup hook is `onDisable`).

@@ -388,7 +388,7 @@ describe('PluginsService — install / uninstall (real loader + disk)', () => {
     let calls = 0;
     jest.spyOn(loader, 'uninstallPlugin').mockImplementation(() => {
       calls++;
-      return calls === 1 ? firstDone : Promise.resolve();
+      return (calls === 1 ? firstDone : Promise.resolve()).then(() => ({ registryEntryKept: false }));
     });
 
     const p1 = service.uninstall('svc-plg');

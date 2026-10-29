@@ -729,10 +729,17 @@ export class PluginsService {
     }
 
     try {
-      await this.pluginLoader.uninstallPlugin(id);
+      const { registryEntryKept } = await this.pluginLoader.uninstallPlugin(id);
+      if (registryEntryKept) {
+        return {
+          success: true,
+          message:
+            `Plugin ${id} uninstalled, but the plugin registry could not be written: its entry stays, reported ` +
+            'at startup as a plugin with no code, until the uninstall is repeated with a writable registry',
+        };
+      }
       return { success: true, message: `Plugin ${id} uninstalled successfully` };
     } catch (error) {
-      if (error instanceof PluginRegistryWriteError) throw new InternalServerErrorException(error.message);
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
   }
