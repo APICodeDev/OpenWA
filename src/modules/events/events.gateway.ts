@@ -404,7 +404,9 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       this.logger.warn(`Client ${client.id} rejected: handshake rate limit exceeded (ip: ${clientIp})`);
       this.noteRateLimitViolation('handshake', { ipAddress: clientIp });
       client.emit('message', this.createError('RATE_LIMITED', 'Too many connection attempts, retry later'));
-      client.disconnect();
+      // Closing the transport too: Socket.IO cleared its connect timeout when it accepted the namespace, so a
+      // namespace-only disconnect would leave the connection open for as long as the peer answers pings.
+      client.disconnect(true);
       return;
     }
 
@@ -421,7 +423,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         errorMessage: 'missing API key',
       });
       client.emit('message', this.createError('UNAUTHORIZED', 'API key required'));
-      client.disconnect();
+      client.disconnect(true);
       return;
     }
 
@@ -448,7 +450,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
             `Too many concurrent connections for this API key (max ${this.rateLimits.maxSocketsPerKey})`,
           ),
         );
-        client.disconnect();
+        client.disconnect(true);
         return;
       }
 
@@ -487,7 +489,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
         errorMessage: error instanceof Error ? error.message : String(error),
       });
       client.emit('message', this.createError('UNAUTHORIZED', 'Authentication failed'));
-      client.disconnect();
+      client.disconnect(true);
     }
   }
 
@@ -621,7 +623,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
     }
     if (!subscriberKey) {
       client.emit('message', this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId));
-      client.disconnect();
+      client.disconnect(true);
       return this.createError('UNAUTHORIZED', 'API key is no longer valid', requestId);
     }
 
@@ -642,7 +644,7 @@ export class EventsGateway implements OnGatewayInit, OnGatewayConnection, OnGate
       const refusal = this.createError('UNAUTHORIZED', EVICTION_MESSAGES.authorization_changed, requestId);
       this.auditAuthorizationRefusal(subscriberKey, clientIp, refusal.message);
       client.emit('message', refusal);
-      client.disconnect();
+      client.disconnect(true);
       return refusal;
     }
 
