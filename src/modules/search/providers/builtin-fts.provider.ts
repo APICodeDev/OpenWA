@@ -66,7 +66,7 @@ const TRIGRAM_BACKFILL_BATCH = 1000;
 export const TRIGRAM_BUILD_LOCK_KEY = 0x7472676d;
 export const TRIGRAM_BUILD_LOCK = `$1, to_regclass('messages')::oid::int`;
 
-/** How long a replica that found the build lock taken waits before trying it again. */
+/** How long a build kept from running (see retryContainsBuild) waits before trying again. */
 const TRIGRAM_BUILD_RETRY_MS = 30_000;
 
 /** Why match=contains answers 501, one message per cause, each naming what to change. */
@@ -92,6 +92,12 @@ const POSTGRES_TRIGRAM_SOURCE = new RegExp(
   `(?:(?![\\u02b9-\\u02bd\\u02c6\\u02c8\\u02cb\\u02d0])[\\p{L}\\p{Nl}\\p{Nd}]){${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`,
   'u',
 );
+
+/**
+ * POSTGRES_TRIGRAM_SOURCE on a database whose ctype is C or POSIX: pg_trgm classifies characters with the
+ * C library there, which knows no letter or digit outside ASCII, so it takes no trigram from any other.
+ */
+const POSTGRES_ASCII_TRIGRAM_SOURCE = new RegExp(`[A-Za-z0-9]{${SEARCH_CONTAINS_MIN_TERM_LENGTH}}`);
 
 /**
  * The contains candidate SELECT list. It carries no snippet or score column: searchContains computes
@@ -150,10 +156,12 @@ function likePattern(term: string): string {
 
 /**
  * likePattern in Postgres SQL, around the folded term: unaccent maps fullwidth `％` and `＿` to `%` and
- * `_`, so escaping before it would let them through as wildcards.
+ * `_`, so escaping before it would let them through as wildcards. The backslashes are written as E''
+ * literals, which read them the same whatever standard_conforming_strings says; with it off, a plain
+ * `'\'` escapes its closing quote.
  */
 function postgresLikePattern(placeholder: string): string {
-  return String.raw`'%' || replace(replace(replace(openwa_unaccent(${placeholder}), '\', '\\'), '%', '\%'), '_', '\_') || '%'`;
+  return String.raw`'%' || replace(replace(replace(openwa_unaccent(${placeholder}), E'\\', E'\\\\'), '%', E'\\%'), '_', E'\\_') || '%'`;
 }
 
 /** Shorter than a trigram once folded, so no trigram index can look it up. */
@@ -164,10 +172,14 @@ function isShortTerm(term: string): boolean {
 /**
  * Whether pg_trgm can look `term` up. It takes trigrams from runs of letters and digits only, so `:-)` or
  * `😂😂😂` give it nothing and the search would scan the table; SQLite's trigram tokenizer indexes them.
+ * `asciiOnly` is a database with a C or POSIX ctype (POSTGRES_ASCII_TRIGRAM_SOURCE).
  */
-function postgresCanIndex(term: string): boolean {
-  return POSTGRES_TRIGRAM_SOURCE.test(foldSearchText(term));
+function postgresCanIndex(term: string, asciiOnly: boolean): boolean {
+  return (asciiOnly ? POSTGRES_ASCII_TRIGRAM_SOURCE : POSTGRES_TRIGRAM_SOURCE).test(foldSearchText(term));
 }
+
+/** A build that could not get the shared SQLite connection free of another transaction: it is tried again later. */
+class ConnectionBusyError extends Error {}
 
 /** Shape returned by the dialect-specific SELECT in buildSqlite / buildPostgres. */
 interface FtsResultRow {
@@ -217,6 +229,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private containsBuildRetry?: NodeJS.Timeout;
   private readonly containsBuildRetryMs = TRIGRAM_BUILD_RETRY_MS;
   private destroyed = false;
+
+  /** Whether the Postgres database has a C or POSIX ctype, read by each build (see postgresCanIndex). */
+  private postgresAsciiTrigrams = false;
 
   // OpenWA has two TypeORM connections (main: auth/audit SQLite, data: messages). Bind explicitly to
   // 'data' so the provider queries the connection that owns the `messages` table + the FTS migration,
@@ -413,12 +428,19 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       this.logger.warn(`${table} holds rows the messages table no longer has; re-indexing every message`);
       await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
     }
-    // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches).
+    // A batched index is filled after its triggers exist instead (backfillSqliteIndexInBatches). It is built
+    // only once the HTTP listener is up, while a table rebuild at boot (synchronize) drops its triggers with
+    // the old table and sessions start writing before the listener: an edit, a delete or a rowid reused
+    // after one then leaves entries for text the table no longer holds, which neither the orphan check nor
+    // the count sees. Without all three triggers the index is unknown, and it is emptied like one whose
+    // count is off.
     if (batched) {
-      const [counts] = await this.dataSource.query<Array<{ messages: number; indexed: number }>>(
-        `SELECT (SELECT count(*) FROM "messages") AS messages, (SELECT count(*) FROM "${docsize}") AS indexed`,
+      const [counts] = await this.dataSource.query<Array<{ messages: number; indexed: number; triggers: number }>>(
+        `SELECT (SELECT count(*) FROM "messages") AS messages, (SELECT count(*) FROM "${docsize}") AS indexed,
+           (SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'messages'
+             AND name IN ('${table}_ai', '${table}_ad', '${table}_au')) AS triggers`,
       );
-      if (Number(counts.messages) !== Number(counts.indexed)) {
+      if (Number(counts.messages) !== Number(counts.indexed) || Number(counts.triggers) !== 3) {
         await this.dataSource.query(`INSERT INTO "${table}"("${table}") VALUES ('delete-all')`);
       }
     } else {
@@ -473,7 +495,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
       `SELECT max("rowid") AS last FROM "messages"`,
     );
     for (let from = 0; from < (last ?? 0); from += TRIGRAM_BACKFILL_BATCH) {
-      if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
+      if (!(await awaitNoOpenTransaction(this.dataSource))) {
+        throw new ConnectionBusyError('Another database transaction stayed open');
+      }
       await this.dataSource.query(
         `INSERT INTO "${table}"("rowid", "body")
            SELECT m."rowid", m."body" FROM "messages" m
@@ -499,9 +523,13 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
           ? await this.buildPostgresTrigramIndex()
           : await this.buildSqliteTrigramIndex();
     } catch (e) {
-      this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
-      this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
-      return;
+      if (!(e instanceof ConnectionBusyError)) {
+        this.containsUnavailable = CONTAINS_UNAVAILABLE.failed;
+        this.logger.error(`Failed to build the trigram index: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+      this.containsUnavailable = CONTAINS_UNAVAILABLE.building;
+      this.logger.warn(`Trigram index build postponed: ${e.message}`);
     }
     if (this.containsUnavailable === CONTAINS_UNAVAILABLE.building) this.retryContainsBuild();
     else if (this.containsUnavailable) this.logger.warn(this.containsUnavailable);
@@ -513,6 +541,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * with no valid index, and only a build attempt of this replica's own finds that, so it tries the lock
    * again until the index is ready or the attempt fails for a cause of its own. A search in the meantime
    * still finds an index the other replica finished (probePostgresTrigram).
+   *
+   * On SQLite, another transaction (a data import, for one) held the shared connection longer than the
+   * build waits for it. The next attempt starts a backfill it cut short again from empty.
    */
   private retryContainsBuild(): void {
     if (this.destroyed) return;
@@ -532,7 +563,9 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     if (!(await this.sqliteHasFts5())) return CONTAINS_UNAVAILABLE.sqliteTrigram;
     const rows: Array<{ version: string }> = await this.dataSource.query(`SELECT sqlite_version() AS version`);
     if (!sqliteSupportsTrigramDiacritics(rows[0]?.version ?? '')) return CONTAINS_UNAVAILABLE.sqliteTrigram;
-    if (!(await awaitNoOpenTransaction(this.dataSource))) throw new Error('Another database transaction stayed open');
+    if (!(await awaitNoOpenTransaction(this.dataSource))) {
+      throw new ConnectionBusyError('Another database transaction stayed open');
+    }
     await this.ensureSqliteIndex(TRIGRAM_INDEX);
     return null;
   }
@@ -548,6 +581,10 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
     const runner = this.dataSource.createQueryRunner();
     await runner.connect();
     try {
+      const [{ ctype }] = await runner.manager.query<Array<{ ctype: string }>>(
+        `SELECT datctype AS ctype FROM pg_database WHERE datname = current_database()`,
+      );
+      this.postgresAsciiTrigrams = ctype === 'C' || ctype === 'POSIX';
       const [{ locked }] = await runner.manager.query<Array<{ locked: boolean }>>(
         `SELECT pg_try_advisory_lock(${TRIGRAM_BUILD_LOCK}) AS locked`,
         [TRIGRAM_BUILD_LOCK_KEY],
@@ -690,7 +727,7 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
   private async searchContains(query: SearchQuery): Promise<SearchResults> {
     await this.ensureContains();
     const isPostgres = this.dataSource.options.type === 'postgres';
-    const terms = BuiltInFtsProvider.containsTermsOf(query.q, isPostgres);
+    const terms = BuiltInFtsProvider.containsTermsOf(query.q, isPostgres, this.postgresAsciiTrigrams);
     const start = Date.now();
     const limit = Math.max(1, Math.min(query.limit ?? 50, SEARCH_LIMIT_MAX));
     const offset = Math.max(0, query.offset ?? 0);
@@ -778,14 +815,14 @@ export class BuiltInFtsProvider implements SearchProvider, OnModuleInit, OnAppli
    * it takes no trigram from (FTS5 returns nothing for it, pg_trgm scans every row), so such terms only
    * narrow the rows another term already found, and a query made of them alone is a 400 rather than a
    * full-table scan. SQLite takes trigrams from any three characters, pg_trgm only from three letters or
-   * digits in a row (see postgresCanIndex). The terms together are bounded by
-   * SEARCH_CONTAINS_TERMS_MAX_LENGTH, since each of their characters costs a check on every candidate.
+   * digits in a row, ASCII ones on a C or POSIX ctype (see postgresCanIndex). The terms together are bounded
+   * by SEARCH_CONTAINS_TERMS_MAX_LENGTH, since each of their characters costs a check on every candidate.
    */
-  private static containsTermsOf(q: string, isPostgres: boolean): string[] {
+  private static containsTermsOf(q: string, isPostgres: boolean, asciiOnly: boolean): string[] {
     const terms = containsTerms(q);
-    const canIndex = isPostgres ? postgresCanIndex : (term: string) => !isShortTerm(term);
+    const canIndex = (term: string) => (isPostgres ? postgresCanIndex(term, asciiOnly) : !isShortTerm(term));
     if (!terms.some(canIndex)) {
-      const unit = isPostgres ? 'letters or digits in a row' : 'characters';
+      const unit = isPostgres ? `${asciiOnly ? 'ASCII ' : ''}letters or digits in a row` : 'characters';
       throw new ContainsTermsRefusedError(
         `A contains search needs at least one term of ${SEARCH_CONTAINS_MIN_TERM_LENGTH} or more ${unit}.`,
       );

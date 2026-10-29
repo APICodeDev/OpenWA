@@ -31,7 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Key Baileys chat writes and read receipts to the gateway's newest stored message when the session holds none in memory (#1891). Thanks @rjsebening.
 - Send a Baileys archive or mark unread without a range for a chat the session knows but holds no message for, where it answered `success: false` (#1891). Thanks @rjsebening.
 - Group dashboard phone numbers in threes and fours, so `+49 157 333 4 4455` now reads `+49 157 3334 4455`; 10-digit numbers keep their shape (#1940).
-- Answer `400` to a NUL character in `q` on `GET /api/search`, which failed with `500` on PostgreSQL.
 - Make the deleted-message and omitted-media labels in outgoing dashboard chat bubbles readable in dark mode.
 - Match the dashboard New chat search against contact numbers only when the query reads as a phone number, so a name with a digit no longer lists every contact whose number holds that digit.
 

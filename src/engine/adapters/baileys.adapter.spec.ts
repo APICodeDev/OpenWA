@@ -8491,6 +8491,55 @@ describe('BaileysAdapter chat writes keyed to a message (#1891)', () => {
     await expect(act(confirmed)).resolves.toBe(true);
     expect(fakeSock.chatModify).toHaveBeenCalledWith({ ...change, lastMessages: [] }, '484848@lid');
   });
+
+  // A new engine holds no chat record, so a chat it has not heard from since is known by its persisted state
+  // alone, filed under the lid or the phone it was learned under, whichever form the caller writes it with.
+  describe('for a chat listed under its other spelling', () => {
+    const stateRow = (key: string, archived: boolean) => ({
+      get: jest.fn((_s: string, chatId: string) =>
+        chatId === key ? { muteEndTime: null, archived, pinned: false } : undefined,
+      ),
+      chatIds: jest.fn(() => [key]),
+      remember: jest.fn().mockResolvedValue(undefined),
+      fold: jest.fn().mockResolvedValue(undefined),
+      reload: jest.fn().mockResolvedValue(undefined),
+      clearSession: jest.fn().mockResolvedValue(undefined),
+      forget: jest.fn().mockResolvedValue(undefined),
+      refreshSession: jest.fn().mockResolvedValue(undefined),
+    });
+    const linked = async (
+      chatStateStore: ReturnType<typeof stateRow>,
+      lidMappingStore: ReturnType<typeof reported>,
+    ): Promise<BaileysAdapter> => {
+      const adapter = new BaileysAdapter({
+        sessionId: 'sess-1',
+        dbSessionId: 'db-uuid-1',
+        authDir: './data/baileys',
+        messageStore: fakeStore,
+        lidMappingStore,
+        chatStateStore,
+      });
+      await adapter.initialize({});
+      fakeSock.fire('connection.update', { connection: 'open' });
+      fakeSock.fire('lid-mapping.update', { lid: '484848@lid', pn: '628111@s.whatsapp.net' });
+      return adapter;
+    };
+
+    it('archives it without a range when the caller names its lid', async () => {
+      const adapter = await linked(stateRow('628111@s.whatsapp.net', false), reported());
+      await expect(adapter.archiveChat('484848@lid', true, lookup(null))).resolves.toBe(true);
+      expect(fakeSock.chatModify).toHaveBeenCalledWith({ archive: true, lastMessages: [] }, '484848@lid');
+    });
+
+    it('does not mark it unread without a range when it is archived under its lid and the caller names its phone', async () => {
+      const adapter = await linked(stateRow('484848@lid', true), reported());
+      // Filed under a lid the engine never reported for the phone, the stored message keys no range.
+      const stored = lookup({ id: 'S1', fromMe: false, timestamp: 1690000000, lid: '484848@lid' });
+      await expect(adapter.markUnread('628111@c.us', stored)).resolves.toBe(false);
+      expect(stored).toHaveBeenCalled();
+      expect(fakeSock.chatModify).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('BaileysAdapter status posting', () => {

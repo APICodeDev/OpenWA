@@ -25,6 +25,8 @@ const POSTGRES_ENABLED = process.env.DATABASE_TYPE === 'postgres';
 
 /** Named for the suite so a crashed run leaves an obvious orphan rather than a mystery database. */
 const SCRATCH_DB = 'openwa_contains_search_probe';
+/** The same, created with a C ctype. */
+const SCRATCH_C_DB = 'openwa_contains_search_probe_c';
 
 const connection = (database: string): DataSourceOptions => ({
   type: 'postgres',
@@ -242,6 +244,30 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       expect((await provider.search({ q: 'price＿100', match: 'contains' })).total).toBe(0);
     });
 
+    it('matches the same where standard_conforming_strings is off, as a role or database default can set it', async () => {
+      const legacy = new DataSource({
+        ...connection(SCRATCH_DB),
+        extra: { options: '-c standard_conforming_strings=off' },
+      });
+      await legacy.initialize();
+      try {
+        expect(await legacy.query('SHOW standard_conforming_strings')).toEqual([
+          { standard_conforming_strings: 'off' },
+        ]);
+        await insert('m5', 's1', String.raw`saved to C:\Temp\new_report`, 50);
+        await insert('m6', 's1', String.raw`saved to C:\Temp\newxreport`, 60);
+        const onLegacy = new BuiltInFtsProvider(legacy, containsOn);
+        await onLegacy.buildContainsIndex();
+
+        const ids = async (q: string) => (await onLegacy.search({ q, match: 'contains' })).hits.map(h => h.messageId);
+        expect(await ids('10% discount')).toEqual(['m4']);
+        expect(await ids('invoice _')).toEqual([]);
+        expect(await ids(String.raw`c:\temp\new_rep`)).toEqual(['m5']);
+      } finally {
+        await legacy.destroy();
+      }
+    });
+
     it('transliterates letters SQLite leaves alone, which docs/26 lists as a dialect difference', async () => {
       await insert('m5', 's1', 'Shipped from Łódź to the Straße', 50);
       expect((await provider.search({ q: 'lodz', match: 'contains' })).hits.map(h => h.messageId)).toEqual(['m5']);
@@ -293,6 +319,45 @@ const containsOn = new ConfigService({ search: { containsEnabled: true } });
       expect(await plan(['enable_seqscan', 'enable_bitmapscan'], 'voic')).toContain(
         'Index Scan Backward using "IDX_messages_createdAt"',
       );
+    });
+  });
+
+  // pg_trgm classifies characters with the C library there, which knows no letter outside ASCII.
+  describe('on a database with a C ctype', () => {
+    let cds: DataSource;
+
+    beforeAll(async () => {
+      await admin.query(`DROP DATABASE IF EXISTS "${SCRATCH_C_DB}"`);
+      await admin.query(
+        `CREATE DATABASE "${SCRATCH_C_DB}" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'`,
+      );
+      cds = new DataSource({
+        ...connection(SCRATCH_C_DB),
+        migrations: [join(__dirname, '../../../database/migrations/*{.ts,.js}')],
+      });
+      await cds.initialize();
+      await cds.runMigrations();
+    }, 120_000);
+
+    afterAll(async () => {
+      await cds?.destroy().catch(() => undefined);
+      await admin?.query(`DROP DATABASE IF EXISTS "${SCRATCH_C_DB}"`).catch(() => undefined);
+    });
+
+    it('requires three ASCII letters or digits in a row, the only ones pg_trgm takes a trigram from', async () => {
+      await cds.query(
+        `INSERT INTO "messages" ("id","sessionId","chatId","from","to","body","type","direction","timestamp") ` +
+          `VALUES ('c1','s1','c1-chat','c1-from','dest@c.us','Lunch at 서울역 with the Café team','text','incoming',10)`,
+      );
+      const provider = new BuiltInFtsProvider(cds, containsOn);
+      await provider.buildContainsIndex();
+
+      expect(await cds.query(`SELECT show_trgm('서울역') AS t`)).toEqual([{ t: [] }]);
+      const search = provider.search({ q: '서울역', match: 'contains' });
+      await expect(search).rejects.toBeInstanceOf(BadRequestException);
+      await expect(search).rejects.toThrow(/3 or more ASCII letters or digits in a row/);
+      expect((await provider.search({ q: 'café', match: 'contains' })).total).toBe(1);
+      expect((await provider.search({ q: '서울역 lunch', match: 'contains' })).total).toBe(1);
     });
   });
 });

@@ -87,7 +87,10 @@ Japanese ones (`東京`) are: search those with `word`. What counts differs by d
 trigrams from any three characters, so a term needs three (`id` and `pm` only narrow, `:-)` searches,
 and a Hangul syllable is one character however it is encoded); `pg_trgm` takes them from letters and
 digits only, so on Postgres a term needs three of them in a row (`:-)`, `...`, `😂😂😂`, `a.b` and
-superscript digits such as `¹²³` only narrow there, and alone answer `400`). The terms may also hold
+superscript digits such as `¹²³` only narrow there, and alone answer `400`). On a database whose ctype
+(`LC_CTYPE`, `pg_database.datctype`) is `C` or `POSIX`, `pg_trgm` knows no letter or digit outside
+ASCII, so there the three must be ASCII letters or digits once accents are folded: `cafe` and `Café`
+search, while `서울역` or `東京都` alone answer `400`. The terms may also hold
 at most **64 characters** together, spaces not counted, or the query answers `400`: every character of
 a term is checked on every message holding the term's trigrams, on SQLite on the event loop every
 session shares, and on 200k messages a query of 1,000 characters took 2.8 s where one of 64 took about
@@ -235,8 +238,8 @@ GET /api/search?q=<term>&match=<word|contains>&sessionId=<id>&chatId=<id>&direct
   backend answered (e.g. `builtin-fts`).
 - **Errors:** `400` empty/whitespace `q` or one holding a NUL character, a non-numeric numeric param,
   an unknown `match`, or a `match=contains` query with no term the trigram index can look up (three
-  characters; on Postgres, three letters or digits in a row) or with more than 64 characters in its
-  terms (an FTS5 query-grammar error is also mapped to `400`, but since the
+  characters; on Postgres, three letters or digits in a row, ASCII ones under a `C` ctype) or with more
+  than 64 characters in its terms (an FTS5 query-grammar error is also mapped to `400`, but since the
   SQLite path quotes every token ordinary input no longer reaches that fallback) · `401`/`403` auth ·
   `501` no provider configured / FTS schema absent (e.g. a non-FTS5 SQLite build) / for
   `match=contains`, `SEARCH_CONTAINS_ENABLED` off, the index still building, or no way to build it (e.g.
@@ -313,7 +316,10 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   meanwhile are indexed by the triggers. A trigram index holds every three-character window of the body:
   on a synthetic corpus of 1,000,000 messages it took 289 MB, about 3.1 times the message text, and a
   9.4 s backfill. Later boots only check it; an index whose document count differs from `messages` (an
-  interrupted backfill, or rowids renumbered by a table rebuild) is emptied and backfilled again.
+  interrupted backfill, or rowids renumbered by a table rebuild) or that is missing one of its triggers
+  (a table rebuild drops them, and messages stored before the next build never reached it) is emptied and
+  backfilled again. A build that finds another transaction holding the connection for more than 10
+  seconds (a data import, for one) tries again every 30 seconds instead of failing.
 - **PostgreSQL** creates the `pg_trgm` and `unaccent` extensions when they are missing and the role may,
   the IMMUTABLE `openwa_unaccent(text)` wrapper, and the `idx_messages_body_trgm` GIN index on
   `openwa_unaccent(body)` with `CREATE INDEX CONCURRENTLY`, so writes go on during the build (it cannot
@@ -325,6 +331,21 @@ answering its health probe (a boot that outlasts the Helm startup probe is resta
   dies or fails. A build that died (a killed pod) leaves an INVALID index, which the next build drops
   and rebuilds. The candidate query walks the existing `IDX_messages_createdAt` index, so contains search
   adds no other index.
+
+  The index holds `openwa_unaccent(body)`, which PostgreSQL only indexes because the wrapper is declared
+  IMMUTABLE, while `unaccent` follows its rules file, which a major upgrade may change. After an upgrade
+  whose rules changed (`pg_upgrade` keeps the index as it was built), rebuild the index so it folds
+  messages the way the queries now fold terms; until then a message stored before the upgrade may be
+  missed:
+
+  ```sql
+  REINDEX INDEX CONCURRENTLY idx_messages_body_trgm;
+  ```
+
+  The build lock is a session-level advisory lock, as the boot migration lock is
+  ([05 - Database Design](./05-database-design.md#56-migration-strategy)): a PgBouncer in transaction
+  pooling mode runs each transaction on whichever server connection is free, so neither lock stays with
+  the session that took it. Point OpenWA at PostgreSQL directly or at a pooler in session mode.
 
 **Turning it off** later stops `match=contains` (`501` again) but keeps the index, and with it the cost
 on every write, so turning it back on needs no rebuild. To reclaim the space, drop it by hand:
