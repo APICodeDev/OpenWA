@@ -17084,7 +17084,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17151,7 +17151,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17218,7 +17218,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17285,7 +17285,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17352,7 +17352,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17419,7 +17419,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."
@@ -17486,7 +17486,7 @@
             "description": "GET verification challenge echo, or a route whose declared ack sets 200. Not the primary success path; see 202. A re-delivery that reaches the dedup check is answered with the route's ack (same status and headers as the first delivery), so it is not distinguishable by status."
           },
           "202": {
-            "description": "Webhook accepted and queued for async plugin processing (the primary success path)."
+            "description": "Webhook accepted (the primary success path). With the queue on it is queued for async plugin processing. With the queue off a route without a response contract answers after the plugin ran inline (at most INGRESS_DISPATCH_TIMEOUT_MS), and a route with one answers first and dispatches inline after."
           },
           "400": {
             "description": "The path or query contains an encoded NUL (`%00`), or a JSON body does not parse."

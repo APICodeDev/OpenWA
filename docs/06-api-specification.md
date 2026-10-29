@@ -7130,10 +7130,16 @@ is read raw, never DTO-bound, so the signed bytes reach the verifier unchanged).
 that declares `challenge` is the provider's verification handshake and answers only when its
 `verifyToken` matches; any other request, a `GET` included, is a signed delivery.
 
-**Response** — the primary success path is `202`: the delivery is persisted and queued for async
-plugin processing. `200` means the `GET` verification-challenge echo, or a route whose declared
-`ack` sets it. A route may shape the synchronous status/body/headers the provider sees via its
-declarative `ack` config (doc 25); the plugin itself always runs async. A re-delivery of an
+**Response** — the primary success path is `202`: the delivery is persisted and handed to
+its plugin. With the queue on it is queued for async plugin processing, and dispatched inline only
+while Redis is unreachable. With the queue off (the default) the `202` of a route without a response
+contract comes after the plugin ran inline, for at most `INGRESS_DISPATCH_TIMEOUT_MS` (5 s), and a
+route with one is answered first and dispatched inline after, without the queue's retries; a failed
+inline dispatch files a dead letter and the ingress reconciler, while enabled, replays the stored
+delivery. `200` means the
+`GET` verification-challenge echo, or a route whose declared `ack` sets it. A route may shape the
+synchronous status/body/headers the provider sees via its declarative `ack` config (doc 25); that ack
+never waits for the plugin. A re-delivery of an
 already-persisted event is answered with the route's ack, with the same status and headers as the
 first delivery, and is not enqueued again. The ack is rendered from the retry, so `{timestamp}` in
 an ack body is the retry's time and `{rawBody}` is the retry's body. A retry still passes the checks
