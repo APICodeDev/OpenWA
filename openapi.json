@@ -687,7 +687,7 @@
             "in": "query",
             "description": "Max sessions to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -696,7 +696,7 @@
             "in": "query",
             "description": "Number of sessions to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -1786,9 +1786,9 @@
             "name": "limit",
             "required": false,
             "in": "query",
-            "description": "Max groups to return (1–1000, default 1000)",
+            "description": "Max groups to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -1797,7 +1797,7 @@
             "in": "query",
             "description": "Number of groups to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           }
         ],
@@ -1999,9 +1999,9 @@
             "name": "limit",
             "required": false,
             "in": "query",
-            "description": "Max chats to return (1–1000, default 1000)",
+            "description": "Max chats to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -2010,7 +2010,7 @@
             "in": "query",
             "description": "Number of chats to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           }
         ],
@@ -3694,7 +3694,7 @@
             "in": "query",
             "description": "Max records to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -3703,7 +3703,7 @@
             "in": "query",
             "description": "Number of records to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           }
         ],
@@ -3820,7 +3820,7 @@
             "in": "query",
             "description": "Max webhooks to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -3829,7 +3829,7 @@
             "in": "query",
             "description": "Number of webhooks to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           }
         ],
@@ -8738,9 +8738,9 @@
             "name": "limit",
             "required": false,
             "in": "query",
-            "description": "Max contacts to return (1–1000, default 1000)",
+            "description": "Max contacts to return (1-1000, default 1000)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           },
           {
@@ -8749,7 +8749,7 @@
             "in": "query",
             "description": "Number of contacts to skip (for paging)",
             "schema": {
-              "type": "string"
+              "type": "integer"
             }
           }
         ],
