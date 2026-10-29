@@ -130,8 +130,9 @@ export class PluginPackageScanner {
     const missingDir = fs.existsSync(this.pluginsDir) ? '' : ' (that directory does not exist)';
     this.logger.warn(
       `The plugin registry lists ${orphaned.length} installed plugin(s) with no loaded code in ` +
-        `${this.pluginsDir}${missingDir}: ${orphaned.map(e => e.id).join(', ')}. Their config and stored ` +
-        `data are intact — reinstall them, or set PLUGINS_DIR to the directory that holds their code.`,
+        `${this.pluginsDir}${missingDir}: ${orphaned.map(e => e.id).join(', ')}. Reinstall them, or set ` +
+        `PLUGINS_DIR to the directory that holds their code. Their config and stored data are kept, except ` +
+        `for an entry an unfinished uninstall left behind, which holds no config; repeat that uninstall.`,
       { action: 'plugin_registry_without_code', count: orphaned.length, pluginsDir: this.pluginsDir },
     );
   }
@@ -199,7 +200,8 @@ export class PluginPackageScanner {
         } else if (registryEntry) {
           this.logger.warn(
             `Plugin ${entry.name} is installed but its code is missing from ${pluginPath} (no manifest.json) ` +
-              `while its stored data is still there. Reinstall it — its config and stored data are kept. ` +
+              `while its stored data is still there. Reinstall it: its config and stored data are kept, unless ` +
+              `an uninstall stopped part-way and left the entry with no config, in which case repeat that uninstall. ` +
               `Plugin code kept outside the data volume does not survive a container recreate.`,
             { pluginPath, pluginId: entry.name, action: 'plugin_code_missing' },
           );

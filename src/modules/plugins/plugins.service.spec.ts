@@ -1058,7 +1058,8 @@ describe('PluginsService: disable an engine plugin', () => {
 
 /**
  * Recovery for a plugin the gateway still has a registry entry for but whose code is gone — the
- * state the loader announces on every boot ("Reinstall it — its config and stored data are kept").
+ * state the loader announces on every boot ("Reinstall it: its config and stored data are kept, unless an
+ * uninstall stopped part-way").
  *
  * Under the shipped layout `plugins.dir` IS `<dataDir>/plugins`, so a plugin's package directory and
  * its `ctx.storage` directory are the same path. `ctx.storage` is created eagerly the first time the
