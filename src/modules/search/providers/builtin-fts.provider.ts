@@ -156,10 +156,12 @@ function likePattern(term: string): string {
 
 /**
  * likePattern in Postgres SQL, around the folded term: unaccent maps fullwidth `％` and `＿` to `%` and
- * `_`, so escaping before it would let them through as wildcards.
+ * `_`, so escaping before it would let them through as wildcards. The backslashes are written as E''
+ * literals, which read them the same whatever standard_conforming_strings says; with it off, a plain
+ * `'\'` escapes its closing quote.
  */
 function postgresLikePattern(placeholder: string): string {
-  return String.raw`'%' || replace(replace(replace(openwa_unaccent(${placeholder}), '\', '\\'), '%', '\%'), '_', '\_') || '%'`;
+  return String.raw`'%' || replace(replace(replace(openwa_unaccent(${placeholder}), E'\\', E'\\\\'), '%', E'\\%'), '_', E'\\_') || '%'`;
 }
 
 /** Shorter than a trigram once folded, so no trigram index can look it up. */
