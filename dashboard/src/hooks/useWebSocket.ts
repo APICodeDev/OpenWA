@@ -188,10 +188,13 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const retryRound = useRef(0);
   const lastRequestId = useRef(0);
-  // Bumped when a retried subscribe is joined, once a batch: what its room pushed during the pauses is gone, so the
-  // page reads again what it holds, as after a reconnect.
+  // Bumped when a subscribe that ends a retry's gap is joined, sent by the retry or again by the page, once for the
+  // subscribes sent since the last bump: what its room pushed meanwhile is gone, so the page reads again what it holds,
+  // as after a reconnect.
   const [rejoins, setRejoins] = useState(0);
   const rejoinNoted = useRef(false);
+  // Retries dropped by leaving their session before they joined, until the page subscribes them again.
+  const retryGaps = useRef(new Set<string>());
 
   const clearSubscribeRetry = useCallback(() => {
     clearTimeout(retryTimer.current);
@@ -199,16 +202,21 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     pendingSubscribes.current.clear();
     retryQueue.current.clear();
     retryDue.current.clear();
+    retryGaps.current.clear();
     retryRound.current = 0;
   }, []);
 
   const sendSubscribe = useCallback((sessionId: string, eventsList: string[], retried: boolean) => {
     if (!socketRef.current?.connected) return;
     const requestId = `sub-${++lastRequestId.current}`;
-    pendingSubscribes.current.set(requestId, { sessionId, events: eventsList, retried });
     const key = subscriptionKey({ sessionId, events: eventsList });
-    retryQueue.current.delete(key);
-    retryDue.current.delete(key);
+    // A page subscribe in place of a waiting or dropped retry ends the same gap.
+    const replacesRetry = [retryQueue.current, retryDue.current, retryGaps.current]
+      .map(m => m.delete(key))
+      .includes(true);
+    const endsGap = retried || replacesRetry;
+    if (endsGap) rejoinNoted.current = false;
+    pendingSubscribes.current.set(requestId, { sessionId, events: eventsList, retried: endsGap });
     socketRef.current.emit('message', {
       type: 'subscribe',
       sessionId,
@@ -224,10 +232,17 @@ export function useWebSocket(events: WebSocketEvents = {}) {
 
   const unsubscribe = useCallback((sessionId: string) => {
     for (const retries of [retryQueue.current, retryDue.current]) {
-      for (const [key, queued] of retries) if (queued.sessionId === sessionId) retries.delete(key);
+      for (const [key, queued] of retries) {
+        if (queued.sessionId !== sessionId) continue;
+        retries.delete(key);
+        retryGaps.current.add(key);
+      }
     }
     for (const [requestId, pending] of pendingSubscribes.current) {
-      if (pending.sessionId === sessionId) pendingSubscribes.current.delete(requestId);
+      if (pending.sessionId !== sessionId) continue;
+      pendingSubscribes.current.delete(requestId);
+      // The gateway cancels a subscribe an unsubscribe overtakes, so a retry in flight never joined either.
+      if (pending.retried) retryGaps.current.add(subscriptionKey(pending));
     }
     if (socketRef.current?.connected) {
       socketRef.current.emit('message', {
@@ -242,7 +257,6 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   const scheduleRetry = useCallback(() => {
     const sendDue = () => {
       retryTimer.current = undefined;
-      rejoinNoted.current = false;
       for (const [key, { sessionId, events }] of [...retryDue.current].slice(0, SUBSCRIBE_RETRY_BATCH)) {
         retryDue.current.delete(key);
         sendSubscribe(sessionId, events, true);

@@ -4143,6 +4143,103 @@ test('the open thread and the chat list are read again once a retried message su
   await flush();
 });
 
+// The page sends '*' again itself on every session switch. One sent while the failed '*' waits for its retry ends the
+// same gap, so the sessions that connected or dropped meanwhile are read again once it joins.
+test('the session list is read again once the wildcard feed joins on a session switch during its pause', async () => {
+  const { waitFor, act, within } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    for (let n = 0; n < 5; n++) await flush();
+    const wildcard = subscribeFrames().find(frame => frame.sessionId === '*');
+    assert.ok(wildcard);
+    // The pause before the retry starts on a fake clock that is dropped unmoved, so the retry itself never goes out.
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      act(() => {
+        for (const frame of subscribeFrames())
+          answerSubscribe(frame, frame === wildcard ? KEY_UNREADABLE : joined(frame));
+      });
+    } finally {
+      mock.timers.reset();
+    }
+    const reads = countFetchCalls('GET', '/api/sessions');
+    const before = subscribeFrames().length;
+    selectSession(container, SESSION_2.id);
+    await waitFor(() =>
+      assert.ok(
+        subscribeFrames()
+          .slice(before)
+          .some(frame => frame.sessionId === '*'),
+      ),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, joined(frame));
+    });
+    await waitFor(() =>
+      assert.ok(countFetchCalls('GET', '/api/sessions') > reads, 'the session list was not read again'),
+    );
+    await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice');
+    for (let n = 0; n < 5; n++) await flush();
+  } finally {
+    twoSessions = false;
+  }
+});
+
+// A session-scoped key: leaving a session leaves its feed room too, a waiting retry of it included, and the page then
+// joins that feed again itself. That join ends the same gap.
+test("the session list is read again once a scoped key's failed feed is joined again on a switch away", async () => {
+  const { waitFor, act, within } = rtl;
+  twoSessions = true;
+  try {
+    const { container } = renderChats();
+    await waitFor(() => assert.equal(selectedSessionId(container), SESSION.id));
+    await waitFor(() => assert.ok(subscribeFrames().some(isMessageFeed) && subscribeFrames().some(isSessionFeed)));
+    const wildcard = subscribeFrames().find(frame => frame.sessionId === '*');
+    assert.ok(wildcard);
+    act(() =>
+      answerSubscribe(wildcard, { type: 'error', code: 'FORBIDDEN_SESSION', message: 'Scoped keys cannot join *' }),
+    );
+    await waitFor(() =>
+      assert.equal(subscribeFrames().filter(frame => isSessionFeed(frame) && frame.sessionId !== '*').length, 2),
+    );
+    for (let n = 0; n < 5; n++) await flush();
+    const openFeed = subscribeFrames().find(frame => isSessionFeed(frame) && frame.sessionId === SESSION.id);
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      act(() => {
+        for (const frame of subscribeFrames().filter(frame => frame.sessionId !== '*')) {
+          answerSubscribe(frame, frame === openFeed ? KEY_UNREADABLE : joined(frame));
+        }
+      });
+    } finally {
+      mock.timers.reset();
+    }
+    const reads = countFetchCalls('GET', '/api/sessions');
+    const before = subscribeFrames().length;
+    selectSession(container, SESSION_2.id);
+    await waitFor(() =>
+      assert.ok(
+        subscribeFrames()
+          .slice(before)
+          .some(frame => isSessionFeed(frame) && frame.sessionId === SESSION.id),
+      ),
+    );
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) answerSubscribe(frame, joined(frame));
+    });
+    await waitFor(() =>
+      assert.ok(countFetchCalls('GET', '/api/sessions') > reads, 'the session list was not read again'),
+    );
+    await within(container.querySelector('.chats-sidebar') as HTMLElement).findByText('Alice');
+    for (let n = 0; n < 5; n++) await flush();
+  } finally {
+    twoSessions = false;
+  }
+});
+
 // The '*' refusal is answered once and never again, so the fallback must not be lost to another error frame the page
 // handles in the same batch, here the open session's message subscribe whose key could not be read.
 test('a refused wildcard answered together with another error still falls back to each listed session', async () => {

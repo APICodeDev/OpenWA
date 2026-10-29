@@ -390,3 +390,66 @@ test('a retried subscribe that joins is reported once a batch, and a first one t
   joined(subscribeFrames(socket).at(-1));
   assert.equal(result.current.rejoins, 2);
 });
+
+// A page can send a failed subscribe again itself while it waits for its retry (Chats sends '*' again on every session
+// switch). That send ends the same gap, so its join is reported like the retry's would have been, after an earlier
+// rejoin too.
+test('a failed subscribe the page sends again during the pause is reported as a rejoin when it joins', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+    rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+  const joined = (frame: Frame | undefined) =>
+    answer(frame, { type: 'subscribed', sessionId: frame?.sessionId, events: frame?.events });
+
+  result.current.subscribe('*', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'INTERNAL_ERROR' });
+  rtl.act(() => mock.timers.tick(1_000));
+  joined(subscribeFrames(socket).at(-1));
+  assert.equal(result.current.rejoins, 1);
+
+  for (let round = 2; round <= 3; round++) {
+    result.current.subscribe('*', SESSION_FEED);
+    answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'INTERNAL_ERROR' });
+    result.current.subscribe('*', SESSION_FEED);
+    joined(subscribeFrames(socket).at(-1));
+    assert.equal(result.current.rejoins, round, 'the join that ended the gap was not reported');
+  }
+  rtl.act(() => mock.timers.tick(600_000));
+  assert.equal(subscribeFrames(socket).length, 6, 'a retry the page sent in place of went out too');
+});
+
+// Chats leaves every room of the session it switches away from, a waiting retry included, and then joins that session's
+// feed again itself for a session-scoped key.
+test('a retry dropped by leaving its session is reported as a rejoin once the page subscribes it again', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+    rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+  const joined = (frame: Frame | undefined) =>
+    answer(frame, { type: 'subscribed', sessionId: frame?.sessionId, events: frame?.events });
+
+  result.current.subscribe('s1', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'INTERNAL_ERROR' });
+  result.current.unsubscribe('s1');
+  result.current.subscribe('s2', MESSAGE_FEED);
+  joined(subscribeFrames(socket).at(-1));
+  assert.equal(result.current.rejoins, 0, 'a first subscribe of another session was reported');
+  result.current.subscribe('s1', SESSION_FEED);
+  joined(subscribeFrames(socket).at(-1));
+  assert.equal(result.current.rejoins, 1, 'the join that ended the gap was not reported');
+
+  // The gap is closed: the same subscription joining again is not another one.
+  result.current.unsubscribe('s1');
+  result.current.subscribe('s1', SESSION_FEED);
+  joined(subscribeFrames(socket).at(-1));
+  assert.equal(result.current.rejoins, 1);
+});
