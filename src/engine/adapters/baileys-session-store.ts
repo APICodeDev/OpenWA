@@ -518,7 +518,7 @@ export class BaileysSessionStore {
   }
 
   /** Every spelling of one chat this session can connect: the id, its engine form, and its lid or phone twin. */
-  private chatTwins(jid: string): string[] {
+  chatTwins(jid: string): string[] {
     const parsed = parseWaId(jid);
     const twins = [jid, this.toEngineJid(jid)];
     if (parsed.kind === 'lid') {

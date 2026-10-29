@@ -51,6 +51,8 @@ export interface BaileysContactsHost {
   lastInboundMessage(chatId: string): { key: WAMessageKey; timestamp: number } | null;
   /** The `<lid>@lid` known for a 1:1 chat or a person under any spelling of it, or null (always for a group). */
   lidOf(jid: string): string | null;
+  /** Every spelling of one chat the session can connect: the id, its engine form, and its lid or phone twin. */
+  chatTwins(jid: string): string[];
   /**
    * Stored copies of the named messages, in whatever order the store returns them. Ids the store
    * has never seen are absent, so neither the length nor the order tracks the input. `undefined`
@@ -543,7 +545,7 @@ export class BaileysContacts {
     const row = await this.readStored(chatId, stored);
     const fromStore = row ? this.storedTarget(chatId, row) : null;
     if (fromStore && (await this.matchesChat(fromStore.key, chatId, socket))) return toRange(fromStore);
-    if (!rangeless() || !(last || row || this.listedChat(chatId))) return null;
+    if (!rangeless() || !(last || row || this.listedChats(chatId).length)) return null;
     const jid = this.host.chatJid(chatId);
     return (await this.matchesChat({ remoteJid: jid }, chatId, socket)) ? { jid, lastMessages: [] } : null;
   }
@@ -589,10 +591,13 @@ export class BaileysContacts {
     return target(jid, row.id, row.fromMe, participant, row.timestamp);
   }
 
-  /** The chat as the session lists it (a chat record or a persisted state row), if it does. */
-  private listedChat(chatId: string): ChatSummary | undefined {
-    const id = this.host.toNeutralJid(this.host.chatJid(chatId));
-    return this.host.listChats().find(chat => chat.id === id);
+  /**
+   * The chat as the session lists it (a chat record or a persisted state row) under any spelling of it: a
+   * row is keyed by the lid or the phone it was learned under, whichever form the caller writes it with.
+   */
+  private listedChats(chatId: string): ChatSummary[] {
+    const ids = new Set(this.host.chatTwins(chatId).map(jid => this.host.toNeutralJid(jid)));
+    return this.host.listChats().filter(chat => ids.has(chat.id));
   }
 
   /**
@@ -603,7 +608,12 @@ export class BaileysContacts {
   async markUnread(chatId: string, stored?: StoredChatMessageLookup): Promise<boolean> {
     this.host.ensureReady();
     const socket = this.sock();
-    const range = await this.chatWriteRange(socket, chatId, stored, () => this.listedChat(chatId)?.archived !== true);
+    const range = await this.chatWriteRange(
+      socket,
+      chatId,
+      stored,
+      () => !this.listedChats(chatId).some(c => c.archived),
+    );
     if (!range) return false;
     await this.confirmed(
       this.sock(socket).chatModify({ markRead: false, lastMessages: range.lastMessages }, range.jid),

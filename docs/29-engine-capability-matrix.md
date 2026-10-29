@@ -986,8 +986,9 @@ adapter boundary — none silently stubs.
   message ids resolve `false`. With no usable message, clear and delete resolve `false`, and archive
   and unread are sent
   without a range for a chat the session knows (a chat record, a persisted state row or a stored
-  message) whose jid belongs to it, and resolve `false` otherwise; unread also resolves `false` for an
-  archived chat, which the phone leaves unmarked without a range. `sendSeen`
+  message, under its lid or its phone whichever the caller names) whose jid belongs to it, and resolve
+  `false` otherwise; unread also resolves `false` for an archived chat, which the phone leaves unmarked
+  without a range. `sendSeen`
   without message ids is `readMessages([key])` for the newest _received_ (not `fromMe`) message, in
   memory or stored, since Baileys drops own keys from a receipt. A chat with no such message resolves
   `false`, so one holding only this account's own sends answers `POST chats/read` with
