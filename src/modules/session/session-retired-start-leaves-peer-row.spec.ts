@@ -149,6 +149,7 @@ function fixture(afterInit: AfterInit) {
     registry,
     engine,
     factory,
+    repository,
     teardownWrites,
     announced,
     reconnect,
@@ -227,6 +228,23 @@ describe('a launch retired on a row that is still this node or nobody', () => {
     expect(f.engine.destroy).toHaveBeenCalled();
     expect(f.registry.has(ID)).toBe(false);
     expect(f.factory.purgeSessionData).toHaveBeenCalledWith(ID);
+    expect(f.announced(SessionStatus.DISCONNECTED)).toBe(0);
+  });
+
+  // The engine is already gone when the status write runs, so a database that fails it must not turn the
+  // retirement into a failed start: the start answers with the row it can read, as before.
+  it('start(): still answers when the status write of the retirement fails', async () => {
+    const f = fixture('own-lease-lapsed');
+    const update = f.repository.update.getMockImplementation()!;
+    f.repository.update.mockImplementation((where: unknown, patch: Partial<Session>) =>
+      Array.isArray(where) ? Promise.reject(new Error('database unavailable')) : update(where, patch),
+    );
+    await expect(f.ownership.claim(ID)).resolves.toBe(true);
+
+    await expect(f.lifecycle.start(ID, { explicit: true })).resolves.toMatchObject({ id: ID });
+
+    expect(f.engine.destroy).toHaveBeenCalled();
+    expect(f.registry.has(ID)).toBe(false);
     expect(f.announced(SessionStatus.DISCONNECTED)).toBe(0);
   });
 });
