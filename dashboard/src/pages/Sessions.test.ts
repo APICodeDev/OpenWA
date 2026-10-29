@@ -12,7 +12,7 @@
 // tab switch would silently discard it, exactly like the chat draft and staged attachment bugs
 // Chats.test.ts caught.
 import '../test-helpers/register-hooks.ts';
-import { test, before, afterEach } from 'node:test';
+import { test, before, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
@@ -368,6 +368,8 @@ before(async () => {
 });
 
 afterEach(() => {
+  // A test that failed while it held the retry pauses on a fake clock must not leave it to the next one.
+  mock.timers.reset();
   rtl.cleanup();
   window.sessionStorage.removeItem('openwa_api_key');
   resetSocketDouble();
@@ -2357,6 +2359,49 @@ test('a key refused the wildcard room joins each listed session instead', async 
   for (const frame of feedFrames().slice(1)) {
     assert.deepEqual((frame as { events: string[] }).events, SESSION_FEED_EVENTS);
   }
+});
+
+// Every push the room sent while it was not joined is gone, so the list is read again, as after a reconnect.
+test('the list is read again once a retried feed subscribe joins', async () => {
+  const { screen, waitFor, act } = rtl;
+  resetFetchCalls();
+  window.sessionStorage.setItem('openwa_api_key', 'test-key');
+  renderSessions();
+
+  await screen.findByText('new-device');
+  await waitFor(() => assert.equal(feedFrames().length, 1));
+  const listReads = (): number => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  await act(() => new Promise(resolve => setTimeout(resolve, 50)));
+  const readsBefore = listReads();
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the page to have opened a socket');
+  const requestIdOf = (index: number) => (socket.emitted[index]?.args[0] as { requestId?: string }).requestId;
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    act(() =>
+      socket.receive('message', {
+        type: 'error',
+        code: 'INTERNAL_ERROR',
+        message: 'API key could not be checked',
+        requestId: requestIdOf(0),
+      }),
+    );
+    act(() => mock.timers.tick(1_000));
+  } finally {
+    mock.timers.reset();
+  }
+  assert.equal(feedFrames().length, 2, 'the feed subscribe was not sent again');
+  act(() =>
+    socket.receive('message', {
+      type: 'subscribed',
+      sessionId: '*',
+      events: SESSION_FEED_EVENTS,
+      requestId: requestIdOf(1),
+    }),
+  );
+  await waitFor(() => assert.ok(listReads() > readsBefore, 'the list was not read again'));
+  await screen.findByText('new-device');
 });
 
 function pendingResponse() {

@@ -1082,7 +1082,7 @@ export function Chats() {
       handleStatusReceived,
     ],
   );
-  const { isConnected, connectionFailed, reconnect, subscribe, unsubscribe } = useWebSocket(wsEvents);
+  const { isConnected, connectionFailed, reconnect, subscribe, unsubscribe, rejoins } = useWebSocket(wsEvents);
 
   // A session-scoped key may not join '*': fall back to one subscription per listed session.
   useEffect(() => {
@@ -1111,9 +1111,11 @@ export function Chats() {
   // reconnect (isConnected false→true after a prior connect), refresh what the gap left stale; the
   // threads are refreshed by the subscribe effect below, which runs on every connect. A failed feed
   // counts as a gap even if it never connected, so the banner's retry refreshes too. The transition
-  // logic is unit-tested in utils/reconnectState.
+  // logic is unit-tested in utils/reconnectState. A subscribe the gateway joined only on a retry missed
+  // its room's events the same way, with no reconnect, so it refreshes the same, the open thread too.
   const reconnectHadConnected = useRef(false);
   const reconnectWasDisconnected = useRef(false);
+  const rejoinsSeen = useRef(0);
   const activeChatId = activeChat?.id;
   useEffect(() => {
     const decision = nextReconnectState({
@@ -1124,7 +1126,11 @@ export function Chats() {
     });
     reconnectHadConnected.current = decision.hadConnected;
     reconnectWasDisconnected.current = decision.wasDisconnected;
-    if (decision.invalidate) {
+    const rejoined = rejoins !== rejoinsSeen.current;
+    rejoinsSeen.current = rejoins;
+    if (rejoined && selectedSessionId)
+      void queryClient.invalidateQueries({ queryKey: ['messages', selectedSessionId] });
+    if (decision.invalidate || rejoined) {
       // Statuses are live now (status.received): a story posted during the socket gap would
       // otherwise stay invisible until a focus refetch.
       queryClient.invalidateQueries({ queryKey: ['contact-statuses', selectedSessionId] });
@@ -1149,6 +1155,7 @@ export function Chats() {
   }, [
     isConnected,
     connectionFailed,
+    rejoins,
     selectedSessionId,
     queryClient,
     reloadChatsInBackground,

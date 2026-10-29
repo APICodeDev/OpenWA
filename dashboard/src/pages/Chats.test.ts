@@ -4096,6 +4096,53 @@ test("after a reconnect whose subscribes all fail, every feed of a scoped key is
   await flush();
 });
 
+// The page reads the open thread again on a connect, and the chat list on a reconnect, because a room not joined meanwhile
+// missed its pushes for good. A subscribe the gateway joined only on a retry missed them the same way.
+test('the open thread and the chat list are read again once a retried message subscribe joins', async () => {
+  const { screen, fireEvent, within, waitFor, act } = rtl;
+  resetFetchCalls();
+  const threadPath = `/api/sessions/${SESSION.id}/messages?chatId=${encodeURIComponent(CHAT.id)}`;
+  const threadReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path.startsWith(threadPath)).length;
+  const chatsPath = `/api/sessions/${SESSION.id}/chats?limit=1000&offset=0`;
+  const { container } = renderChats();
+  fireEvent.click(await screen.findByText('Alice'));
+  await within(container.querySelector('.room-messages') as HTMLElement).findByText('hello from alice');
+
+  // A socket blip: the page joins again and reads again, but the gateway cannot read the key for the message feed.
+  const before = subscribeFrames().length;
+  act(() => lastSocket()?.receive('disconnect', 'transport close'));
+  act(() => lastSocket()?.receive('connect'));
+  await waitFor(() => assert.ok(subscribeFrames().slice(before).some(isMessageFeed)));
+  await waitFor(() => assert.equal(countFetchCalls('GET', chatsPath), 2));
+  await flush();
+  await flush();
+  const threadReadsBefore = threadReads();
+  const listReadsBefore = countFetchCalls('GET', chatsPath);
+  const rejoin = subscribeFrames().slice(before).find(isMessageFeed);
+
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    act(() => {
+      for (const frame of subscribeFrames().slice(before)) {
+        answerSubscribe(frame, frame === rejoin ? KEY_UNREADABLE : joined(frame));
+      }
+    });
+    act(() => mock.timers.tick(1_000));
+  } finally {
+    mock.timers.reset();
+  }
+  const retry = subscribeFrames().at(-1);
+  assert.ok(retry && retry !== rejoin && isMessageFeed(retry), 'the message subscribe was not sent again');
+  // A message received before this answer reached no one: the room was not joined.
+  act(() => answerSubscribe(retry, joined(retry)));
+  await waitFor(() => assert.ok(threadReads() > threadReadsBefore, 'the thread was not read again'));
+  await waitFor(() =>
+    assert.ok(countFetchCalls('GET', chatsPath) > listReadsBefore, 'the chat list was not read again'),
+  );
+  await flush();
+  await flush();
+});
+
 // The '*' refusal is answered once and never again, so the fallback must not be lost to another error frame the page
 // handles in the same batch, here the open session's message subscribe whose key could not be read.
 test('a refused wildcard answered together with another error still falls back to each listed session', async () => {

@@ -181,13 +181,17 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   // a joined subscribe starts the pauses over. Once they have run out the connection counts as failed, so the page
   // shows its banner and retry. Every other refusal is final. Answers are matched to subscribes by the requestId the
   // gateway echoes, and a waiting retry is kept per session and events.
-  const pendingSubscribes = useRef(new Map<string, Subscription>());
+  const pendingSubscribes = useRef(new Map<string, Subscription & { retried: boolean }>());
   // The subscribes waiting for the next round, and those of the round being sent.
   const retryQueue = useRef(new Map<string, Subscription>());
   const retryDue = useRef(new Map<string, Subscription>());
   const retryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const retryRound = useRef(0);
   const lastRequestId = useRef(0);
+  // Bumped when a retried subscribe is joined, once a batch: what its room pushed during the pauses is gone, so the
+  // page reads again what it holds, as after a reconnect.
+  const [rejoins, setRejoins] = useState(0);
+  const rejoinNoted = useRef(false);
 
   const clearSubscribeRetry = useCallback(() => {
     clearTimeout(retryTimer.current);
@@ -198,10 +202,10 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     retryRound.current = 0;
   }, []);
 
-  const subscribe = useCallback((sessionId: string, eventsList: string[]) => {
+  const sendSubscribe = useCallback((sessionId: string, eventsList: string[], retried: boolean) => {
     if (!socketRef.current?.connected) return;
     const requestId = `sub-${++lastRequestId.current}`;
-    pendingSubscribes.current.set(requestId, { sessionId, events: eventsList });
+    pendingSubscribes.current.set(requestId, { sessionId, events: eventsList, retried });
     const key = subscriptionKey({ sessionId, events: eventsList });
     retryQueue.current.delete(key);
     retryDue.current.delete(key);
@@ -212,6 +216,11 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       requestId,
     });
   }, []);
+
+  const subscribe = useCallback(
+    (sessionId: string, eventsList: string[]) => sendSubscribe(sessionId, eventsList, false),
+    [sendSubscribe],
+  );
 
   const unsubscribe = useCallback((sessionId: string) => {
     for (const retries of [retryQueue.current, retryDue.current]) {
@@ -233,9 +242,10 @@ export function useWebSocket(events: WebSocketEvents = {}) {
   const scheduleRetry = useCallback(() => {
     const sendDue = () => {
       retryTimer.current = undefined;
+      rejoinNoted.current = false;
       for (const [key, { sessionId, events }] of [...retryDue.current].slice(0, SUBSCRIBE_RETRY_BATCH)) {
         retryDue.current.delete(key);
-        subscribe(sessionId, events);
+        sendSubscribe(sessionId, events, true);
       }
       if (retryDue.current.size > 0) retryTimer.current = setTimeout(sendDue, 1_000);
       else startPause();
@@ -257,7 +267,7 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       }, delay);
     };
     startPause();
-  }, [subscribe]);
+  }, [sendSubscribe]);
 
   const noteSubscribeAnswer = useCallback(
     (frame: { type?: string; code?: string; requestId?: string } | null | undefined) => {
@@ -265,7 +275,13 @@ export function useWebSocket(events: WebSocketEvents = {}) {
       const pending = requestId === undefined ? undefined : pendingSubscribes.current.get(requestId);
       if (!frame || requestId === undefined || !pending) return;
       pendingSubscribes.current.delete(requestId);
-      if (frame.type === 'subscribed') retryRound.current = 0;
+      if (frame.type === 'subscribed') {
+        retryRound.current = 0;
+        if (pending.retried && !rejoinNoted.current) {
+          rejoinNoted.current = true;
+          setRejoins(count => count + 1);
+        }
+      }
       if (frame.type !== 'error' || (frame.code !== 'INTERNAL_ERROR' && frame.code !== 'RATE_LIMITED')) return;
       retryQueue.current.set(subscriptionKey(pending), pending);
       scheduleRetry();
@@ -467,5 +483,5 @@ export function useWebSocket(events: WebSocketEvents = {}) {
     // above detaches the handler from the dead instance first.
   }, [events, socketEpoch]);
 
-  return { isConnected, connectionFailed, reconnect, subscribe, unsubscribe };
+  return { isConnected, connectionFailed, reconnect, subscribe, unsubscribe, rejoins };
 }

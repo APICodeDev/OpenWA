@@ -356,3 +356,37 @@ test('subscribes sent again go out a batch a second, and one failing again waits
     firstBatch.map(frame => frame.sessionId),
   );
 });
+
+// A room that was not joined during the pauses missed its pushes for good, so the page reads again what it holds, as
+// after a reconnect. It is told once a batch of retries, not once a subscribe, and never for a first subscribe.
+test('a retried subscribe that joins is reported once a batch, and a first one that joins is not', () => {
+  holdConnect();
+  const { result } = rtl.renderHook(() => useWebSocket());
+  const socket = lastSocket();
+  assert.ok(socket, 'expected the hook to open a socket');
+  rtl.act(() => socket.receive('connect'));
+  mock.timers.enable({ apis: ['setTimeout'] });
+  const answer = (frame: Frame | undefined, reply: Record<string, unknown>) =>
+    rtl.act(() => socket.receive('message', { ...reply, requestId: frame?.requestId }));
+  const joined = (frame: Frame | undefined) =>
+    answer(frame, { type: 'subscribed', sessionId: frame?.sessionId, events: frame?.events });
+
+  for (const id of ['s1', 's2', 's3']) result.current.subscribe(id, SESSION_FEED);
+  const [first, second, third] = subscribeFrames(socket);
+  joined(first);
+  assert.equal(result.current.rejoins, 0, 'a first subscribe that joined was reported');
+
+  answer(second, { type: 'error', code: 'INTERNAL_ERROR' });
+  answer(third, { type: 'error', code: 'INTERNAL_ERROR' });
+  rtl.act(() => mock.timers.tick(1_000));
+  const retried = subscribeFrames(socket).slice(3);
+  assert.equal(retried.length, 2);
+  for (const frame of retried) joined(frame);
+  assert.equal(result.current.rejoins, 1);
+
+  result.current.subscribe('s4', SESSION_FEED);
+  answer(subscribeFrames(socket).at(-1), { type: 'error', code: 'RATE_LIMITED' });
+  rtl.act(() => mock.timers.tick(1_000));
+  joined(subscribeFrames(socket).at(-1));
+  assert.equal(result.current.rejoins, 2);
+});
