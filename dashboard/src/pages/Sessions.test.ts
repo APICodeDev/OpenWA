@@ -106,6 +106,7 @@ function resetFetchCalls(): void {
   proxyPatchFails = false;
   stopFailure = null;
   forceKillFailure = null;
+  logoutFailure = null;
   confirmGate = null;
   qrGate = null;
   listGate = null;
@@ -146,6 +147,8 @@ let proxyPatchFails = false;
 let stopFailure: { status: number; message: string } | null = null;
 // When set, POST .../force-kill answers with this status and body.
 let forceKillFailure: { status: number; body: Record<string, unknown> } | null = null;
+// When set, POST .../logout answers with this status and body.
+let logoutFailure: { status: number; body: Record<string, unknown> } | null = null;
 // When set, DELETE /api/sessions/:id and POST .../force-kill answer only once this settles.
 let confirmGate: Promise<void> | null = null;
 // When set, POST .../start answers, whichever way it answers, only once this settles.
@@ -310,6 +313,9 @@ function installFetchStub(): void {
         }
         if (lifecycleMatch[2] === 'force-kill' && forceKillFailure) {
           return jsonResponse(forceKillFailure.body, forceKillFailure.status);
+        }
+        if (lifecycleMatch[2] === 'logout' && logoutFailure) {
+          return jsonResponse(logoutFailure.body, logoutFailure.status);
         }
         if (isStart && startResult) {
           const answered = { ...base, ...startResult.answer };
@@ -2215,6 +2221,25 @@ for (const [label, body, shown] of [
     within(alert).getByText(shown);
   });
 }
+
+// A session that never linked has nothing to unlink: the gateway stops it and answers 409 with what to do instead
+// (stop or delete it), which a retry of the unlink cannot change. That answer is shown, not a bare failure.
+test('an unlink of a session that never linked shows the reason the gateway gives', async () => {
+  const { screen, fireEvent, within } = rtl;
+  resetFetchCalls();
+  const message =
+    'This session was never linked to WhatsApp, so there is nothing to unlink. Stop or delete it instead.';
+  logoutFailure = { status: 409, body: { statusCode: 409, message, error: 'Conflict' } };
+  renderSessions();
+
+  const card = (await screen.findByText('new-device')).closest('.session-card') as HTMLElement;
+  fireEvent.click(within(card).getByRole('button', { name: 'Unlink' }));
+  fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlink' }));
+
+  const alert = await screen.findByRole('alert');
+  within(alert).getByText('Unlink Failed');
+  within(alert).getByText(message);
+});
 
 // The confirm modal closes only once its request answers, so a second click on its button in that
 // window must not send the request again.
