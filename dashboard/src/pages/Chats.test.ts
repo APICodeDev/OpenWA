@@ -48,6 +48,8 @@ let sessionListStatus: number | null = null;
 
 // Hits the global search answers with.
 let searchHits: SearchHit[] = [];
+// The phone the gateway resolves a privacy id to, by id; an id it knows nothing about answers null.
+const lidPhones: Record<string, string> = {};
 
 // The engine the gateway reports: only whatsapp-web.js lists channels.
 let engineType = 'baileys';
@@ -377,6 +379,10 @@ function installFetchStub(): void {
     if (method === 'GET' && path.startsWith('/api/search?')) {
       return Promise.resolve(jsonResponse({ hits: searchHits, total: searchHits.length }));
     }
+    if (method === 'GET' && /\/contacts\/[^/]+\/phone$/.test(path)) {
+      const id = decodeURIComponent(path.split('/contacts/')[1].split('/phone')[0]);
+      return Promise.resolve(jsonResponse({ contactId: id, phone: lidPhones[id] ?? null }));
+    }
     if (method === 'POST' && path === `/api/sessions/${SESSION.id}/status/send-text`) {
       return Promise.resolve(jsonResponse({ success: true }));
     }
@@ -442,6 +448,7 @@ afterEach(async () => {
   sendTextId = 'wamid.out.1';
   olderPageFails = false;
   chatsResponder = null;
+  for (const id of Object.keys(lidPhones)) delete lidPhones[id];
   thirdSessionStatus = null;
   sessionListStatus = null;
   searchHits = [];
@@ -2569,6 +2576,51 @@ test('a second search hit in the chat already open scrolls to it at once', async
     Element.prototype.scrollIntoView = original;
   }
 });
+
+// A stored row keeps the chat id it was written with: an API client may send to the raw `@s.whatsapp.net` form of a
+// chat the list names by `@c.us`, or to the phone of a contact the list holds under its privacy id. The thread read
+// takes those as one chat, so the hit opens the listed chat and scrolls to the message there.
+for (const variant of ['the same session', 'another session', 'a privacy-id chat'] as const) {
+  test(`a search hit stored under another spelling of a listed chat opens it and scrolls to the message (${variant})`, async () => {
+    const { screen, waitFor, within } = rtl;
+    const LID_ALICE: Chat = { ...CHAT, id: '262813461250099@lid' };
+    if (variant === 'another session') twoSessions = true;
+    if (variant === 'a privacy-id chat') {
+      chatsResponder = () => Promise.resolve(jsonResponse([LID_ALICE, CHAT_2]));
+      lidPhones[LID_ALICE.id] = '15550001111';
+    }
+    searchHits = [
+      {
+        ...THIRD_SESSION_HIT,
+        sessionId: variant === 'another session' ? SESSION_2.id : SESSION.id,
+        chatId: variant === 'a privacy-id chat' ? '15550001111@c.us' : '15550001111@s.whatsapp.net',
+        waMessageId: DB_MESSAGE.waMessageId!,
+      },
+    ];
+    const scrolled: Element[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    try {
+      const { container } = renderChats();
+      await screen.findByText('Carol');
+      await clickSearchHit(container);
+      await waitFor(() => assert.ok(container.querySelector('.room-header'), "the hit's chat did not open"));
+      await within(container.querySelector('.room-header') as HTMLElement).findByText('Alice');
+      await waitFor(() =>
+        assert.equal(
+          scrolled.filter(el => el.getAttribute('data-wa-message-id') === DB_MESSAGE.waMessageId).length,
+          1,
+          'the open chat did not scroll to the message',
+        ),
+      );
+    } finally {
+      Element.prototype.scrollIntoView = original;
+      twoSessions = false;
+    }
+  });
+}
 
 test('changing the UI language keeps the selected session and the open chat', async () => {
   const { screen, fireEvent, within, waitFor, act } = rtl;

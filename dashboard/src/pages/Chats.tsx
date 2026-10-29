@@ -1295,18 +1295,97 @@ export function Chats() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeChat?.id, loadingMessages, engineType]);
 
+  // The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
+  // under its @lid. Finds the id the list holds that conversation under: the same phone spelled another way, else
+  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache.
+  const findListedChat = useCallback(
+    async (phoneId: string): Promise<string | null> => {
+      const sessionId = selectedSessionRef.current;
+      const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
+      if (spelled) return spelled.id;
+      const phone = phoneId.split('@')[0].replace(/\D/g, '');
+      const privacyChats = chatsRef.current
+        .filter(c => c.kind === 'individual' && c.id.endsWith('@lid'))
+        .slice(0, LID_CHATS_SEARCHED);
+      let lastAskedAt = 0;
+      for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
+        const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
+        // A group the page already holds answers for goes ahead at once; only one that reaches the gateway waits.
+        if (batch.some(c => !isResolvedPhoneHeld(queryClient, sessionId, c.id))) {
+          const wait = lastAskedAt + LID_LOOKUP_GAP_MS - Date.now();
+          if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+          if (selectedSessionRef.current !== sessionId) return null;
+          lastAskedAt = Date.now();
+        }
+        const phones = await Promise.all(
+          batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
+        );
+        if (selectedSessionRef.current !== sessionId) return null;
+        const hit = batch.find((_, j) => phones[j]?.replace(/\D/g, '') === phone);
+        if (hit) return hit.id;
+      }
+      return null;
+    },
+    [queryClient],
+  );
+
   // --- Global search: jump to a hit's chat (and best-effort scroll to the message) ---
   // A cross-session hit switches session, which asynchronously reloads the chats list — so the
   // target chat may not be available at click time. pendingHitRef carries the intent across that
   // async gap: the chat-select effect picks it up once the list lands, and the scroll effect runs
   // once the messages have rendered. `opened` marks a hit whose chat has been opened, so the user
   // leaving that chat before its thread renders drops the hit instead of being sent back into it.
-  const pendingHitRef = useRef<{ sessionId: string; chatId: string; waMessageId: string; opened?: boolean } | null>(
-    null,
-  );
+  // `resolving` marks a hit whose chat is being looked up (see findHitChat), so the effect below does not ask again.
+  const pendingHitRef = useRef<{
+    sessionId: string;
+    chatId: string;
+    waMessageId: string;
+    opened?: boolean;
+    resolving?: boolean;
+  } | null>(null);
   // Bumped with every hit, so a hit in the chat already open still re-runs the scroll effect, where
   // every other state it sets is unchanged and React skips the render.
   const [hitSeq, setHitSeq] = useState(0);
+
+  // The listed chat a hit was found in. A stored row keeps the chat id it was written with, which can be another
+  // spelling of a listed chat: an API send to the raw `@s.whatsapp.net` form, or to the phone of a contact the list
+  // holds under its @lid. The thread read takes those as one chat, and so does this.
+  const findHitChat = useCallback(
+    async (chatId: string): Promise<Chat | undefined> => {
+      const listed = chatsRef.current.find(c => c.id === chatId);
+      if (listed || !phoneContactId(chatId)) return listed;
+      const id = await findListedChat(chatId).catch(() => null);
+      return id === null ? undefined : chatsRef.current.find(c => c.id === id);
+    },
+    [findListedChat],
+  );
+
+  // Opens a hit's chat and keeps the hit under the id the list holds the chat by, which is what the scroll below and
+  // the effect that drops a hit the user left compare the open chat with.
+  const openHitChat = useCallback(
+    (pending: { sessionId: string; waMessageId: string }, chat: Chat) => {
+      if (chat.kind === 'channel') {
+        // Channels render their own read-only list on the Channels tab, not via activeChat — the
+        // hit's message-highlight is intentionally dropped here since that pane has no per-message scroll target.
+        switchTab('channels');
+        pendingHitRef.current = null;
+        return;
+      }
+      setActiveTab(chat.kind === 'status' ? 'status' : 'chats');
+      setActiveChat(chat);
+      setActiveChannel(null);
+      setActiveStatusContactId(null);
+      pendingHitRef.current = {
+        sessionId: pending.sessionId,
+        chatId: chat.id,
+        waMessageId: pending.waMessageId,
+        opened: true,
+      };
+      // The chat may be the open one under another spelling, where nothing else changes.
+      setHitSeq(n => n + 1);
+    },
+    [switchTab],
+  );
 
   const handleSearchHit = useCallback(
     async (hit: SearchHit) => {
@@ -1327,33 +1406,28 @@ export function Chats() {
           return;
         }
       }
-      const pending = { sessionId: hit.sessionId, chatId: hit.chatId, waMessageId: hit.waMessageId };
+      const sameSession = hit.sessionId === selectedSessionId;
+      const pending = {
+        sessionId: hit.sessionId,
+        chatId: hit.chatId,
+        waMessageId: hit.waMessageId,
+        resolving: sameSession,
+      };
       pendingHitRef.current = pending;
       setHitSeq(n => n + 1);
-      if (hit.sessionId !== selectedSessionId) {
+      if (!sameSession) {
         // Switching session triggers loadChats; the effect below selects the chat once the list lands.
         setSelectedSessionId(hit.sessionId);
-      } else {
-        const chat = chats.find(c => c.id === hit.chatId);
-        if (chat) {
-          if (chat.kind === 'channel') {
-            // Channels render their own read-only list on the Channels tab, not via activeChat — the
-            // hit's message-highlight is intentionally dropped here since that pane has no per-message scroll target.
-            switchTab('channels');
-            pendingHitRef.current = null;
-          } else {
-            setActiveTab(chat.kind === 'status' ? 'status' : 'chats');
-            setActiveChat(chat);
-            setActiveChannel(null);
-            setActiveStatusContactId(null);
-            pendingHitRef.current = { ...pending, opened: true };
-          }
-        } else {
-          pendingHitRef.current = null;
-        }
+        return;
       }
+      const openBefore = activeChatIdRef.current;
+      const chat = await findHitChat(hit.chatId);
+      // A newer hit, a session switch, or a chat the user opened while the lookup ran takes over from this one.
+      if (pendingHitRef.current !== pending || activeChatIdRef.current !== openBefore) return;
+      if (chat) openHitChat(pending, chat);
+      else pendingHitRef.current = null;
     },
-    [selectedSessionId, sessions, chats, readSessions, switchTab, showLoadError, showWarningToast, t],
+    [selectedSessionId, sessions, readSessions, showLoadError, showWarningToast, t, findHitChat, openHitChat],
   );
 
   // After a session switch the chats list reloads — pick up the pending chat once it appears.
@@ -1369,20 +1443,16 @@ export function Chats() {
       return;
     }
     if (loadingChats || listedSessionRef.current !== pending.sessionId || activeChat?.id === pending.chatId) return;
-    const chat = chats.find(c => c.id === pending.chatId);
-    if (!chat) {
-      pendingHitRef.current = null;
-    } else if (chat.kind === 'channel') {
-      switchTab('channels');
-      pendingHitRef.current = null;
-    } else {
-      setActiveTab(chat.kind === 'status' ? 'status' : 'chats');
-      setActiveChat(chat);
-      setActiveChannel(null);
-      setActiveStatusContactId(null);
-      pendingHitRef.current = { ...pending, opened: true };
-    }
-  }, [chats, loadingChats, activeChat, selectedSessionId, switchTab]);
+    if (pending.resolving) return;
+    const resolving = { ...pending, resolving: true };
+    pendingHitRef.current = resolving;
+    const openBefore = activeChatIdRef.current;
+    void findHitChat(pending.chatId).then(chat => {
+      if (pendingHitRef.current !== resolving || activeChatIdRef.current !== openBefore) return;
+      if (chat) openHitChat(pending, chat);
+      else pendingHitRef.current = null;
+    });
+  }, [chats, loadingChats, activeChat, selectedSessionId, findHitChat, openHitChat]);
 
   // Best-effort scroll to the hit message. Runs as a layout effect (after useChatScrollPosition's
   // own restore on the same commit) so it overrides the bottom/saved jump with no visible flash.
@@ -1473,37 +1543,6 @@ export function Chats() {
   const filteredChats = showArchived
     ? shownChats
     : [...shownChats.filter(c => c.pinned), ...shownChats.filter(c => !c.pinned)];
-
-  // The number check answers a phone id, while a contact that moved to privacy-id addressing keeps its conversation
-  // under its @lid. Finds the id the list holds that conversation under: the same phone spelled another way, else
-  // the @lid chat the engine resolves to that phone. The engine's answers share the room header's cache.
-  const findListedChat = async (phoneId: string): Promise<string | null> => {
-    const sessionId = selectedSessionRef.current;
-    const spelled = chatsRef.current.find(c => contactKey(c.id) === contactKey(phoneId));
-    if (spelled) return spelled.id;
-    const phone = phoneId.split('@')[0].replace(/\D/g, '');
-    const privacyChats = chatsRef.current
-      .filter(c => c.kind === 'individual' && c.id.endsWith('@lid'))
-      .slice(0, LID_CHATS_SEARCHED);
-    let lastAskedAt = 0;
-    for (let i = 0; i < privacyChats.length; i += LID_LOOKUPS_AT_ONCE) {
-      const batch = privacyChats.slice(i, i + LID_LOOKUPS_AT_ONCE);
-      // A group the page already holds answers for goes ahead at once; only one that reaches the gateway waits.
-      if (batch.some(c => !isResolvedPhoneHeld(queryClient, sessionId, c.id))) {
-        const wait = lastAskedAt + LID_LOOKUP_GAP_MS - Date.now();
-        if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
-        if (selectedSessionRef.current !== sessionId) return null;
-        lastAskedAt = Date.now();
-      }
-      const phones = await Promise.all(
-        batch.map(c => queryClient.fetchQuery(resolvedPhoneQuery(sessionId, c.id)).catch(() => null)),
-      );
-      if (selectedSessionRef.current !== sessionId) return null;
-      const hit = batch.find((_, j) => phones[j]?.replace(/\D/g, '') === phone);
-      if (hit) return hit.id;
-    }
-    return null;
-  };
 
   // Open a chat picked in the new-chat panel. A chat with no history is not in the engine's list, so
   // it is added to the sidebar locally until the first message, or the next list load, settles it.
