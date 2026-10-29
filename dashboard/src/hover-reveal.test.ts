@@ -42,21 +42,15 @@ test('the chat row menu trigger stays visible where there is no hover', () => {
   assert.match(rule[1], /opacity:\s*1/);
 });
 
-// The message actions (reply, react, delete) show on hover or keyboard focus. A tap on a message's text gives neither on
-// iOS, where a tap on an element with no click handler of its own fires no mouse events, so they stay visible there.
-test('the message actions stay visible where there is no hover, beside the bubble and not over its text', () => {
+// The message actions (reply, react, delete) show on hover or keyboard focus. A touch screen reveals them with a tap,
+// which iOS turns into hover only on an element it takes for clickable: the bubble container is marked so there.
+test('a tap reveals the message actions on a touch screen, as hover does with a mouse', () => {
   assert.match(
     css,
-    /\.chats-page \.message-actions-menu\s*\{[^}]*position:\s*absolute;[^}]*display:\s*none;/,
-    'the actions are no longer hidden over the bubble by default',
+    /\.chats-page \.message-bubble-container:hover \.message-actions-menu/,
+    'the actions are no longer revealed by hovering their message',
   );
-  const rule = /\.chats-page \.message-actions-menu\s*\{([^}]*)\}/.exec(mediaBody('(hover: none)'));
-  assert.ok(rule, 'no actions rule under (hover: none)');
-  assert.match(rule[1], /display:\s*flex/);
-  assert.match(rule[1], /position:\s*static/, 'laid over the bubble the actions would hide its text');
-  // The rule has to come after the base rule it overrides, which has the same specificity.
-  assert.ok(
-    css.lastIndexOf('@media (hover: none)') > css.indexOf('.chats-page .message-actions-menu {'),
-    'the touch rule comes before the rule that hides the actions, which then wins',
-  );
+  const rule = /\.chats-page \.message-bubble-container\s*\{([^}]*)\}/.exec(mediaBody('(hover: none)'));
+  assert.ok(rule, 'no message rule under (hover: none)');
+  assert.match(rule[1], /cursor:\s*pointer/, 'iOS gives no hover to a tap on a message it does not take for clickable');
 });

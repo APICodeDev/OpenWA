@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Draw the selection check in the dashboard New group list dark on its green fill, where white measured under 3:1.
 - Name the buttons that remove a staged file and close a reply above the dashboard chat composer for screen readers.
 - Announce the unread badges on dashboard chat list rows to screen readers, including the dot of a chat marked as unread.
-- Keep the reply, react and delete actions of dashboard chat messages visible beside each bubble on touch screens, which have no hover to reveal them.
+- Mark dashboard chat messages as tappable on touch screens, so iOS reveals their reply, react and delete actions on a tap as hover does with a mouse.
 - Fit the dashboard chat room's menu to the room's height, scrolling its entries, so a short window no longer cuts off the last ones.
 - Keep a member's name and number at the start edge of the dashboard group dialog in right-to-left languages, where a Latin name and every number sat at the left.
 - Name an unnamed dashboard chat by its formatted number on its list row, in its menu, dialogs and toasts and on the reply banner, instead of the bare digits of its id.
