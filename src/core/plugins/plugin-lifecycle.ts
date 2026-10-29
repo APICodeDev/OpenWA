@@ -220,15 +220,15 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
-    plugin.config = { ...plugin.config, ...config };
-
     // Persist only the operator's keys on top of what was persisted before, not the effective merge:
     // a built-in's effective config carries its env-derived defaults, and storing those would freeze
-    // them over later .env changes (see registerBuiltInPlugin).
+    // them over later .env changes (see registerBuiltInPlugin). Persisted first: a registry that cannot be
+    // written throws here and leaves the running config as it was.
     this.pluginStorage.setPluginConfig(pluginId, {
       ...(this.pluginStorage.getPluginConfig(pluginId) ?? {}),
       ...config,
     });
+    plugin.config = { ...plugin.config, ...config };
 
     // Notify the running plugin of the config change (fire and forget). A sandboxed plugin's
     // onConfigChange lives in the worker (plugin.instance is null), so route it through the live worker
@@ -263,8 +263,8 @@ export class PluginLifecycle {
       throw new Error(`Plugin ${pluginId} is global (not session-scoped) and cannot be activated per session`);
     }
 
-    plugin.activeSessions = sessions;
     this.pluginStorage.setPluginSessions(pluginId, sessions);
+    plugin.activeSessions = sessions;
 
     this.logger.log(`Plugin active sessions updated: ${pluginId}`, {
       pluginId,
@@ -296,8 +296,8 @@ export class PluginLifecycle {
     } else {
       delete next[sessionId];
     }
-    plugin.sessionConfig = next;
     this.pluginStorage.setPluginSessionConfig(pluginId, next);
+    plugin.sessionConfig = next;
 
     this.logger.debug(`Plugin session config updated: ${pluginId}`, {
       pluginId,

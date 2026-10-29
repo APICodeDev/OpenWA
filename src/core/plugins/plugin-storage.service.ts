@@ -33,6 +33,18 @@ function atomicWriteFileSync(filePath: string, data: string, options?: { mode?: 
 const ENCODED_KEY_PREFIX = 'key-';
 
 /**
+ * Thrown by an operator-facing registry write that could not reach the disk. The change is not applied: the
+ * in-memory entry is put back, so a restart cannot undo what the caller was told had been stored.
+ */
+export class PluginRegistryWriteError extends Error {
+  constructor(cause: unknown) {
+    const code = (cause as NodeJS.ErrnoException | undefined)?.code;
+    super(`The plugin registry could not be written${code ? ` (${code})` : ''}; the change was not applied`);
+    this.name = 'PluginRegistryWriteError';
+  }
+}
+
+/**
  * Default per-plugin bound on ctx.storage writes (plugins.storageMaxBytes / PLUGIN_STORAGE_MAX_BYTES
  * overrides). The worker is not a security boundary, but an unbounded storage.set loop would still
  * fill the host disk — this is a robustness quota, not isolation.
@@ -110,7 +122,16 @@ export class PluginStorageService {
     }
   }
 
+  /** Best-effort write, for the load path and runtime status, where a disk fault must not fail the caller. */
   private saveRegistry(): void {
+    try {
+      this.writeRegistry();
+    } catch {
+      /* logged by writeRegistry */
+    }
+  }
+
+  private writeRegistry(): void {
     try {
       const dir = path.dirname(this.registryPath);
       if (!fs.existsSync(dir)) {
@@ -130,6 +151,23 @@ export class PluginStorageService {
       this.logger.error('Failed to save plugin registry', String(error), {
         action: 'registry_save_failed',
       });
+      throw error;
+    }
+  }
+
+  /**
+   * Apply an operator's change to an entry and write it, or put the entry back and throw
+   * PluginRegistryWriteError when the registry cannot be written.
+   */
+  private commitEntryChange(entry: PluginRegistryEntry, change: Partial<PluginRegistryEntry>): void {
+    const keys = [...Object.keys(change), 'updatedAt'] as (keyof PluginRegistryEntry)[];
+    const previous = Object.fromEntries(keys.map(key => [key, entry[key]])) as Partial<PluginRegistryEntry>;
+    Object.assign(entry, change, { updatedAt: new Date() });
+    try {
+      this.writeRegistry();
+    } catch (error) {
+      Object.assign(entry, previous);
+      throw new PluginRegistryWriteError(error);
     }
   }
 
@@ -147,9 +185,17 @@ export class PluginStorageService {
     this.saveRegistry();
   }
 
+  /** Throws PluginRegistryWriteError, keeping the entry, when the registry cannot be written. */
   deletePluginEntry(pluginId: string): void {
+    const entry = this.registry.get(pluginId);
+    if (!entry) return;
     this.registry.delete(pluginId);
-    this.saveRegistry();
+    try {
+      this.writeRegistry();
+    } catch (error) {
+      this.registry.set(pluginId, entry);
+      throw new PluginRegistryWriteError(error);
+    }
   }
 
   getAllEntries(): PluginRegistryEntry[] {
@@ -179,15 +225,12 @@ export class PluginStorageService {
    * separate from setPluginStatus: `status` tracks where the runtime is right now and is reset on every
    * load, so writing intent through it would lose it on the next boot. Call this only from the
    * operator-facing enable/disable — never from the shutdown teardown, which disables every running
-   * plugin and would otherwise erase the decision on the way out.
+   * plugin and would otherwise erase the decision on the way out. Throws PluginRegistryWriteError when the
+   * decision cannot be stored.
    */
   setPluginEnabledByOperator(pluginId: string, enabled: boolean): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.enabledByOperator = enabled;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { enabledByOperator: enabled });
   }
 
   // ============================================================================
@@ -199,13 +242,10 @@ export class PluginStorageService {
     return entry?.config ?? null;
   }
 
+  /** Throws PluginRegistryWriteError when the config cannot be stored. */
   setPluginConfig(pluginId: string, config: Record<string, unknown>): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.config = config;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { config });
   }
 
   getPluginSessions(pluginId: string): string[] | null {
@@ -213,13 +253,10 @@ export class PluginStorageService {
     return entry?.activeSessions ?? null;
   }
 
+  /** Throws PluginRegistryWriteError when the activation cannot be stored. */
   setPluginSessions(pluginId: string, sessions: string[]): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.activeSessions = sessions;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { activeSessions: sessions });
   }
 
   getPluginSessionConfig(pluginId: string): Record<string, Record<string, unknown>> | null {
@@ -227,13 +264,10 @@ export class PluginStorageService {
     return entry?.sessionConfig ?? null;
   }
 
+  /** Throws PluginRegistryWriteError when the per-session config cannot be stored. */
   setPluginSessionConfig(pluginId: string, sessionConfig: Record<string, Record<string, unknown>>): void {
     const entry = this.registry.get(pluginId);
-    if (entry) {
-      entry.sessionConfig = sessionConfig;
-      entry.updatedAt = new Date();
-      this.saveRegistry();
-    }
+    if (entry) this.commitEntryChange(entry, { sessionConfig });
   }
 
   // ============================================================================

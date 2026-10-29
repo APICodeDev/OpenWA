@@ -171,10 +171,14 @@ export class PluginPackageScanner {
               `or add a manifest.json if it is meant to load.`,
             { pluginPath, action: 'manifest_missing' },
           );
-          this.pluginStorage.deletePluginEntry(entry.name);
-          this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
-            action: 'registry_ghost_pruned',
-          });
+          try {
+            this.pluginStorage.deletePluginEntry(entry.name);
+            this.logger.log(`Pruned stale registry entry for removed built-in plugin: ${entry.name}`, {
+              action: 'registry_ghost_pruned',
+            });
+          } catch {
+            // Logged by the storage service; the entry is pruned on a later boot. A disk fault must not stop the scan.
+          }
           continue;
         }
 

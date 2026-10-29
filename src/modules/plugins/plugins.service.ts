@@ -4,12 +4,19 @@ import {
   BadRequestException,
   ConflictException,
   HttpException,
+  InternalServerErrorException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
-import { PluginLoaderService, PluginStatus, PluginType, resolvePluginEntryPath } from '../../core/plugins';
+import {
+  PluginLoaderService,
+  PluginRegistryWriteError,
+  PluginStatus,
+  PluginType,
+  resolvePluginEntryPath,
+} from '../../core/plugins';
 import { pluginUpdateBackupDirName, pluginUpdateStagingDirName } from '../../core/plugins';
 import type { PluginConfigSchema } from '../../core/plugins';
 import { PluginDto } from './dto/plugin.dto';
@@ -30,6 +37,12 @@ const CATALOG_MAX_BYTES = 1 * 1024 * 1024;
  * around the download calls).
  */
 const logger = createLogger('PluginsService');
+
+/** A change the plugin registry could not store is answered as not applied, like any other refused change. */
+function notApplied(error: unknown): { success: boolean; message: string } {
+  if (error instanceof PluginRegistryWriteError) return { success: false, message: error.message };
+  throw error;
+}
 
 /** A plugin can host provisioned instances iff it declares an ingress route AND the webhook:ingress
  *  permission — mirrors IntegrationInstanceController.assertIngressCapable. */
@@ -127,7 +140,7 @@ export class PluginsService {
   }
 
   enable(id: string): Promise<{ success: boolean; message: string }> {
-    return this.serialize(id, () => this.enableInner(id));
+    return this.serialize(id, () => this.enableInner(id).catch(notApplied));
   }
 
   private async enableInner(id: string): Promise<{ success: boolean; message: string }> {
@@ -151,6 +164,8 @@ export class PluginsService {
       this.pluginLoader.setOperatorEnabled(id, true);
       return { success: true, message: `Plugin ${id} enabled successfully` };
     } catch (error) {
+      // Running, but the decision could not be stored: stop it again, or it would run now and not after a restart.
+      if (error instanceof PluginRegistryWriteError) await this.pluginLoader.disablePlugin(id).catch(() => undefined);
       return {
         success: false,
         message: error instanceof Error ? error.message : String(error),
@@ -159,7 +174,7 @@ export class PluginsService {
   }
 
   disable(id: string): Promise<{ success: boolean; message: string }> {
-    return this.serialize(id, () => this.disableInner(id));
+    return this.serialize(id, () => this.disableInner(id).catch(notApplied));
   }
 
   private async disableInner(id: string): Promise<{ success: boolean; message: string }> {
@@ -225,6 +240,7 @@ export class PluginsService {
     try {
       this.pluginLoader.setPluginSessions(id, sessions);
     } catch (error) {
+      if (error instanceof PluginRegistryWriteError) throw new InternalServerErrorException(error.message);
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
     return this.findOne(id);
@@ -714,6 +730,7 @@ export class PluginsService {
       await this.pluginLoader.uninstallPlugin(id);
       return { success: true, message: `Plugin ${id} uninstalled successfully` };
     } catch (error) {
+      if (error instanceof PluginRegistryWriteError) throw new InternalServerErrorException(error.message);
       throw new BadRequestException(error instanceof Error ? error.message : String(error));
     }
   }
