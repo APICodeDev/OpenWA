@@ -2303,28 +2303,31 @@ test("a dismissed mute's late answer leaves the mute dialog that is out busy", a
   await settle();
 });
 
-test('a clear or delete the engine declines keeps the chat and its dialog, and says it failed', async () => {
-  const { screen, fireEvent, within } = rtl;
-  declineWrites = true;
-  window.sessionStorage.setItem('openwa_engine_type', 'whatsapp-web.js');
-  renderPage();
-  await screen.findByText('Alice');
+// Baileys declines a clear or delete with no message to key it to (a chat whose history the gateway never saw).
+for (const engine of ['whatsapp-web.js', 'baileys']) {
+  test(`a clear or delete the engine declines keeps the chat and its dialog, and says it failed (${engine})`, async () => {
+    const { screen, fireEvent, within } = rtl;
+    declineWrites = true;
+    window.sessionStorage.setItem('openwa_engine_type', engine);
+    renderPage();
+    await screen.findByText('Alice');
 
-  pickRowAction('Alice', 'Clear chat');
-  let dialog = await screen.findByRole('dialog');
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Clear chat' }));
-  await screen.findByText('Could not clear the chat');
-  assert.ok(screen.getByRole('dialog'), 'the dialog closed on a declined clear');
-  assert.ok(screen.getAllByText('hello from alice').length > 0, 'the preview was cleared although nothing was');
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    pickRowAction('Alice', 'Clear chat');
+    let dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Clear chat' }));
+    await screen.findByText('Could not clear the chat');
+    assert.ok(screen.getByRole('dialog'), 'the dialog closed on a declined clear');
+    assert.ok(screen.getAllByText('hello from alice').length > 0, 'the preview was cleared although nothing was');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
 
-  pickRowAction('Alice', 'Delete chat');
-  dialog = await screen.findByRole('dialog');
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete chat' }));
-  await screen.findByText('Could not delete the chat');
-  assert.ok(screen.getByRole('dialog'), 'the dialog closed on a declined delete');
-  assert.ok(screen.getAllByText('Alice').length > 0, 'the row was removed although the chat was not');
-});
+    pickRowAction('Alice', 'Delete chat');
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete chat' }));
+    await screen.findByText('Could not delete the chat');
+    assert.ok(screen.getByRole('dialog'), 'the dialog closed on a declined delete');
+    assert.ok(screen.getAllByText('Alice').length > 0, 'the row was removed although the chat was not');
+  });
+}
 
 test('a mark-as-unread the engine declines leaves the row read', async () => {
   const { screen } = rtl;
@@ -3773,21 +3776,19 @@ test('a message that reaches the open chat while Mark as unread is out is not re
   assert.deepEqual(readsOf(CHAT.id), [], 'the message was read automatically and undid the mark');
 });
 
-test('on Baileys neither the row nor the room menu offers Clear chat or Delete chat (#1891)', async () => {
+test('on Baileys the row and the room menu offer Clear chat and Delete chat, as on whatsapp-web.js (#1891)', async () => {
   const { screen, fireEvent, waitFor, within } = rtl;
   const { container } = renderPage();
   fireEvent.click(await screen.findByText('Alice'));
   await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
 
   fireEvent.click(screen.getByRole('button', { name: 'Actions for Alice' }));
-  assert.ok(screen.getByRole('button', { name: 'Archive chat' }), 'the row menu did not open');
-  assert.ok(!screen.queryByRole('button', { name: 'Clear chat' }), 'the row menu offered Clear chat');
-  assert.ok(!screen.queryByRole('button', { name: 'Delete chat' }), 'the row menu offered Delete chat');
+  assert.ok(screen.getByRole('button', { name: 'Clear chat' }), 'the row menu offered no Clear chat');
+  assert.ok(screen.getByRole('button', { name: 'Delete chat' }), 'the row menu offered no Delete chat');
   fireEvent.keyDown(document, { key: 'Escape' });
 
   fireEvent.click(container.querySelector('.room-menu > button') as HTMLElement);
   const menu = container.querySelector('.room-menu-popover') as HTMLElement;
-  assert.ok(within(menu).getByRole('button', { name: 'Copy chat ID' }), 'the room menu did not open');
-  assert.ok(!within(menu).queryByRole('button', { name: 'Clear chat' }), 'the room menu offered Clear chat');
-  assert.ok(!within(menu).queryByRole('button', { name: 'Delete chat' }), 'the room menu offered Delete chat');
+  assert.ok(within(menu).getByRole('button', { name: 'Clear chat' }), 'the room menu offered no Clear chat');
+  assert.ok(within(menu).getByRole('button', { name: 'Delete chat' }), 'the room menu offered no Delete chat');
 });

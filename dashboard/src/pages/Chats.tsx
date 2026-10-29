@@ -270,9 +270,6 @@ export function Chats() {
   // both, so the query is gated off entirely (never fired) rather than left to fail per-request.
   // The engine comes from the sign-in validate response, which every role can read.
   const channelsSupported = engineType === 'whatsapp-web.js';
-  // On Baileys the phone can ignore a clear or delete the gateway reports as done, and the gateway then drops
-  // its stored copy of the messages (#1891). Until that is fixed both are offered on whatsapp-web.js only.
-  const canClearOrDelete = canWrite && engineType === 'whatsapp-web.js';
   const channelsQuery = useQuery({
     queryKey: ['channels', selectedSessionId],
     queryFn: () => sessionApi.getSubscribedChannels(selectedSessionId!),
@@ -1676,8 +1673,8 @@ export function Chats() {
     onToggleBlock: canWrite
       ? chat => (isBlocked(chat) ? void handleUnblock(chat) : setConfirmAction({ kind: 'block', chat }))
       : undefined,
-    onClear: canClearOrDelete ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
-    onDelete: canClearOrDelete ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
+    onClear: canWrite ? chat => setConfirmAction({ kind: 'clear', chat }) : undefined,
+    onDelete: canWrite ? chat => setConfirmAction({ kind: 'delete', chat }) : undefined,
     isBlocked,
   };
 
