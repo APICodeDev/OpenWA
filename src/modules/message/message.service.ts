@@ -12,6 +12,7 @@ import { HookManager, applySendingGate } from '../../core/hooks';
 import { SendPacingService } from './send-pacing.service';
 import { createLogger } from '../../common/services/logger.service';
 import { resolveJidCandidates as expandJidCandidates } from '../../engine/identity/jid-candidates';
+import { parseWaId } from '../../engine/identity/wa-id';
 import { LidMappingStoreService } from '../../engine/identity/lid-mapping-store.service';
 import { ChatMediaArchiveService } from '../chat-media/chat-media-archive.service';
 import { StorageService, isMissingObjectError } from '../../common/storage/storage.service';
@@ -141,6 +142,12 @@ export function spendInlineMediaBudget(messages: Message[], budgetBytes: number)
  * what the budget keeps instead of every payload on the page.
  */
 const MESSAGE_LIST_READ_CHUNK_MIN_BYTES = 1024 * 1024;
+
+/** The phone digits of a user JID (`<digits>@c.us` or `@s.whatsapp.net`), as a one-item list, or none. */
+function bareUserDigits(id: string): string[] {
+  const { kind, userPart } = parseWaId(id);
+  return kind === 'user' && /^\d+$/.test(userPart) ? [userPart] : [];
+}
 
 /** Pin window applied when the caller does not choose one — WhatsApp's own default of 24h. */
 export const DEFAULT_PIN_DURATION_SECONDS = 86400;
@@ -393,7 +400,10 @@ export class MessageService implements PluginMessagePort {
       // within the (sessionId, createdAt)-narrowed scan exactly as the from-only filter did, so the
       // OR costs nothing the old plan didn't already pay. No new index: per-session narrowing
       // dominates selectivity and a single btree cannot serve an OR across two columns anyway.
-      const froms = await this.resolveJidCandidates(from);
+      const candidates = await this.resolveJidCandidates(from);
+      // An API send stored by an earlier version names the account by its bare phone digits, so a filter on the
+      // account's JID still matches those rows.
+      const froms = [...new Set([...candidates, ...candidates.flatMap(bareUserDigits)])];
       narrow('(message.from IN (:...froms) OR message.author IN (:...authorFroms))', {
         froms,
         authorFroms: froms,

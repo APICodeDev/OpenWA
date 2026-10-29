@@ -746,7 +746,9 @@ export class MessageSendService {
         // every caller instead of relying on each to remember.
         waMessageId: data.waMessageId || undefined,
         chatId: data.chatId,
-        from: session?.phone || 'me',
+        // The account's JID, the form the engines' own-send echo stores for the same message; 'me' only while the
+        // session has no number to name it by.
+        from: session?.phone ? `${session.phone}@c.us` : 'me',
         to: data.chatId,
         body: data.body,
         type: data.type,

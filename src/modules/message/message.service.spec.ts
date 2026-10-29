@@ -637,7 +637,8 @@ describe('MessageService', () => {
       await service.getMessages('sess-1', { from: '111@lid' });
 
       expect(lidMappingStore.findPhoneForLid).toHaveBeenCalledWith('111');
-      expect(captured.froms).toEqual(['111@lid', '628999@c.us', '628999@s.whatsapp.net']);
+      // The bare digits match an API send an earlier version stored with the account's phone as its sender.
+      expect(captured.froms).toEqual(['111@lid', '628999@c.us', '628999@s.whatsapp.net', '628999']);
       expect(captured.authorFroms).toEqual(captured.froms); // same candidates drive the author match
       expect(captured.froms).not.toContain('111@c.us'); // the lid's digits are not a phone
       expect(lidMappingStore.findLidsForPhone).not.toHaveBeenCalled();
