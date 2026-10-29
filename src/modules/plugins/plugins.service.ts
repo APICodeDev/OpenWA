@@ -217,9 +217,11 @@ export class PluginsService {
       return { success: true, message: `Plugin ${id} is not enabled` };
     }
 
+    // The decision is stored before the plugin stops: one that cannot be stored refuses the disable (see
+    // notApplied) with the plugin still running, as the answer says. A failed stop keeps the stored decision.
+    this.pluginLoader.setOperatorEnabled(id, false);
     try {
       await this.pluginLoader.disablePlugin(id);
-      this.pluginLoader.setOperatorEnabled(id, false);
       return { success: true, message: `Plugin ${id} disabled successfully` };
     } catch (error) {
       return {

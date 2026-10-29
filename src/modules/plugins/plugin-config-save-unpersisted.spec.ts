@@ -151,6 +151,18 @@ describe('PluginsService plugin changes when registry.json cannot be written', (
     expect(onDisk().getPluginEntry('p1')?.enabledByOperator).toBe(false);
   });
 
+  it('keeps a running plugin running when its disable decision cannot be stored', async () => {
+    plugin.status = PluginStatus.ENABLED;
+    storage.getPluginEntry('p1')!.enabledByOperator = true;
+
+    const result = await service.disable('p1');
+
+    expect(result.success).toBe(false);
+    expect(result.message).toContain('the change was not applied');
+    expect(plugin.status).toBe(PluginStatus.ENABLED);
+    expect(onDisk().getPluginEntry('p1')?.enabledByOperator).toBe(false);
+  });
+
   it('reports a disable decision it cannot store for a plugin that is not loaded', async () => {
     (loader as unknown as { plugins: Map<string, PluginInstance> }).plugins.delete('p1');
     storage.getPluginEntry('p1')!.enabledByOperator = true;
