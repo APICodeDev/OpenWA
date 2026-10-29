@@ -1145,7 +1145,7 @@ describe('EventsGateway rate limiting', () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '3';
       process.env.WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS = '60000';
       // Failed handshakes are what the window is for — an authenticated one is refunded (below).
-      authService.validateApiKey.mockRejectedValue(new Error('bad key'));
+      authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
       const gw = buildGateway();
 
       for (let i = 0; i < 3; i++) {
@@ -1169,7 +1169,7 @@ describe('EventsGateway rate limiting', () => {
 
     it('emits the RATE_LIMITED error frame BEFORE disconnecting, so the client can tell throttling from a dead server', async () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '1';
-      authService.validateApiKey.mockRejectedValue(new Error('bad key'));
+      authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
       const gw = buildGateway();
 
       await gw.handleConnection(asSocket(makeSock('s1', { apiKey: 'good' })));
@@ -1261,7 +1261,7 @@ describe('EventsGateway rate limiting', () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '1';
       process.env.WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS = '60000';
       jest.useFakeTimers();
-      authService.validateApiKey.mockRejectedValue(new Error('bad key'));
+      authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
       const gw = buildGateway();
 
       await gw.handleConnection(asSocket(makeSock('a', { apiKey: 'good' })));
@@ -1284,7 +1284,7 @@ describe('EventsGateway rate limiting', () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '1';
       process.env.WS_RATE_LIMIT_HANDSHAKE_WINDOW_MS = '60000';
       jest.useFakeTimers();
-      authService.validateApiKey.mockRejectedValue(new Error('bad key'));
+      authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
       const gw = buildGateway();
 
       await gw.handleConnection(asSocket(makeSock('a', { apiKey: 'good' }))); // allowed
@@ -1326,7 +1326,7 @@ describe('EventsGateway rate limiting', () => {
 
     it('shares the handshake window and the violation sample across a /64, keeping the real address', async () => {
       process.env.WS_RATE_LIMIT_HANDSHAKE_MAX = '1';
-      authService.validateApiKey.mockRejectedValue(new Error('bad key'));
+      authService.validateApiKey.mockRejectedValue(new UnauthorizedException('Invalid API key'));
       const gw = buildGateway();
 
       await gw.handleConnection(asSocket(makeSock('a', { apiKey: 'good' }, '2001:db8:1:2::a')));
