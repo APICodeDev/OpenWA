@@ -1004,11 +1004,21 @@ export function Chats() {
         await readSessions();
       } while (relist.again);
     } catch {
-      // The next status event, or a search hit in that session, reads the list again.
+      // The next status event, the page being shown again, or a search hit in that session, reads the list again.
     } finally {
       relist.running = false;
     }
   }, [readSessions]);
+  // A deleted session sends no frame of its own: a running one reports disconnected while its row still exists, and
+  // one that was not running reports nothing. Coming back to the page reads the list again, so a session deleted
+  // from another tab or by another client is not kept open.
+  useEffect(() => {
+    const relistWhenShown = () => {
+      if (document.visibilityState !== 'hidden') void relistSessions();
+    };
+    document.addEventListener('visibilitychange', relistWhenShown);
+    return () => document.removeEventListener('visibilitychange', relistWhenShown);
+  }, [relistSessions]);
   const handleSessionStatus = useCallback(
     (event: { sessionId: string; status: string }) => {
       if (!listedSessionsRef.current.some(session => session.id === event.sessionId)) {

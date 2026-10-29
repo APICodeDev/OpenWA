@@ -1251,6 +1251,31 @@ test('an open session deleted on the server with no other one ready leaves none 
   assert.equal(container.querySelector('.session-switcher') === null, true);
 });
 
+test('an open session deleted with no status frame gives way once the page is shown again', async () => {
+  const { screen, fireEvent, waitFor, act } = rtl;
+  listSecond = true;
+  const { container } = renderPage();
+  fireEvent.click(await screen.findByText('Alice'));
+  await waitFor(() => assert.ok(container.querySelector('.room-header'), 'the room did not open'));
+  const sessionReads = () => fetchCalls.filter(c => c.method === 'GET' && c.path === '/api/sessions').length;
+  const reads = sessionReads();
+  const visibilityChanged = () => act(() => void document.dispatchEvent(new window.Event('visibilitychange')));
+
+  // Deleted from another tab while this one was hidden: a session that was not running sends no frame at all.
+  setTabHidden(true);
+  try {
+    visibilityChanged();
+    mainDeleted = true;
+    assert.equal(sessionReads(), reads, 'a hidden page read the session list');
+  } finally {
+    setTabHidden(false);
+  }
+  visibilityChanged();
+  await waitFor(() => assert.equal(selectedSessionName(container), SECOND_SESSION.name));
+  assert.equal(sessionReads(), reads + 1, 'showing the page did not read the session list once');
+  assert.equal(container.querySelector('.room-header') === null, true, "the deleted session's chat stayed open");
+});
+
 test('the session list read at load does not undo a newer list a status frame read before it answered', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listOffline = true;
