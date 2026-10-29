@@ -17,15 +17,16 @@ test('a code several countries share, or one that is unknown or too short, has n
   assert.equal(regionOfPhone(null), null);
 });
 
-test('7 is Kazakhstan in its 7 range and Russia in its own, and the toll-free range both share is neither', () => {
+test('7 is Kazakhstan in its 6 and 7 ranges and Russia everywhere else, the toll-free range both share included', () => {
   assert.equal(regionOfPhone('79161234567'), 'RU');
   assert.equal(regionOfPhone('78123456789'), 'RU');
   assert.equal(regionOfPhone('77011234567'), 'KZ');
-  assert.equal(regionOfPhone('78001234567'), null);
+  assert.equal(regionOfPhone('78001234567'), 'RU');
 });
 
-// A code several territories share answers one of them only for the ranges that are that territory's alone.
-test('a shared code answers the territory whose own range the number is in, and no region in a shared range', () => {
+// A code several territories share answers a territory only in the ranges that are its alone, the main country of the
+// plan in the ranges a territory borrows from it, and no country in a range only territories other than it share.
+test('a shared code answers a territory in its own ranges and the main country in the ranges it borrows', () => {
   const cases: Array<[string, string | null]> = [
     // The United Kingdom and the Crown Dependencies: landline codes and mobile blocks of their own.
     ['447400123456', 'GB'],
@@ -34,40 +35,51 @@ test('a shared code answers the territory whose own range the number is in, and 
     ['447797123456', 'JE'],
     ['441481256789', 'GG'],
     ['447781123456', 'GG'],
+    ['449801234567', 'GG'],
     ['441624567890', 'IM'],
     ['447624123456', 'IM'],
-    ['447924123456', null],
-    ['443001234567', null],
+    // A block the Isle of Man shares with the United Kingdom, and a range all four share.
+    ['447924123456', 'GB'],
+    ['443001234567', 'GB'],
     // Reunion and Mayotte.
     ['262262123456', 'RE'],
     ['262692123456', 'RE'],
     ['262269601234', 'YT'],
     ['262639012345', 'YT'],
-    ['262801234567', null],
-    // Guadeloupe, Saint Barthelemy and Saint Martin share every range.
-    ['590690123456', null],
+    ['262939801234', 'YT'],
+    ['262801234567', 'RE'],
+    // Guadeloupe's mobiles serve Saint Barthelemy and Saint Martin too; some landline ranges are Saint Martin's alone,
+    // and some are shared by the two of them without Guadeloupe.
+    ['590690123456', 'GP'],
+    ['590590121234', 'GP'],
+    ['590590071234', 'MF'],
     ['590590271234', null],
     // Bonaire, Sint Eustatius and Saba against Curacao.
     ['5997001234', 'BQ'],
     ['5993181234', 'BQ'],
     ['59995123456', 'CW'],
-    // A territory's own landlines against the mobile range it takes from the country around it.
+    // A territory's own landlines, and the mobiles it borrows from the country whose plan it is in.
     ['61891621234', 'CC'],
+    ['61851002123', 'CC'],
     ['61891641234', 'CX'],
+    ['61891012345', 'AU'],
     ['61212345678', 'AU'],
-    ['61412345678', null],
+    ['61412345678', 'AU'],
     ['4779012345', 'SJ'],
     ['4721234567', 'NO'],
-    ['4791234567', null],
+    ['4791234567', 'NO'],
+    ['4741234567', 'NO'],
     ['35818123456', 'AX'],
     ['35891234567', 'FI'],
-    ['358401234567', null],
+    ['358401234567', 'FI'],
+    ['358501234567', 'FI'],
     ['390669812345', 'VA'],
     ['390612345678', 'IT'],
-    ['393123456789', null],
+    ['393123456789', 'IT'],
     ['212522123456', 'MA'],
-    ['212528812345', null],
-    ['212612345678', null],
+    ['212528812345', 'MA'],
+    ['212612345678', 'MA'],
+    ['212712345678', 'MA'],
   ];
   assert.deepEqual(
     cases.map(([phone]) => [phone, regionOfPhone(phone)]),
