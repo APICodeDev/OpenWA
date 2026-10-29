@@ -1432,6 +1432,9 @@
   flex: 1;
 }
 
+/* The name and the number hug the start edge, as a chat name does (see .chat-item-name): stretched across the column,
+   a Latin name (by its own direction) and the number (isolated left to right) sat at the left edge of an Arabic
+   page, away from the avatar and the names beside them. */
 .chats-page .group-info-member .name {
   font-weight: 500;
   color: var(--text-primary);
@@ -1439,11 +1442,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   unicode-bidi: plaintext;
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 .chats-page .group-info-member .number {
   font-size: 0.8125rem;
   color: var(--chat-meta);
+  align-self: flex-start;
 }
 
 .chats-page .group-info-role {

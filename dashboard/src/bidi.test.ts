@@ -81,6 +81,7 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
     '.chats-page .preview-filename',
     '.chats-page .replying-to-body',
     '.chats-page .session-name',
+    '.chats-page .group-info-member .name',
   ];
   for (const selector of hugging) {
     const rule = body('pages/Chats.css', selector);
@@ -91,6 +92,15 @@ test('cut text that a flex column stretches hugs the start edge, where its sibli
   assert.match(quote, /width:\s*fit-content/);
   // A long nowrap quote is as wide as its text, so the cap has to follow the room in the box, not only a fixed width.
   assert.match(quote, /max-width:\s*min\(\d+px,\s*100%\)/);
+});
+
+test("a group member's number hugs the start edge, where the name above it is", () => {
+  // Isolated left to right, the number takes start as left: stretched across the column it sat at the left edge of an
+  // Arabic page.
+  const dialog = readFileSync(join(SRC, 'components/chats/GroupInfoDialog.tsx'), 'utf8');
+  assert.match(dialog, /<bdi className="number" dir="ltr">/);
+  assert.match(body('pages/Chats.css', '.chats-page .group-info-member'), /flex-direction:\s*column/);
+  assert.match(body('pages/Chats.css', '.chats-page .group-info-member .number'), /align-self:\s*flex-start/);
 });
 
 test('a message body takes its direction from its own characters', () => {

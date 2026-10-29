@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Announce the unread badges on dashboard chat list rows to screen readers, including the dot of a chat marked as unread.
 - Keep the reply, react and delete actions of dashboard chat messages visible beside each bubble on touch screens, which have no hover to reveal them.
 - Fit the dashboard chat room's menu to the room's height, scrolling its entries, so a short window no longer cuts off the last ones.
+- Keep a member's name and number at the start edge of the dashboard group dialog in right-to-left languages, where a Latin name and every number sat at the left.
 
 ## [0.26.0] - 2026-10-28
 
