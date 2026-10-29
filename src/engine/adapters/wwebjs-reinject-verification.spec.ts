@@ -43,24 +43,26 @@ describe('liveness of a ready page after a reload', () => {
     jest.setSystemTime(Date.now() + ms);
   };
   const delayed = <T>(value: T, ms: number): Promise<T> => new Promise(resolve => setTimeout(() => resolve(value), ms));
-  /** Probe at the watchdog's cadence: every 60 s, each probe given its 15 s deadline. */
-  const watchdogAnswers = async (adapter: WhatsAppWebJsAdapter, ticks: number): Promise<boolean[]> => {
+  /**
+   * Probe at the watchdog's cadence: the first probe `firstProbeAt` from now, then one every 60 s, each given its 15 s
+   * deadline. With `loop`, that page reloads again 20 s after each probe (a navigation loop).
+   */
+  const watchdogAnswers = async (
+    adapter: WhatsAppWebJsAdapter,
+    ticks: number,
+    { firstProbeAt = 45_000, loop }: { firstProbeAt?: number; loop?: FakeClient } = {},
+  ): Promise<boolean[]> => {
     const answers: boolean[] = [];
     for (let tick = 0; tick < ticks; tick++) {
-      await jest.advanceTimersByTimeAsync(60_000 - 15_000);
-      const probe = adapter.probeLiveness();
-      await jest.advanceTimersByTimeAsync(15_000);
-      answers.push(await probe);
-    }
-    return answers;
-  };
-  /** As watchdogAnswers, on a page that reloads again 20 s after each probe (a navigation loop). */
-  const loopAnswers = async (adapter: WhatsAppWebJsAdapter, client: FakeClient, ticks: number): Promise<boolean[]> => {
-    const answers: boolean[] = [];
-    for (let tick = 0; tick < ticks; tick++) {
-      await jest.advanceTimersByTimeAsync(20_000);
-      reload(client);
-      await jest.advanceTimersByTimeAsync(60_000 - 15_000 - 20_000);
+      if (tick === 0) {
+        await jest.advanceTimersByTimeAsync(firstProbeAt);
+      } else if (loop) {
+        await jest.advanceTimersByTimeAsync(20_000);
+        reload(loop);
+        await jest.advanceTimersByTimeAsync(60_000 - 15_000 - 20_000);
+      } else {
+        await jest.advanceTimersByTimeAsync(60_000 - 15_000);
+      }
       const probe = adapter.probeLiveness();
       await jest.advanceTimersByTimeAsync(15_000);
       answers.push(await probe);
@@ -72,15 +74,21 @@ describe('liveness of a ready page after a reload', () => {
   const recycled = (answers: boolean[]): boolean => answers.some((alive, i) => i > 0 && !alive && !answers[i - 1]);
   /**
    * Nine watchdog answers for one page, read in budget (1 s + 1 s) or late (7 s + 5 s): its helpers are missing until
-   * read number `found` (from 0), after a single reload or while it keeps reloading between probes.
+   * read number `found` (from 0, Infinity for never), after a single reload or while it keeps reloading between
+   * probes, the first probe `firstProbeAt` after the reload.
    */
-  const pageAnswers = async (found: number, late: boolean, loop: boolean): Promise<boolean[]> => {
+  const pageAnswers = async (
+    found: number,
+    late: boolean,
+    loop: boolean,
+    firstProbeAt = 45_000,
+  ): Promise<boolean[]> => {
     const { adapter, client } = wire();
     let reads = 0;
     client.getState.mockImplementation(() => delayed(WAState.CONNECTED, late ? 7_000 : 1_000));
     client.pupPage.evaluate.mockImplementation(() => delayed(reads++ >= found, late ? 5_000 : 1_000));
     reload(client);
-    return loop ? loopAnswers(adapter, client, 9) : watchdogAnswers(adapter, 9);
+    return watchdogAnswers(adapter, 9, { firstProbeAt, loop: loop ? client : undefined });
   };
 
   beforeEach(() => {
@@ -215,7 +223,7 @@ describe('liveness of a ready page after a reload', () => {
     client.pupPage.evaluate.mockImplementation(() => delayed(false, 5_000));
     reload(client);
 
-    const answers = await loopAnswers(adapter, client, 8);
+    const answers = await watchdogAnswers(adapter, 8, { loop: client });
 
     expect(answers).toEqual([true, true, true, true, false, false, false, false]);
   });
@@ -230,7 +238,7 @@ describe('liveness of a ready page after a reload', () => {
     client.pupPage.evaluate.mockImplementation(() => delayed(reads++ >= 3, 5_000));
     reload(client);
 
-    const answers = await loopAnswers(adapter, client, 8);
+    const answers = await watchdogAnswers(adapter, 8, { loop: client });
 
     expect(recycled(answers)).toBe(false);
     expect(answers.slice(-4)).toEqual([true, true, true, true]);
@@ -238,20 +246,39 @@ describe('liveness of a ready page after a reload', () => {
 
   // Helpers still missing at the first probe past the cap and found by the next: in budget that is one dead answer,
   // then alive, and the session is kept. A late read answers from the no kept before it, so it must count that no
-  // only when it was itself read past the cap, or this healthy page would be recycled.
-  it.each([false, true])('keeps a page that re-injects in the first interval past the cap (loop %s)', async loop => {
-    expect(recycled(await pageAnswers(4, false, loop))).toBe(false);
-    expect(recycled(await pageAnswers(4, true, loop))).toBe(false);
-  });
+  // only when the probe that read it started past the cap, or this healthy page would be recycled. At 50 s the late
+  // read of that probe settles past the cap although its in-budget answer comes before it.
+  it.each([
+    [false, 45_000],
+    [true, 45_000],
+    [false, 50_000],
+    [true, 50_000],
+  ])(
+    'keeps a page that re-injects in the first interval past the cap (loop %s, first probe at %i ms)',
+    async (loop, at) => {
+      expect(recycled(await pageAnswers(4, false, loop, at))).toBe(false);
+      expect(recycled(await pageAnswers(4, true, loop, at))).toBe(false);
+    },
+  );
 
-  // Wherever the re-inject lands, late reads recycle exactly the pages in-budget reads recycle (one interval later).
+  // The watchdog's tick lands anywhere in the minute after a reload. At every phase, wherever the re-inject lands,
+  // late reads recycle only pages that in-budget reads recycle, later by up to two watchdog intervals after one reload
+  // and by more while the page keeps reloading, and a page that never re-injects is recycled on either.
   it.each(
-    [0, 1, 2, 3, 4, 5, 6, 7].flatMap((found): [number, boolean][] => [
-      [found, false],
-      [found, true],
+    Array.from({ length: 12 }, (_, i) => i * 5_000).flatMap((at): [number, boolean][] => [
+      [at, false],
+      [at, true],
     ]),
-  )('decides alike for late and in-budget reads when the helpers appear at read %i (loop %s)', async (found, loop) => {
-    expect(recycled(await pageAnswers(found, true, loop))).toBe(recycled(await pageAnswers(found, false, loop)));
+  )('recycles on late reads only what in-budget reads recycle, first probe at %i ms (loop %s)', async (at, loop) => {
+    const recycledOnlyLate: number[] = [];
+    for (let found = 0; found <= 8; found++) {
+      const late = recycled(await pageAnswers(found, true, loop, at));
+      if (late && !recycled(await pageAnswers(found, false, loop, at))) recycledOnlyLate.push(found);
+    }
+
+    expect(recycledOnlyLate).toEqual([]);
+    expect(recycled(await pageAnswers(Infinity, true, loop, at))).toBe(true);
+    expect(recycled(await pageAnswers(Infinity, false, loop, at))).toBe(true);
   });
 
   // Latency that swings between probes: a no read in budget one minute and after it the next. Neither may reset the

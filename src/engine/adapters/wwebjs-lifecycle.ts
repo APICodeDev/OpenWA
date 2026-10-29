@@ -277,11 +277,12 @@ export class WwebjsLifecycle {
    */
   private reinjectUnverifiedSince = 0;
   /**
-   * When a helpers read last answered no, or failed (Date.now()), 0 when none. Kept across the navigations of an
-   * episode, so a page stuck reloading still counts its answers. A read is kept only if no navigation landed while it
-   * ran, so one kept from an earlier episode predates the navigation that began the current one.
+   * When the probe whose helpers read last answered no, or failed, started (Date.now()), 0 when none. Kept across the
+   * navigations of an episode, so a page stuck reloading still counts its answers. A read is kept only if no
+   * navigation landed while its probe ran, so one kept from an earlier episode predates the navigation that began the
+   * current one.
    */
-  private helpersMissingReadAt = 0;
+  private helpersMissingProbeAt = 0;
   /** The WhatsApp Web build this init asked whatsapp-web.js to pin, undefined when it asked for none.
    *  Compared against the build the page reports at READY (./wwebjs-running-build). */
   private requestedWebVersion: string | undefined;
@@ -1227,6 +1228,7 @@ export class WwebjsLifecycle {
     const probeable = this.status === EngineStatus.READY || this.status === EngineStatus.ACTION_REQUIRED;
     if (!probeable || !this.client) return false;
     const navigationsBefore = this.navigationCount;
+    const startedAt = Date.now();
     const client = this.client;
     // Set once getState() answered CONNECTED, so a probe that could not then read the page still knows that.
     let connected = false;
@@ -1247,7 +1249,7 @@ export class WwebjsLifecycle {
         helpersPending = false;
         // A no or a failure answers for the page now loaded even when it lands after the deadline, so it is kept.
         if (!found && this.client === client && navigationsBefore === this.navigationCount) {
-          this.helpersMissingReadAt = Date.now();
+          this.helpersMissingProbeAt = startedAt;
         }
       }
     };
@@ -1270,9 +1272,11 @@ export class WwebjsLifecycle {
       return this.isInNavigationReinjectWindow();
     } catch {
       // A helpers read the timeout cut short is no answer yet: the page answered CONNECTED in time, so it is alive
-      // unless the no or failure kept from an earlier read was itself read past the cap of this episode. Judged at
-      // that read's time, late reads recycle the pages in-budget reads recycle, one interval later, and never a page
-      // that re-injected since. When the late read answers, a yes verifies the reload and a no or a failure is kept.
+      // unless the no or failure kept from an earlier read came from a probe that started past the cap of this episode,
+      // whose in-budget answer would have been dead too. So late reads recycle only pages that in-budget reads
+      // recycle, later by up to two watchdog intervals after one reload and by more while the page keeps reloading,
+      // never a page that re-injected since. When the late read answers, a yes verifies the reload and a no or a
+      // failure is kept.
       if (connected && helpersPending) {
         void running.then(
           found => {
@@ -1281,7 +1285,7 @@ export class WwebjsLifecycle {
           () => undefined,
         );
         const since = this.reinjectUnverifiedSince;
-        return since === 0 || this.helpersMissingReadAt - since < NAVIGATION_EPISODE_CAP_MS;
+        return since === 0 || this.helpersMissingProbeAt - since < NAVIGATION_EPISODE_CAP_MS;
       }
       if (connected) return this.reinjectStillHealing();
       // Inside the navigation window the evaluate rejecting (context destroyed, window.require not
