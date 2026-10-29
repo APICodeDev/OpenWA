@@ -40,6 +40,7 @@ function PhoneLine({ phone }: { phone?: string | null }) {
   const { t } = useTranslation();
   if (!phone) return <>{t('chats.noPhone')}</>;
   const region = regionOfPhone(phone);
+  const number = formatPhoneForDisplay(phone) ?? phone;
   return (
     <span className="session-phone-line">
       {region && (
@@ -47,8 +48,11 @@ function PhoneLine({ phone }: { phone?: string | null }) {
           {flagOfRegion(region)}
         </span>
       )}
-      {/* Digits and + carry no direction of their own: without ltr a right-to-left page reverses them. */}
-      <bdi dir="ltr">{formatPhoneForDisplay(phone) ?? phone}</bdi>
+      {/* Digits and + carry no direction of their own: without ltr a right-to-left page reverses them. A narrow list
+          column cuts the number, so the whole of it is in its title. */}
+      <bdi dir="ltr" title={number}>
+        {number}
+      </bdi>
     </span>
   );
 }

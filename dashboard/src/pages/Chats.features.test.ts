@@ -1035,6 +1035,20 @@ test('the session switcher lists every session with its state, and only a connec
   assert.equal(screen.getAllByRole('option').length, 1, 'the search did not narrow the list');
 });
 
+test('the session switcher gives the whole number of each session in its title, for a list column that cuts it', async () => {
+  const { screen, fireEvent } = rtl;
+  listOffline = true;
+  const { container } = renderPage();
+  await screen.findByText('Alice');
+  const titleIn = (scope: Element | null) => scope?.querySelector('.session-phone-line bdi')?.getAttribute('title');
+  assert.equal(titleIn(container.querySelector('.session-switcher-btn')), '+1 555 123 4567');
+  fireEvent.click(container.querySelector('.session-switcher-btn') as HTMLElement);
+  assert.deepEqual(
+    screen.getAllByRole('option').map(option => titleIn(option)),
+    ['+1 555 123 4567', '+49 174 156 5212'],
+  );
+});
+
 test('the session switcher matches a number only for a query that reads as one, and a name with a digit by name', async () => {
   const { screen, fireEvent, waitFor } = rtl;
   listSecond = true;
