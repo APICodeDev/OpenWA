@@ -1225,7 +1225,8 @@
   height: 52px;
   border-radius: 14px;
   background: linear-gradient(135deg, #5fd17b, var(--chat-accent));
-  color: #fff;
+  /* Dark on both ends of the green: white was 1.93:1 on the light one. */
+  color: #0f172a;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1560,12 +1561,13 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  color: #fff;
 }
 
+/* Content on the accent fill is dark: white on it is 3.03:1 (see contrast-pairs.test.ts). */
 .chats-page .select-check.checked {
   background: var(--chat-accent);
   border-color: var(--chat-accent);
+  color: #0f172a;
 }
 
 .chats-page .new-group-fields {

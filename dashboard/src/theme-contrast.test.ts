@@ -122,6 +122,28 @@ test('the outgoing bubble draws its links in their own token, and a quote its li
   assert.match(chatRule('.chats-page .message-bubble.outgoing .quote-body a'), /color:\s*var\(--chat-link-out\)/);
 });
 
+// The accent fill is one green in every theme. The New group check mark sits on it, and the group dialog's tile draws
+// its glyph on a gradient from a lighter green into it: as graphics each needs 3:1 on every colour under it.
+test('the glyphs drawn on the accent fill clear 3:1 on it, and on both ends of the group tile gradient', () => {
+  const accent = rgb(chatToken(chatBlock('.chats-page {'), '--chat-accent'));
+  const check = chatRule('.chats-page .select-check.checked');
+  assert.match(check, /background:\s*var\(--chat-accent\)/);
+  const tile = chatRule('.chats-page .group-info-tile');
+  const light = /background:\s*linear-gradient\(135deg, (#[0-9a-f]{6}), var\(--chat-accent\)\)/.exec(tile)?.[1];
+  assert.ok(light, 'the group tile is no longer the gradient this test measures');
+  for (const [name, rule, fills] of [
+    ['check mark', check, [accent]],
+    ['group tile', tile, [rgb(light), accent]],
+  ] as const) {
+    const glyph = /(?:^|;)\s*color:\s*(#[0-9a-f]{6})/.exec(rule)?.[1];
+    assert.ok(glyph, `the ${name} sets no glyph colour of its own`);
+    for (const fill of fills) {
+      const ratio = contrast(rgb(glyph), fill);
+      assert.ok(ratio >= 3, `the ${name} glyph is ${ratio.toFixed(2)}:1 on its fill`);
+    }
+  }
+});
+
 // The muted lines a bubble holds are --chat-meta in an incoming one. On the dark outgoing green that token is 3.27:1,
 // and 2.87:1 on a quote there, so each line has an outgoing rule in --chat-meta-out, which the tests above measure.
 const BUBBLE_META = [

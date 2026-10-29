@@ -42,11 +42,32 @@ const WHITE = /^(?:#fff|#ffffff|white)$/i;
 const LIGHT_FILL =
   /^(?:var\(--(?:primary|chat-accent)(?:-hover)?(?:,[^)]*)?\)|var\(--warning(?:,[^)]*)?\)|#25d366|#1da851|#16a34a|#f59e0b|#d97706|#00a884|#008f6f)$/i;
 
+// A gradient is a light fill when one of its stops is: `linear-gradient(135deg, #5fd17b, var(--chat-accent))`.
+function fillStops(r: Rule): string[] {
+  const fill = r.decl.background ?? r.decl['background-color'] ?? '';
+  const gradient = /^linear-gradient\((.*)\)$/.exec(fill);
+  return gradient ? (gradient[1].match(/(?:[^,(]|\([^)]*\))+/g) ?? []).map(stop => stop.trim().split(' ')[0]) : [fill];
+}
+
+// The colour a selector draws in: its own rule's, else the one of the rule it refines, so a state rule that only paints
+// the fill (`.select-check.checked`) is paired with the white its base rule (`.select-check`) sets.
+function colourOf(all: Rule[], selector: string): string {
+  let at = selector;
+  while (at && !/\s$/.test(at)) {
+    const colour = all.find(r => r.selectors.split(/,\s*/).includes(at) && r.decl.color)?.decl.color;
+    if (colour) return colour;
+    const base = at.replace(/(?:\.[\w-]+|:[\w-]+(?:\([^)]*\))?)$/, '');
+    if (base === at) break;
+    at = base;
+  }
+  return '';
+}
+
 test('no rule sets white text on the brand green or amber fill', () => {
-  const offenders = rules()
-    .filter(
-      r => WHITE.test(r.decl.color ?? '') && LIGHT_FILL.test(r.decl.background ?? r.decl['background-color'] ?? ''),
-    )
+  const all = rules();
+  const offenders = all
+    .filter(r => fillStops(r).some(stop => LIGHT_FILL.test(stop)))
+    .filter(r => r.selectors.split(/,\s*/).some(selector => WHITE.test(colourOf(all, selector))))
     .map(r => `${r.at}: ${r.selectors}`);
   assert.deepEqual(offenders, []);
 });
