@@ -4,12 +4,17 @@ on:
   push:
     tags: ['v*']
 
-# Serialize ALL release runs on one global queue — deliberately not a per-tag group
+# Serialize ALL release runs in one global group, deliberately not a per-tag group
 # (`release-${{ github.ref_name }}`). The mutable channels (the X.Y minor tag and `latest`)
 # are shared state across releases: a per-tag group would let two overlapping releases complete
 # out of order, with the older build re-pointing those channels last. cancel-in-progress: false
-# so a newer tag can never abort a promotion already in flight — a half-promoted registry state
-# is worse than a queued release.
+# so a newer tag can never abort a promotion already in flight: a half-promoted registry state
+# is worse than a waiting release.
+#
+# The group is not a queue. It holds the running release and at most one pending run, and a run
+# queued behind a pending one cancels it: a tag pushed while one release runs and another waits
+# drops the waiting one, which publishes nothing until it is re-run. `queue: max` would keep up to
+# 100 runs waiting, but the actionlint release the chart job pins (1.7.12) rejects that key.
 concurrency:
   group: release
   cancel-in-progress: false
