@@ -108,6 +108,8 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
   const inRouter = useInRouterContext();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  // The option focus last reached, which holds the list's one tab stop while it is listed.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
@@ -123,6 +125,14 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
           (digits.length > 0 && (s.phone ?? '').includes(digits)),
       )
     : sessions;
+  // A roving tab stop: one option is in the tab order, the one focus last reached, else the selected session, else the
+  // first that can be picked. The arrow keys move between the options and take the tab stop along.
+  const pickable = shown.filter(s => s.status === 'ready');
+  const tabStop = (
+    pickable.find(s => s.id === focusedId) ??
+    pickable.find(s => s.id === selectedSessionId) ??
+    pickable[0]
+  )?.id;
 
   const close = (refocus: boolean) => {
     setOpen(false);
@@ -187,7 +197,14 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
         ref={triggerRef}
         type="button"
         className="session-switcher-btn"
-        onClick={() => (open ? close(false) : setOpen(true))}
+        onClick={() => {
+          if (open) {
+            close(false);
+          } else {
+            setFocusedId(null);
+            setOpen(true);
+          }
+        }}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
@@ -224,45 +241,45 @@ function SessionPicker({ sessions, selectedSessionId, onSelectSession, canAddSes
             aria-label={t('chats.sessionLabel')}
             ref={listRef}
           >
-            {shown.length === 0 ? (
-              <li className="session-picker-empty">{t('chats.sessionPicker.noMatch')}</li>
-            ) : (
-              shown.map(session => {
-                const isSelected = session.id === selectedSessionId;
-                const ready = session.status === 'ready';
-                return (
-                  <li key={session.id} role="presentation">
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={isSelected}
-                      disabled={!ready}
-                      className={`session-picker-option ${isSelected ? 'selected' : ''}`}
-                      onClick={() => pick(session)}
-                      title={ready ? undefined : t(`sessionStatus.${session.status}`)}
-                    >
-                      <SessionAvatar session={session} size="sm" />
-                      <span className="session-text">
-                        <span className="session-name">{session.name}</span>
-                        <span className={`session-phone${session.pushName ? ' with-push-name' : ''}`}>
-                          {session.pushName && (
-                            <>
-                              <bdi>{session.pushName}</bdi>
-                              <span className="session-push-name-sep" aria-hidden="true">
-                                {' · '}
-                              </span>
-                            </>
-                          )}
-                          <PhoneLine phone={session.phone} />
-                        </span>
+            {shown.map(session => {
+              const isSelected = session.id === selectedSessionId;
+              const ready = session.status === 'ready';
+              return (
+                <li key={session.id} role="presentation">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    disabled={!ready}
+                    tabIndex={session.id === tabStop ? 0 : -1}
+                    className={`session-picker-option ${isSelected ? 'selected' : ''}`}
+                    onFocus={() => setFocusedId(session.id)}
+                    onClick={() => pick(session)}
+                    title={ready ? undefined : t(`sessionStatus.${session.status}`)}
+                  >
+                    <SessionAvatar session={session} size="sm" />
+                    <span className="session-text">
+                      <span className="session-name">{session.name}</span>
+                      <span className={`session-phone${session.pushName ? ' with-push-name' : ''}`}>
+                        {session.pushName && (
+                          <>
+                            <bdi>{session.pushName}</bdi>
+                            <span className="session-push-name-sep" aria-hidden="true">
+                              {' · '}
+                            </span>
+                          </>
+                        )}
+                        <PhoneLine phone={session.phone} />
                       </span>
-                      {isSelected && <Check size={18} className="session-check" />}
-                    </button>
-                  </li>
-                );
-              })
-            )}
+                    </span>
+                    {isSelected && <Check size={18} className="session-check" />}
+                  </button>
+                </li>
+              );
+            })}
           </ul>
+          {/* Outside the list, which may hold options only. */}
+          {shown.length === 0 && <div className="session-picker-empty">{t('chats.sessionPicker.noMatch')}</div>}
           {canAddSession && inRouter && <AddSessionLink onFollow={() => close(false)} />}
         </div>
       )}
